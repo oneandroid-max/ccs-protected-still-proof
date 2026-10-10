@@ -1,0 +1,38 @@
+# Every port of the photo file, the key derivation and the mark must print the same canonical line for
+# the committed test vector (tests/vectors/, a throwaway key; the real link key never enters CI). This
+# job checks the page's own JavaScript and the Android Java port; each platform workflow checks its own
+# port the same way before building its viewer.
+name: cross-check vectors
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  vectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the vector inputs
+        id: v
+        run: |
+          echo "secret=$(sed -n 's/^secret=//p' tests/vectors/inputs.txt)" >> "$GITHUB_OUTPUT"
+          echo "pin=$(sed -n 's/^pin=//p' tests/vectors/inputs.txt)" >> "$GITHUB_OUTPUT"
+          echo "hour=$(sed -n 's/^hour=//p' tests/vectors/inputs.txt)" >> "$GITHUB_OUTPUT"
+          cat tests/vectors/expected.txt
+
+      - name: JavaScript (the page's own code)
+        run: |
+          node --version
+          node tools/cross-check.mjs --file=tests/vectors/photo-test.enc --secret='${{ steps.v.outputs.secret }}' --pin='${{ steps.v.outputs.pin }}' --hour='${{ steps.v.outputs.hour }}' --canonical | tee /tmp/node.txt
+          diff /tmp/node.txt tests/vectors/expected.txt && echo "JavaScript matches the vector"
+
+      - name: Java (the Android port)
+        run: |
+          java -version 2>&1 | head -1
+          mkdir -p /tmp/cc
+          javac -d /tmp/cc android/app/src/main/java/com/candidcolor/proofviewer/ProofCrypto.java android/app/src/main/java/com/candidcolor/proofviewer/ProofMark.java android/tools/CrossCheck.java
+          java -cp /tmp/cc CrossCheck tests/vectors/photo-test.enc '${{ steps.v.outputs.secret }}' '${{ steps.v.outputs.pin }}' '${{ steps.v.outputs.hour }}' --canonical | tee /tmp/java.txt
+          diff /tmp/java.txt tests/vectors/expected.txt && echo "Java matches the vector"

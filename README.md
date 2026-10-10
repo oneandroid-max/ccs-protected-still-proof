@@ -4,7 +4,7 @@ A public proof of a process of our own, with no vendor in the chain, that blocks
 photo on every format where a block is viable, and makes every other copy traceable. The goal and the
 per-format status live in [PLAN.md](PLAN.md).
 
-- **The Android viewer** (the block): https://github.com/oneandroid-max/ccs-protected-still-proof/releases/latest/download/ccs-proof-viewer.apk — our own app; the window is flagged secure, so Android itself refuses to put it in a screenshot, a recording, a cast or the recent-apps thumbnail, while the photo on screen is drawn clean. Source in `android/`.
+- **The Android viewer** (the block): https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer.apk — our own app; the window is flagged secure, so Android itself refuses to put it in a screenshot, a recording, a cast or the recent-apps thumbnail, while the photo on screen is drawn clean. Source in `android/`.
 - **The page** (traceable, not blocked): https://oneandroid-max.github.io/ccs-protected-still-proof/ (the key goes after `#k=`; the PIN is given separately)
 - The first proof, vendor DRM (Widevine), kept for comparison on Android: https://oneandroid-max.github.io/ccs-protected-still-proof/widevine/
 
