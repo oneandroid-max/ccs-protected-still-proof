@@ -1,0 +1,109 @@
+# Builds the Mac and iPhone viewers with Apple's own compiler on a GitHub-hosted macOS runner (this
+# sandbox has no Swift), cross-checks the Swift port against the committed test vector, runs the Mac
+# probe on the runner (gate run with readOnly first, then none), builds the iPhone app for the
+# simulator and screenshots its probe rectangle (weak evidence: a simulator is not a phone), builds the
+# unsigned device app to prove it compiles, and replaces the Mac zip and the unsigned iPhone package in
+# the rolling release "viewers". Runner results are runner results, never device results.
+name: apple viewers
+
+on:
+  push:
+    branches: [main]
+    paths: ["apple/**", "ios/**", "mac/**", "tests/vectors/**", "photo.enc", ".github/workflows/apple.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain on this runner
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-version
+          uname -m
+
+      - name: Cross-check the Swift port against the test vector
+        run: |
+          S=$(sed -n 's/^secret=//p' tests/vectors/inputs.txt); P=$(sed -n 's/^pin=//p' tests/vectors/inputs.txt); H=$(sed -n 's/^hour=//p' tests/vectors/inputs.txt)
+          swiftc -O apple/ProofCrypto.swift apple/ProofMark.swift apple/crosscheck/main.swift -o /tmp/crosscheck
+          /tmp/crosscheck tests/vectors/photo-test.enc "$S" "$P" "$H" --canonical | tee /tmp/swift.txt
+          diff /tmp/swift.txt tests/vectors/expected.txt && echo "Swift port matches the vector"
+
+      - name: Mac probe on this runner (gate run, then the no-sharing run)
+        run: |
+          swiftc -O -framework AppKit mac/Probe.swift -o /tmp/macprobe
+          /tmp/macprobe readOnly --out=/tmp/gate.json || true
+          /tmp/macprobe none --out=/tmp/none.json || true
+          echo "== gate (readOnly):"; cat /tmp/gate.json 2>/dev/null || echo "not written"; echo
+          echo "== none:"; cat /tmp/none.json 2>/dev/null || echo "not written"; echo
+          echo "A gate whose capture shows no magenta means this runner cannot measure; a Mac in hand is the measurement."
+
+      - name: Mac viewer bundle (ad-hoc signed)
+        run: |
+          APP=build/mac/CCSProofViewer.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          swiftc -O -framework AppKit apple/ProofCrypto.swift apple/ProofMark.swift mac/main.swift -o "$APP/Contents/MacOS/CCSProofViewer"
+          cp mac/Info.plist "$APP/Contents/Info.plist"
+          cp photo.enc "$APP/Contents/Resources/photo.enc"
+          codesign --force --sign - --deep "$APP"
+          codesign -dv "$APP" 2>&1 | head -5
+          ditto -c -k --keepParent "$APP" ccs-proof-viewer-mac.zip
+          ls -l ccs-proof-viewer-mac.zip; shasum -a 256 ccs-proof-viewer-mac.zip
+
+      - name: iPhone app for the simulator, launched in probe mode and screenshotted
+        run: |
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          APP=build/sim/CCSProofViewer.app
+          mkdir -p "$APP"
+          swiftc -O -sdk "$SDK" -target arm64-apple-ios15.0-simulator -module-name CCSProofViewer apple/ProofCrypto.swift apple/ProofMark.swift ios/AppDelegate.swift ios/ViewerViewController.swift -o "$APP/CCSProofViewer"
+          cp ios/Info.plist "$APP/Info.plist"; cp photo.enc "$APP/photo.enc"
+          codesign --force --sign - "$APP"
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import sys,json
+d=json.load(sys.stdin)["devices"]
+cands=[(rt,dev) for rt,devs in d.items() if "iOS" in rt for dev in devs if dev.get("isAvailable") and "iPhone" in dev["name"]]
+cands.sort(key=lambda x: x[0], reverse=True)
+print(cands[0][1]["udid"] if cands else "")')
+          echo "simulator: $UDID"; test -n "$UDID"
+          xcrun simctl list devices available | sed -n '1,40p' | tr -s ' ' | awk -v u="$UDID" 'index($0,u){print}'
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" com.candidcolor.proofviewer --probe
+          sleep 8
+          xcrun simctl io "$UDID" screenshot /tmp/sim-probe.png
+          swift apple/pixelcount.swift /tmp/sim-probe.png | tee /tmp/sim-probe.json
+          echo "magenta present = the simulator's screenshot shows the secure canvas content (weak evidence either way: the simulator is not a phone)"
+
+      - name: iPhone device build, unsigned (proves it compiles; installs only once Apple signs it)
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          APP=build/dev/Payload/CCSProofViewer.app
+          mkdir -p "$APP"
+          swiftc -O -sdk "$SDK" -target arm64-apple-ios15.0 -module-name CCSProofViewer apple/ProofCrypto.swift apple/ProofMark.swift ios/AppDelegate.swift ios/ViewerViewController.swift -o "$APP/CCSProofViewer"
+          cp ios/Info.plist "$APP/Info.plist"; cp photo.enc "$APP/photo.enc"
+          (cd build/dev && zip -qr ../../ccs-proof-viewer-ios-unsigned.ipa Payload)
+          ls -l ccs-proof-viewer-ios-unsigned.ipa; shasum -a 256 ccs-proof-viewer-ios-unsigned.ipa
+
+      - name: Upload the simulator screenshot as a run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulator-probe
+          path: /tmp/sim-probe.png
+          if-no-files-found: ignore
+
+      - name: Replace the Mac zip and the unsigned iPhone package in the rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view viewers > /dev/null 2>&1; then
+            gh release create viewers --latest --title "CCS Proof Viewers (rolling)" --notes "The latest build of every viewer; each workflow replaces its own asset in place."
+          fi
+          gh release upload viewers ccs-proof-viewer-mac.zip ccs-proof-viewer-ios-unsigned.ipa --clobber
+          echo "https://github.com/${{ github.repository }}/releases/download/viewers/ccs-proof-viewer-mac.zip"

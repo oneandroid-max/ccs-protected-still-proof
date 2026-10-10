@@ -101,7 +101,7 @@ for (const dpr of [1, 2]) {
   await page.locator("#test-still").screenshot({ path: still });
   const meta = await sharp(shot).metadata();
   r.screenshot = { path: shot, width: meta.width, height: meta.height };
-  r.detector = await detect(shot, "0");
+  r.detector = await detect(shot);
   r.psnrCapturedVsStill = await psnr(shot, still);
 
   // 4. stop → still → screenshot → detector
@@ -109,14 +109,14 @@ for (const dpr of [1, 2]) {
   await page.waitForFunction(() => /^still/.test(document.getElementById("r-mode").textContent), null, { timeout: 10000 });
   const stillShot = path.join(outDir, `stopped-dpr${dpr}.png`);
   await page.locator("#proof").screenshot({ path: stillShot });
-  r.stopped = { mode: await page.locator("#r-mode").textContent(), detector: await detect(stillShot, "0"), psnrVsStill: await psnr(stillShot, still) };
+  r.stopped = { mode: await page.locator("#r-mode").textContent(), detector: await detect(stillShot), psnrVsStill: await psnr(stillShot, still) };
 
   // 5. share card download → detector
   const [download] = await Promise.all([page.waitForEvent("download", { timeout: 20000 }), page.click("#share")]);
   const card = path.join(outDir, `share-card-dpr${dpr}.jpg`);
   await download.saveAs(card);
   const cardMeta = await sharp(card).metadata();
-  r.shareCard = { path: card, width: cardMeta.width, height: cardMeta.height, detector: await detect(card, "0") };
+  r.shareCard = { path: card, width: cardMeta.width, height: cardMeta.height, detector: await detect(card) };
   report.runs.push(r);
   await ctx.close();
 }
@@ -130,7 +130,7 @@ for (const dpr of [1, 2]) {
   await page.waitForFunction(() => /^still/.test(document.getElementById("r-mode").textContent), null, { timeout: 60000 });
   const shot = path.join(outDir, "reduced-motion.png");
   await page.locator("#proof").screenshot({ path: shot });
-  report.reducedMotion = { mode: await page.locator("#r-mode").textContent(), motion: await page.locator("#r-motion").textContent(), detector: await detect(shot, "0") };
+  report.reducedMotion = { mode: await page.locator("#r-mode").textContent(), motion: await page.locator("#r-motion").textContent(), detector: await detect(shot) };
   await ctx.close();
 }
 
