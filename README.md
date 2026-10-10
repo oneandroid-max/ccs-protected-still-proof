@@ -11,8 +11,15 @@ in this repository.
 
 ## Open it on a phone
 
-- The page: https://oneandroid-max.github.io/ccs-protected-still-proof/
-- Google's own protected test clip, for comparison: https://oneandroid-max.github.io/ccs-protected-still-proof/?mode=google
+Works now, through a public CDN view of this repository (it shows a one-time "External Content
+Notice"; tap "Open the page"):
+
+- The page: https://raw.githack.com/oneandroid-max/ccs-protected-still-proof/main/index.html
+- Google's own protected test clip, for comparison: https://raw.githack.com/oneandroid-max/ccs-protected-still-proof/main/index.html?mode=google
+
+Once GitHub Pages is switched on for this repository (Settings, Pages, branch `main`, folder `/`),
+the same page is at https://oneandroid-max.github.io/ccs-protected-still-proof/ (add `?mode=google`
+for the comparison clip) with no notice.
 
 Wait for "Playing: yes", then take a screenshot with the phone's buttons and open it from the
 gallery. On an Android phone with hardware protection the photo area is black. The readout on the
