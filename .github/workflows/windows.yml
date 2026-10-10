@@ -1,0 +1,70 @@
+# Builds the Windows viewer with MSVC on a GitHub-hosted Windows runner (this sandbox has no Windows
+# compiler), cross-checks the C port against the committed test vector, runs the capture probe on the
+# runner (the gate run first: without the affinity the captures must SHOW the pattern, or the runner
+# cannot measure), and replaces ccs-proof-viewer-windows.exe in the rolling release "viewers":
+# https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer-windows.exe
+# Every number printed here comes from the command that produced it; runner results are runner results,
+# not the owner's PC.
+name: windows viewer
+
+on:
+  push:
+    branches: [main]
+    paths: ["windows/**", "tests/vectors/**", "photo.enc", ".github/workflows/windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with MSVC (no third-party action; the compiler is found with vswhere)
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSPATH=%%i
+          echo VSPATH=%VSPATH%
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
+          cd windows
+          rc /nologo viewer.rc
+          cl /nologo /W4 /O2 /DUNICODE /D_UNICODE viewer.c proofcore.c gcm.c viewer.res /Fe:ccs-proof-viewer-windows.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib bcrypt.lib ole32.lib oleaut32.lib dwmapi.lib shell32.lib advapi32.lib
+          cl /nologo /W4 /O2 crosscheck.c proofcore.c gcm.c /Fe:crosscheck.exe /link bcrypt.lib
+          cl /nologo /W4 /O2 coretest.c proofcore.c /Fe:coretest.exe
+          dir *.exe
+          dumpbin /nologo /dependents ccs-proof-viewer-windows.exe
+          certutil -hashfile ccs-proof-viewer-windows.exe SHA256
+
+      - name: Cross-check the C port against the test vector
+        shell: bash
+        run: |
+          S=$(sed -n 's/^secret=//p' tests/vectors/inputs.txt); P=$(sed -n 's/^pin=//p' tests/vectors/inputs.txt); H=$(sed -n 's/^hour=//p' tests/vectors/inputs.txt)
+          ./windows/coretest.exe sha
+          ./windows/crosscheck.exe tests/vectors/photo-test.enc "$S" "$P" "$H" --canonical | tr -d '\r' | tee /tmp/c.txt
+          diff /tmp/c.txt tests/vectors/expected.txt && echo "C port matches the vector"
+
+      - name: Probe this runner (gate run without the affinity, then with it)
+        shell: pwsh
+        run: |
+          Set-Location windows
+          foreach ($args in @(@('--probe','--no-affinity','--out=gate.json'), @('--probe','--out=probe.json'))) {
+            $p = Start-Process -FilePath (Resolve-Path .\ccs-proof-viewer-windows.exe) -ArgumentList $args -PassThru
+            $p | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
+            if (-not $p.HasExited) { Write-Host "probe did not exit in 60 s; stopping it"; Stop-Process -Id $p.Id -Force }
+            $f = $args[-1].Substring(6)
+            if (Test-Path $f) { Write-Host "== $f"; Get-Content $f } else { Write-Host "== $f: not written (no window on this runner?)" }
+          }
+          Write-Host "A gate run whose captures do not show the pattern means this runner cannot measure; the owner's PC is the measurement."
+
+      - name: Replace the EXE in the rolling release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view viewers > /dev/null 2>&1; then
+            gh release create viewers --latest --title "CCS Proof Viewers (rolling)" --notes "The latest build of every viewer; each workflow replaces its own asset in place."
+          fi
+          gh release upload viewers windows/ccs-proof-viewer-windows.exe --clobber
+          echo "https://github.com/${{ github.repository }}/releases/download/viewers/ccs-proof-viewer-windows.exe"

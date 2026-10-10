@@ -1,0 +1,3 @@
+// viewer.rc — the encrypted photo travels inside the program; the key does not.
+#define IDR_PHOTO 101
+IDR_PHOTO RCDATA "..\\photo.enc"

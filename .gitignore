@@ -5,3 +5,7 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+windows/*.obj
+windows/*.res
+windows/*.exe
+windows/*.json
