@@ -4,14 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<title>Self-defending proof</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap">
+<title>The self-defending proof, second version</title>
 <style>
   :root {
     --bg: #f6f4ef; --fg: #1b1a17; --muted: #6b665c; --panel: #ffffff; --line: #d9d4c8;
     --accent: #1f4e8c; --accent-ink: #ffffff; --ok: #1d6b3a; --bad: #a83a2b;
-    --display: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    --display: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #15171a; --fg: #ecece6; --muted: #a39f94; --panel: #1f2226; --line: #3a3d42; --accent: #7fb0ea; --accent-ink: #0f1a2a; --ok: #6fd39a; --bad: #ff8a78; color-scheme: dark; }
@@ -20,135 +19,100 @@
   html, body { margin: 0; }
   body { background: var(--bg); color: var(--fg); font-family: var(--display); font-size: 15px; line-height: 1.5; }
   [hidden] { display: none !important; }
-  .wrap { max-width: 920px; margin: 0 auto; padding-block: 16px 48px; padding-inline: 16px; display: grid; gap: 16px; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 16px; }
   h1 { font-size: 1.35rem; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
   h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
   p { margin: 0; max-width: 65ch; }
   .lede { color: var(--muted); }
-  .proof { background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 2 / 1; max-width: 100%; position: relative; }
-  .proof video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-  .proof .msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-align: center; padding: 16px; font-size: 0.95rem; }
-  .facts { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; }
-  .facts dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-variant-numeric: tabular-nums; }
-  .facts dt { color: var(--muted); } .facts dd { margin: 0; font-family: var(--mono); font-size: 0.9rem; word-break: break-word; }
-  .ok { color: var(--ok); } .bad { color: var(--bad); }
-  .share { display: grid; grid-template-columns: 1fr; gap: 12px; }
-  @media (min-width: 640px) { .share { grid-template-columns: 1fr 1fr; } }
-  .share img { width: 100%; height: auto; display: block; border-radius: 8px; border: 1px solid var(--line); }
-  button, a.btn { font: inherit; font-size: 0.9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 8px 14px; cursor: pointer; text-decoration: none; display: inline-block; }
-  .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input[type=text] { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+  button { font: inherit; font-size: 0.9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #stage { background: #000; border-radius: 10px; overflow: hidden; position: relative; min-height: 160px; }
+  #proof { display: block; max-width: 100%; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; pointer-events: none; }
+  #msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-align: center; padding: 16px; font-size: 0.95rem; pointer-events: none; }
+  .credit { font-size: 0.8rem; color: var(--muted); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); font-size: 0.85rem; word-break: break-word; }
   ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
   .note { font-size: 0.85rem; color: var(--muted); }
+  #test-still { display: block; max-width: 100%; }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>The self-defending proof</h1>
-  <p class="lede">The photo below is served as a protected video of a still frame, licensed to this viewer. You see a clean photo. On a phone, a screenshot or a screen recording of it comes out black. The share a family is given instead, free, credited to the studio and marked to the viewer, is described below.</p>
+  <h1>The self-defending proof, second version</h1>
+  <p class="lede">The photo below is stored only encrypted. The key comes from this link and the PIN you type, and nothing else. The photo is drawn on the screen, never served as a file, in two alternating frames that your eye blends into the picture while a screenshot catches only one noisy frame. Every copy that leaves this page, by screenshot, recording or share, carries an invisible mark naming the viewer and the hour. No vendor service is involved on any platform.</p>
 
-  <div class="proof">
-    <video id="proof" muted autoplay loop playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" aria-label="Proof photo, protected"></video>
-    <div class="msg" id="msg">Loading the protected proof</div>
+  <div class="panel">
+    <h2>Open the photo</h2>
+    <div class="row">
+      <input id="pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="PIN" aria-label="6-digit PIN">
+      <button id="show" class="primary">Show the photo</button>
+    </div>
+    <p class="note">The PIN was given to you with this link. The link carries its own key after the # sign; browsers never send that part to any server.</p>
   </div>
 
-  <div class="facts">
-    <h2>What this phone is doing</h2>
+  <div id="stage">
+    <canvas id="proof" width="0" height="0" aria-label="The protected photo"></canvas>
+    <div id="msg">Type the PIN to open the photo.</div>
+  </div>
+  <p class="credit">© Candid Color Systems · this view is marked to its viewer</p>
+  <div class="row">
+    <button id="stop" disabled>Stop the alternation</button>
+    <button id="share" disabled>Download the share card</button>
+  </div>
+
+  <div class="panel">
+    <h2>What this device is doing (measured on this device)</h2>
     <dl>
-      <dt>Protection</dt><dd id="drm">checking</dd>
-      <dt>Security level</dt><dd id="level">checking</dd>
-      <dt>Licensed to</dt><dd id="pin">PIN 48213 (this session)</dd>
-      <dt>Playing</dt><dd id="playing">no</dd>
+      <dt>PIN</dt><dd id="r-pin">waiting</dd>
+      <dt>Mode</dt><dd id="r-mode">idle</dd>
+      <dt>Frame rate</dt><dd id="r-fps">not measured yet</dd>
+      <dt>Playing</dt><dd id="r-playing">no</dd>
+      <dt>Canvas</dt><dd id="r-canvas">—</dd>
+      <dt>Pixel ratio</dt><dd id="r-dpr">—</dd>
+      <dt>Reduced motion</dt><dd id="r-motion">—</dd>
+      <dt>Viewer mark</dt><dd id="r-mark">—</dd>
+      <dt>Noise amplitude</dt><dd id="r-amp">—</dd>
+      <dt>Device time</dt><dd id="r-time">—</dd>
     </dl>
-    <p class="note" id="verdict">On an iPhone, or an Android phone with hardware protection, a screenshot of the photo area is black. On a laptop browser or a phone with software-only protection the screenshot still works; this readout says which you have.</p>
   </div>
 
-  <div class="facts">
+  <div class="panel">
     <h2>Try it</h2>
     <ol>
-      <li>Wait until "Playing" reads yes and the photo is on screen.</li>
-      <li>Take a screenshot with the phone's buttons, then open it from your gallery. The photo area should be black; the rest of the page is captured as normal.</li>
-      <li>Start a screen recording, then stop it and play it back. The photo area should be black.</li>
-      <li>The share card a family is given instead is described below.</li>
+      <li>Type the PIN and wait until "Playing" reads yes. You should see the photo with a fine shimmer.</li>
+      <li>Take a screenshot with the device's buttons and open it from your gallery. The photo area should be a noisy, broken copy; the rest of the page looks normal.</li>
+      <li>Start a screen recording, stop it, and play it back. It shows the frames flickering; a recording can be averaged back into the photo, and that copy still carries your mark.</li>
+      <li>Tap "Stop the alternation". The photo becomes a still. A screenshot now captures it cleanly, and that copy still carries your mark.</li>
+      <li>Download the share card: the honest copy a family is given, credited and marked.</li>
     </ol>
   </div>
 
-  <div class="facts">
-    <h2>The share the family is given</h2>
-    <p>In the full package a credited share card sits here: the photo in the studio's frame with the studio's name and the gallery link, carrying the invisible viewer mark and a signed credential. It is left out of this public proof so no clear copy of the photo is published; the only photo here is the encrypted one above.</p>
+  <div class="panel">
+    <h2>What this cannot do</h2>
+    <p>It cannot make a capture come out black. On a web page only the phone maker's own protected path does that, and that path is always Apple's, Google's or Microsoft's. A screen recording captures both frames and averaging them recovers the photo. A camera can photograph the screen. A developer console can read the canvas. A device that limits animation, such as an iPhone in Low Power Mode, is shown the marked still instead, and a screenshot captures it cleanly. Every one of those copies still carries the viewer's mark. The promise of this process is that a leak is traceable and a casual capture is worthless, not that a capture is impossible.</p>
   </div>
 
-  <div class="facts">
+  <div class="panel">
+    <h2>The share the family is given</h2>
+    <p>The share card is a smaller copy with the studio's name and a place for the gallery link, carrying the same invisible mark. It is the easy path: free, credited, and traceable, so there is no reason to capture the screen.</p>
+  </div>
+
+  <div class="panel">
     <h2>What is where</h2>
     <dl>
-      <dt>Manifest</dt><dd id="manifest">drm/widevine/manifest.mpd</dd>
-      <dt>Licence</dt><dd id="lic">Google's public test licence server (proof only)</dd>
-      <dt>Fallback</dt><dd>none in this public proof (the ClearKey test copies are only in the full package)</dd>
+      <dt>Photo file</dt><dd>photo.enc — AES-256-GCM, key from PBKDF2-SHA256 of the link key and the PIN; the key is in no file</dd>
+      <dt>Page code</dt><dd>viewer.js and mark.js — plain browser code, no library, no network call but the photo file itself</dd>
+      <dt>First proof</dt><dd><a href="widevine/">widevine/</a> — the vendor-DRM version, kept for comparison on Android</dd>
     </dl>
   </div>
-</div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>
-<script>
-(async function () {
-  var video = document.getElementById("proof");
-  var msg = document.getElementById("msg");
-  var drmEl = document.getElementById("drm"), levelEl = document.getElementById("level"), playingEl = document.getElementById("playing"), verdict = document.getElementById("verdict");
-  var params = new URLSearchParams(location.search);
-  var requested = params.get("mode");
-  // clearkey-vp9 is the same ClearKey pipeline in VP9, for browsers without an H.264 decoder (the sandbox this was built in).
-  var mode = requested === "clearkey" || requested === "clearkey-vp9" || requested === "google" ? requested : "widevine";
-  var isClearKey = mode.indexOf("clearkey") === 0;
-  // "google" mode plays Google's own protected test stream through the same licence proxy: it
-  // proves THIS PHONE blacks out protected video even before CCS's own content is licensed.
-  var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/" + mode + "/manifest.mpd";
-  document.getElementById("manifest").textContent = manifestUrl;
-  shaka.polyfill.installAll();
-  if (!shaka.Player.isBrowserSupported()) { msg.textContent = "This browser cannot play protected video."; drmEl.textContent = "unsupported"; return; }
-  var player = new shaka.Player();
-  await player.attach(video);
-  var cfg = { drm: { servers: {} } };
-  if (isClearKey) {
-    cfg.drm.clearKeys = { "0123456789abcdef0123456789abcdef": "fedcba9876543210fedcba9876543210" };
-    document.getElementById("lic").textContent = "ClearKey (keys in the page; no protection, pipeline test)";
-  } else {
-    // Proof only: Google's public Widevine test proxy. In production this URL is CCS's licence
-    // service, and the request carries the viewer's session so the licence is bound to the PIN.
-    cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
-    cfg.drm.advanced = { "com.widevine.alpha": { videoRobustness: ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] } };
-  }
-  player.configure(cfg);
-  // Production: the licence request carries the viewer's session (a token in the body or a header
-  // the licence service allows) so the licence is bound to the PIN. Nothing is added here: Google's
-  // public proxy allows only its own request headers, and any other header fails the browser's
-  // pre-check, so the licence request never leaves the phone (measured 2026-10-10, code 6007).
-  player.addEventListener("error", function (e) {
-    var err = e.detail || {};
-    var inner = err.data && err.data[1] && err.data[1].code ? err.data[1] : null;
-    var detail = inner ? ", detail " + inner.code + (inner.data && inner.data[1] ? " http " + inner.data[1] : "") : "";
-    msg.hidden = false;
-    msg.textContent = "Could not play the protected proof (code " + err.code + detail + "). " + (mode === "widevine" ? "On an iPhone this proof needs FairPlay, which needs CCS's Apple certificate." : "");
-    drmEl.textContent = "failed, code " + err.code + detail;
-  });
-  try {
-    await player.load(manifestUrl);
-    var info = player.drmInfo();
-    drmEl.textContent = info ? info.keySystem : (isClearKey ? "org.w3.clearkey" : "none");
-    var robust = info && (info.videoRobustness || "");
-    levelEl.textContent = robust || "not reported";
-    var what = mode === "google" ? "Google's test clip" : "the photo";
-    if (!isClearKey) {
-      if (/HW_SECURE/.test(robust)) { levelEl.className = "ok"; verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : ""); }
-      else if (robust) { levelEl.className = "bad"; verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted, so the pipeline works; the capture block depends on the device."; }
-    } else { verdict.textContent = "ClearKey mode: the pipeline plays, but nothing stops a screenshot. Open the page without ?mode=clearkey on a phone for the real test."; }
-    video.addEventListener("playing", function () { playingEl.textContent = "yes"; msg.hidden = true; });
-    await video.play().catch(function () {});
-  } catch (e) {
-    msg.hidden = false;
-    msg.textContent = "Could not play the protected proof (" + (e && e.code) + ").";
-    drmEl.textContent = "failed";
-  }
-})();
-</script>
+  <canvas id="test-still" hidden aria-hidden="true"></canvas>
+</div>
+<script type="module" src="viewer.js"></script>
 </body>
 </html>

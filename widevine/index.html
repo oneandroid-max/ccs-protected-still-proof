@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Self-defending proof</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+  :root {
+    --bg: #f6f4ef; --fg: #1b1a17; --muted: #6b665c; --panel: #ffffff; --line: #d9d4c8;
+    --accent: #1f4e8c; --accent-ink: #ffffff; --ok: #1d6b3a; --bad: #a83a2b;
+    --display: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171a; --fg: #ecece6; --muted: #a39f94; --panel: #1f2226; --line: #3a3d42; --accent: #7fb0ea; --accent-ink: #0f1a2a; --ok: #6fd39a; --bad: #ff8a78; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 920px; margin: 0 auto; padding-block: 16px 48px; padding-inline: 16px; display: grid; gap: 16px; }
+  h1 { font-size: 1.35rem; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+  p { margin: 0; max-width: 65ch; }
+  .lede { color: var(--muted); }
+  .proof { background: #000; border-radius: 10px; overflow: hidden; aspect-ratio: 2 / 1; max-width: 100%; position: relative; }
+  .proof video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+  .proof .msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-align: center; padding: 16px; font-size: 0.95rem; }
+  .facts { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; }
+  .facts dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-variant-numeric: tabular-nums; }
+  .facts dt { color: var(--muted); } .facts dd { margin: 0; font-family: var(--mono); font-size: 0.9rem; word-break: break-word; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .share { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 640px) { .share { grid-template-columns: 1fr 1fr; } }
+  .share img { width: 100%; height: auto; display: block; border-radius: 8px; border: 1px solid var(--line); }
+  button, a.btn { font: inherit; font-size: 0.9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 8px 14px; cursor: pointer; text-decoration: none; display: inline-block; }
+  .primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+  .note { font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>The self-defending proof</h1>
+  <p class="lede">The photo below is served as a protected video of a still frame, licensed to this viewer. You see a clean photo. On a phone, a screenshot or a screen recording of it comes out black. The share a family is given instead, free, credited to the studio and marked to the viewer, is described below.</p>
+
+  <div class="proof">
+    <video id="proof" muted autoplay loop playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" aria-label="Proof photo, protected"></video>
+    <div class="msg" id="msg">Loading the protected proof</div>
+  </div>
+
+  <div class="facts">
+    <h2>What this phone is doing</h2>
+    <dl>
+      <dt>Protection</dt><dd id="drm">checking</dd>
+      <dt>Security level</dt><dd id="level">checking</dd>
+      <dt>Licensed to</dt><dd id="pin">PIN 48213 (this session)</dd>
+      <dt>Playing</dt><dd id="playing">no</dd>
+    </dl>
+    <p class="note" id="verdict">On an iPhone, or an Android phone with hardware protection, a screenshot of the photo area is black. On a laptop browser or a phone with software-only protection the screenshot still works; this readout says which you have.</p>
+  </div>
+
+  <div class="facts">
+    <h2>Try it</h2>
+    <ol>
+      <li>Wait until "Playing" reads yes and the photo is on screen.</li>
+      <li>Take a screenshot with the phone's buttons, then open it from your gallery. The photo area should be black; the rest of the page is captured as normal.</li>
+      <li>Start a screen recording, then stop it and play it back. The photo area should be black.</li>
+      <li>The share card a family is given instead is described below.</li>
+    </ol>
+  </div>
+
+  <div class="facts">
+    <h2>The share the family is given</h2>
+    <p>In the full package a credited share card sits here: the photo in the studio's frame with the studio's name and the gallery link, carrying the invisible viewer mark and a signed credential. It is left out of this public proof so no clear copy of the photo is published; the only photo here is the encrypted one above.</p>
+  </div>
+
+  <div class="facts">
+    <h2>What is where</h2>
+    <dl>
+      <dt>Manifest</dt><dd id="manifest">drm/widevine/manifest.mpd</dd>
+      <dt>Licence</dt><dd id="lic">Google's public test licence server (proof only)</dd>
+      <dt>Fallback</dt><dd>none in this public proof (the ClearKey test copies are only in the full package)</dd>
+    </dl>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>
+<script>
+(async function () {
+  var video = document.getElementById("proof");
+  var msg = document.getElementById("msg");
+  var drmEl = document.getElementById("drm"), levelEl = document.getElementById("level"), playingEl = document.getElementById("playing"), verdict = document.getElementById("verdict");
+  var params = new URLSearchParams(location.search);
+  var requested = params.get("mode");
+  // clearkey-vp9 is the same ClearKey pipeline in VP9, for browsers without an H.264 decoder (the sandbox this was built in).
+  var mode = requested === "clearkey" || requested === "clearkey-vp9" || requested === "google" ? requested : "widevine";
+  var isClearKey = mode.indexOf("clearkey") === 0;
+  // "google" mode plays Google's own protected test stream through the same licence proxy: it
+  // proves THIS PHONE blacks out protected video even before CCS's own content is licensed.
+  var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/" + mode + "/manifest.mpd";
+  document.getElementById("manifest").textContent = manifestUrl;
+  shaka.polyfill.installAll();
+  if (!shaka.Player.isBrowserSupported()) { msg.textContent = "This browser cannot play protected video."; drmEl.textContent = "unsupported"; return; }
+  var player = new shaka.Player();
+  await player.attach(video);
+  var cfg = { drm: { servers: {} } };
+  if (isClearKey) {
+    cfg.drm.clearKeys = { "0123456789abcdef0123456789abcdef": "fedcba9876543210fedcba9876543210" };
+    document.getElementById("lic").textContent = "ClearKey (keys in the page; no protection, pipeline test)";
+  } else {
+    // Proof only: Google's public Widevine test proxy. In production this URL is CCS's licence
+    // service, and the request carries the viewer's session so the licence is bound to the PIN.
+    cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
+    cfg.drm.advanced = { "com.widevine.alpha": { videoRobustness: ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] } };
+  }
+  player.configure(cfg);
+  // Production: the licence request carries the viewer's session (a token in the body or a header
+  // the licence service allows) so the licence is bound to the PIN. Nothing is added here: Google's
+  // public proxy allows only its own request headers, and any other header fails the browser's
+  // pre-check, so the licence request never leaves the phone (measured 2026-10-10, code 6007).
+  player.addEventListener("error", function (e) {
+    var err = e.detail || {};
+    var inner = err.data && err.data[1] && err.data[1].code ? err.data[1] : null;
+    var detail = inner ? ", detail " + inner.code + (inner.data && inner.data[1] ? " http " + inner.data[1] : "") : "";
+    msg.hidden = false;
+    msg.textContent = "Could not play the protected proof (code " + err.code + detail + "). " + (mode === "widevine" ? "On an iPhone this proof needs FairPlay, which needs CCS's Apple certificate." : "");
+    drmEl.textContent = "failed, code " + err.code + detail;
+  });
+  try {
+    await player.load(manifestUrl);
+    var info = player.drmInfo();
+    drmEl.textContent = info ? info.keySystem : (isClearKey ? "org.w3.clearkey" : "none");
+    var robust = info && (info.videoRobustness || "");
+    levelEl.textContent = robust || "not reported";
+    var what = mode === "google" ? "Google's test clip" : "the photo";
+    if (!isClearKey) {
+      if (/HW_SECURE/.test(robust)) { levelEl.className = "ok"; verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : ""); }
+      else if (robust) { levelEl.className = "bad"; verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted, so the pipeline works; the capture block depends on the device."; }
+    } else { verdict.textContent = "ClearKey mode: the pipeline plays, but nothing stops a screenshot. Open the page without ?mode=clearkey on a phone for the real test."; }
+    video.addEventListener("playing", function () { playingEl.textContent = "yes"; msg.hidden = true; });
+    await video.play().catch(function () {});
+  } catch (e) {
+    msg.hidden = false;
+    msg.textContent = "Could not play the protected proof (" + (e && e.code) + ").";
+    drmEl.textContent = "failed";
+  }
+})();
+</script>
+</body>
+</html>

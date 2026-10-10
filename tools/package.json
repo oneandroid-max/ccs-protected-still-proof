@@ -1,0 +1,11 @@
+{
+  "name": "ccs-protected-still-proof-tools",
+  "private": true,
+  "type": "module",
+  "description": "Build and verification tools for the proof. They run on the build machine only; the published page depends on nothing.",
+  "dependencies": {
+    "pngjs": "^7.0.0",
+    "playwright": "1.59.1",
+    "sharp": "^0.34.5"
+  }
+}
