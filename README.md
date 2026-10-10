@@ -59,6 +59,23 @@ still mode, the readout naming the measured 31 per second. Wrong keys can drift 
 still because every tile shares one period; the detector's verdict asks for a right-key score far above
 that spread.
 
+## Measured on the owner's own device (2026-10-10 22:33 UTC, Android, Chrome, device pixel ratio 2)
+
+A screenshot taken with the device's buttons while the photo was alternating, sent back as a JPEG,
+analysed by `tools/detect-mark.mjs` with a tile-offset search over a 1500×1700 crop of the photo area:
+
+| Candidate | z-score |
+|---|---|
+| the viewer's PIN, hour 2026-10-10T22 | **224.35** (offset 8, 71) |
+| the viewer's PIN, hour 21 and hour 23 | 3.11 and 3.86 |
+| three wrong PINs, hour 22 | 6.25, 1.80, 2.22 |
+
+The capture itself is the grainy, broken copy the design predicts (residual noise σ ≈ 20 of 255), and
+it names its viewer and its hour. At scales 0.67, 0.8, 1.25 and 1.5 nothing is found, which shows the
+upload arrived at true device pixels. With an offset search, wrong keys can score higher than on an
+aligned image (the best of 16,384 offsets is kept), so the verdict compares the right key against that
+spread; here the ratio is 36 to 1.
+
 ## Try it on a device
 
 1. Open the link, type the PIN, wait for "Playing: yes". You see the photo with a fine shimmer.

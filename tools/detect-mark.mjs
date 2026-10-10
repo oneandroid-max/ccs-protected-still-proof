@@ -18,9 +18,14 @@ const args = {};
 for (const a of process.argv.slice(2)) { const m = a.match(/^--([^=]+)(?:=(.*))?$/); if (m) args[m[1]] = m[2] === undefined ? true : m[2]; }
 if (!args.image || !args.secret || !args.pin) { console.error("usage: --image=<file> --secret=<s> --pin=<p> [--hour=] [--hours=1] [--crop=x,y,w,h] [--phase=search|0] [--wrong=5]"); process.exit(2); }
 
-const { data, info } = await sharp(args.image).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-let W = info.width, H = info.height, x0 = 0, y0 = 0;
-if (args.crop) { const [cx, cy, cw, ch] = args.crop.split(",").map(Number); x0 = cx; y0 = cy; W = cw; H = ch; }
+// --scale=<factor> resamples the crop before analysis (a capture that was rescaled on its way here).
+let pipeline = sharp(args.image);
+let x0 = 0, y0 = 0, W, H;
+if (args.crop) { const [cx, cy, cw, ch] = args.crop.split(",").map(Number); pipeline = pipeline.extract({ left: cx, top: cy, width: cw, height: ch }); }
+const scale = Number(args.scale || 1);
+if (scale !== 1) { const m = await pipeline.clone().metadata(); pipeline = pipeline.resize(Math.round(m.width * scale), Math.round(m.height * scale), { kernel: "lanczos3" }); }
+const { data, info } = await pipeline.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+W = info.width; H = info.height;
 const N = W * H;
 
 // luminance of the crop
@@ -86,7 +91,7 @@ for (let k = 0; k < wrongCount; k++) {
   await evaluate("wrong-pin", wrong, buckets[hours]);
 }
 const summary = {
-  image: args.image, size: { width: info.width, height: info.height }, crop: { x: x0, y: y0, w: W, h: H },
+  image: args.image, size: { width: info.width, height: info.height }, crop: args.crop || "none", scale, analysed: { w: W, h: H },
   residualSigma: Math.round(sigma * 100) / 100, pixels: N, results,
   verdict: {
     bestRight: Math.max(...results.filter((r) => r.label === "right-key").map((r) => r.z)),
