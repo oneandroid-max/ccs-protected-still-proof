@@ -11,8 +11,9 @@ in this repository.
 
 ## Result (2026-10-10)
 
-Verified on an Android phone over Chrome: security level `HW_SECURE_ALL`, the photo plays, and a
-screenshot of it comes out black. The first phone test failed with Shaka code 6007 because the page
+Verified on an Android phone over Chrome: security level `HW_SECURE_ALL`, the photo plays, a
+screenshot of it comes out black, and a screen recording of the page shows the photo area black for
+the whole clip while the rest of the page records normally. The first phone test failed with Shaka code 6007 because the page
 added a custom header to the licence request and the public proxy's allowed-headers list does not
 include it; the header was removed and the test passed on the next load.
 
