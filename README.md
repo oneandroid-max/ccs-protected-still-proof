@@ -9,21 +9,26 @@ the QuicLINKs application.
 `drm/widevine/video.mp4` is encrypted: it is not a readable image. No clear copy of the photo is
 in this repository.
 
+## Result (2026-10-10)
+
+Verified on an Android phone over Chrome: security level `HW_SECURE_ALL`, the photo plays, and a
+screenshot of it comes out black. The first phone test failed with Shaka code 6007 because the page
+added a custom header to the licence request and the public proxy's allowed-headers list does not
+include it; the header was removed and the test passed on the next load.
+
 ## Open it on a phone
 
-Works now, through a public CDN view of this repository (it shows a one-time "External Content
-Notice"; tap "Open the page"):
+- The page: https://oneandroid-max.github.io/ccs-protected-still-proof/
+- Google's own protected test clip, for comparison: https://oneandroid-max.github.io/ccs-protected-still-proof/?mode=google
 
-- The page: https://raw.githack.com/oneandroid-max/ccs-protected-still-proof/main/index.html
-- Google's own protected test clip, for comparison: https://raw.githack.com/oneandroid-max/ccs-protected-still-proof/main/index.html?mode=google
-
-Once GitHub Pages is switched on for this repository (Settings, Pages, branch `main`, folder `/`),
-the same page is at https://oneandroid-max.github.io/ccs-protected-still-proof/ (add `?mode=google`
-for the comparison clip) with no notice.
+The page is served with a ten-minute cache; after a change, add `?v=<anything new>` to the address
+to force a fresh copy. A CDN view of the branch also works, behind a one-time "External Content
+Notice": https://raw.githack.com/oneandroid-max/ccs-protected-still-proof/main/index.html
 
 Wait for "Playing: yes", then take a screenshot with the phone's buttons and open it from the
 gallery. On an Android phone with hardware protection the photo area is black. The readout on the
-page says which security level the phone granted (`HW_SECURE_*` is hardware protection).
+page says which security level the phone granted (`HW_SECURE_*` is hardware protection). On a
+laptop browser or a phone with software-only protection the screenshot still captures the photo.
 
 iPhone: Safari uses FairPlay, not Widevine, so this page reports a licence error there. The same
 packaging with an Apple FairPlay certificate gives the same black screenshot on iPhone; not built
