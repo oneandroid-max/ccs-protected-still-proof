@@ -1,0 +1,48 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.candidcolor.proofviewer"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.candidcolor.proofviewer"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "0.1"
+    }
+
+    // The proof signing key is committed on purpose: it is a self-signed key for this sideloaded proof
+    // only, so every build installs over the last one. A production viewer would sign with a key held
+    // in a secret, never in the repository.
+    signingConfigs {
+        proof {
+            storeFile file("../proof-signing.keystore")
+            storePassword "ccs-proof"
+            keyAlias "proof"
+            keyPassword "ccs-proof"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.proof
+        }
+        debug {
+            signingConfig signingConfigs.proof
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures { buildConfig false }
+    lint { abortOnError false }
+}
+
+// No dependencies block on purpose: the viewer uses the Android framework and nothing else.

@@ -1,0 +1,60 @@
+# Builds the Android viewer on a GitHub-hosted runner (the Android SDK is downloaded from dl.google.com,
+# which the authoring sandbox cannot reach) and publishes the signed APK as a release asset at a stable
+# address: https://github.com/oneandroid-max/ccs-protected-still-proof/releases/latest/download/ccs-proof-viewer.apk
+# Every number in the "Measure" step is printed by the command that produced it.
+name: android viewer
+
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain on this runner
+        run: |
+          java -version 2>&1 | head -1
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" 2>/dev/null | tr '\n' ' '; echo
+
+      - name: Android SDK components
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+
+      - name: Build the release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --console=plain assembleRelease
+
+      - name: Measure the APK
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          ls -l "$APK"
+          sha256sum "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump badging "$APK" | sed -n '1,12p'
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump permissions "$APK"
+
+      - name: Publish the APK as a release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk ccs-proof-viewer.apk
+          TAG="android-v${{ github.run_number }}"
+          gh release create "$TAG" ccs-proof-viewer.apk \
+            --title "CCS Proof Viewer for Android, build ${{ github.run_number }}" \
+            --notes "Built from ${{ github.sha }} by the android-viewer workflow. Sideload on Android 8 or newer: open this file on the phone, allow installs from the browser when asked, install, then open the app and type the link key and the PIN." \
+            --latest
+          echo "https://github.com/${{ github.repository }}/releases/download/$TAG/ccs-proof-viewer.apk"
+          echo "https://github.com/${{ github.repository }}/releases/latest/download/ccs-proof-viewer.apk"

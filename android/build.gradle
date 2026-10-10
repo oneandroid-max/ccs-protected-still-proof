@@ -1,0 +1,4 @@
+// The Android Gradle Plugin is a build tool: it runs on the build machine and ships nothing into the app.
+plugins {
+    id "com.android.application" version "8.10.1" apply false
+}
