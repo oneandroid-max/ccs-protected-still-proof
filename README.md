@@ -1,11 +1,11 @@
-# The self-defending proof, second version (2026-10-10)
+# The self-defending proof (2026-10-10)
 
-A public proof that a photo can be shown on any phone or computer so that the viewer sees a clean
-picture while every copy that leaves the screen is traceable to that viewer and, for a casual
-screenshot, worthless. Nothing here depends on a vendor: no DRM service, no licence server, no
-library on the page. Plain browser code and one encrypted file.
+A public proof of a process of our own, with no vendor in the chain, that blocks the stealing of a
+photo on every format where a block is viable, and makes every other copy traceable. The goal and the
+per-format status live in [PLAN.md](PLAN.md).
 
-- The page: https://oneandroid-max.github.io/ccs-protected-still-proof/ (the key goes after `#k=`; the PIN is given separately)
+- **The Android viewer** (the block): https://github.com/oneandroid-max/ccs-protected-still-proof/releases/latest/download/ccs-proof-viewer.apk — our own app; the window is flagged secure, so Android itself refuses to put it in a screenshot, a recording, a cast or the recent-apps thumbnail, while the photo on screen is drawn clean. Source in `android/`.
+- **The page** (traceable, not blocked): https://oneandroid-max.github.io/ccs-protected-still-proof/ (the key goes after `#k=`; the PIN is given separately)
 - The first proof, vendor DRM (Widevine), kept for comparison on Android: https://oneandroid-max.github.io/ccs-protected-still-proof/widevine/
 
 The page is served with a ten-minute cache; after a change, add `?v=<anything new>` to the address.
@@ -32,14 +32,46 @@ The page is served with a ten-minute cache; after a change, add `?v=<anything ne
    the page: the easy, honest path.
 6. **The readout shows only what the page measured** on the device in front of you.
 
-## What it cannot do
+## What the page cannot do
 
-It cannot make a capture come out black. On a web page only the phone maker's own protected path does
-that, and that path is always Apple's, Google's or Microsoft's. A screen recording captures both frames
+The page cannot make a capture come out black: the browser hands every frame to the device, and nothing
+inside a page can refuse the device's own capture. The Android viewer below does refuse it, because an
+installed app of ours can ask the system for that. A screen recording of the page captures both frames
 and averaging them recovers the photo. A camera can photograph the screen. A developer console can read
 the canvas. A device that limits animation is shown the marked still, and a screenshot captures it
 cleanly. Every one of those copies still carries the viewer's mark. The promise is that a leak is
 traceable and a casual capture is worthless, not that a capture is impossible.
+
+## The Android viewer (`android/`)
+
+Our own Java app on the Android framework and nothing else: no library, no vendor service, no network
+call. It holds the same `photo.enc`, derives the same key from the link key and the PIN, draws the photo
+clean, and adds the same invisible mark as the page.
+
+- **The block.** The window carries the system's secure flag before its first frame. Android then leaves
+  it out of screenshots, screen recordings, casting and the recent-apps thumbnail: a black box where the
+  photo is. A long press on the photo offers nothing.
+- **Fail closed.** The viewer decrypts only after the secure flag reads back from the window; the
+  readout line "Capture refusal" is that reading, not a setting.
+- **The readout** prints only what the phone measured: PIN accepted or refused, the flag, the Android
+  version and device, the photo size, the mark id and hour, key and decrypt times, and on Android 14
+  and newer the number of screenshot attempts the system reported.
+- **The share card** (Android 10 and newer) saves a credited, marked 600-pixel copy to Pictures/CCS Proof
+  and offers to share it.
+
+Install: open the release link on the phone, allow installs from the browser when asked, install, open
+"CCS Proof Viewer", paste the link key, type the PIN. The app also opens from the page's own link
+(`https://oneandroid-max.github.io/ccs-protected-still-proof/#k=…`, the key is read from the link) and
+from `ccsproof://open?k=…`.
+
+Cross-check before the first install (`android/tools/CrossCheck.java` against `tools/cross-check.mjs`,
+2026-10-10): both decrypt `photo.enc` to the same 130,950 bytes with the same SHA-256, derive the same
+mark id and the same tile for the same key, PIN and hour, and both refuse a wrong PIN. The APK is built
+and signed by `.github/workflows/android.yml` on a GitHub-hosted runner; the signing key in
+`android/proof-signing.keystore` is a self-signed key for this sideloaded proof only.
+
+The refusal is Android's own, asked for by our app. The key, the file, the mark, the viewer and the
+fail-closed rule are ours. A camera pointed at the screen still photographs it, marked.
 
 ## Measured in a headless Chromium before publishing (2026-10-10, `tools/verify.mjs`)
 

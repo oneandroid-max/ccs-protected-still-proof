@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<title>The self-defending proof, second version</title>
+<title>The self-defending proof, the page</title>
 <style>
   :root {
     --bg: #f6f4ef; --fg: #1b1a17; --muted: #6b665c; --panel: #ffffff; --line: #d9d4c8;
@@ -43,7 +43,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>The self-defending proof, second version</h1>
+  <h1>The self-defending proof, the page</h1>
   <p class="lede">The photo below is stored only encrypted. The key comes from this link and the PIN you type, and nothing else. The photo is drawn on the screen, never served as a file, in two alternating frames that your eye blends into the picture while a screenshot catches only one noisy frame. Every copy that leaves this page, by screenshot, recording or share, carries an invisible mark naming the viewer and the hour. No vendor service is involved on any platform.</p>
 
   <div class="panel">
@@ -94,7 +94,7 @@
 
   <div class="panel">
     <h2>What this cannot do</h2>
-    <p>It cannot make a capture come out black. On a web page only the phone maker's own protected path does that, and that path is always Apple's, Google's or Microsoft's. A screen recording captures both frames and averaging them recovers the photo. A camera can photograph the screen. A developer console can read the canvas. A device that limits animation, such as an iPhone in Low Power Mode, is shown the marked still instead, and a screenshot captures it cleanly. Every one of those copies still carries the viewer's mark. The promise of this process is that a leak is traceable and a casual capture is worthless, not that a capture is impossible.</p>
+    <p>This page cannot make a capture come out black: the browser hands every frame to the device, and nothing inside a page can refuse the device's own capture. The <a href="https://github.com/oneandroid-max/ccs-protected-still-proof/releases/latest/download/ccs-proof-viewer.apk">Android viewer</a>, an installed app of ours, does refuse it. A screen recording of this page captures both frames and averaging them recovers the photo. A camera can photograph the screen. A developer console can read the canvas. A device that limits animation, such as an iPhone in Low Power Mode, is shown the marked still instead, and a screenshot captures it cleanly. Every one of those copies still carries the viewer's mark. The promise of this process is that a leak is traceable and a casual capture is worthless, not that a capture is impossible.</p>
   </div>
 
   <div class="panel">
@@ -107,6 +107,8 @@
     <dl>
       <dt>Photo file</dt><dd>photo.enc — AES-256-GCM, key from PBKDF2-SHA256 of the link key and the PIN; the key is in no file</dd>
       <dt>Page code</dt><dd>viewer.js and mark.js — plain browser code, no library, no network call but the photo file itself</dd>
+      <dt>Android viewer</dt><dd><a href="https://github.com/oneandroid-max/ccs-protected-still-proof/releases/latest/download/ccs-proof-viewer.apk">ccs-proof-viewer.apk</a> — our own app: the window is flagged secure, so Android refuses every capture while the photo is drawn clean</dd>
+      <dt>The plan</dt><dd><a href="https://github.com/oneandroid-max/ccs-protected-still-proof/blob/main/PLAN.md">PLAN.md</a> — the goal, every format, what each gives today, what is open</dd>
       <dt>First proof</dt><dd><a href="widevine/">widevine/</a> — the vendor-DRM version, kept for comparison on Android</dd>
     </dl>
   </div>
