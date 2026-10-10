@@ -42,14 +42,18 @@ await new Promise((r) => server.listen(port, "127.0.0.1", r));
 const executablePath = args.chromium || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome";
 const browser = await chromium.launch({ executablePath, args: ["--no-sandbox"] });
 const base = `http://127.0.0.1:${port}/`;
-const url = (q = "") => `${base}?v=verify&test=1${q}#k=${args.secret}`;
+const url = (q = "") => `${base}trace/?v=verify&test=1${q}#k=${args.secret}`;   // the traceable page lives under /trace/; the root is the door
 const report = { startedAt: new Date().toISOString(), chromium: executablePath, runs: [] };
 const hour = new Date().toISOString().slice(0, 13);
 
-async function detect(image, phase = "0") {
+// Element screenshots can start a device pixel off the canvas grid (measured 2026-10-10: a layout change moved the
+// canvas by half a CSS pixel and a phase-0 read turned a z of +409 into -30, because the box-blur high-pass makes a
+// one-pixel shift anti-correlate). The tile offset is therefore searched, as on a real device capture.
+async function detect(image, phase = "search") {
   const { stdout } = await run("node", [path.join(root, "tools", "detect-mark.mjs"), `--image=${image}`, `--secret=${args.secret}`, `--pin=${args.pin}`, `--hour=${hour}`, "--hours=0", `--phase=${phase}`, "--wrong=5", "--json"], { maxBuffer: 1 << 24 });
   const s = JSON.parse(stdout);
-  return { bestRight: s.verdict.bestRight, maxAbsWrong: s.verdict.maxAbsWrong, markRecovered: s.verdict.markRecovered, sigma: s.residualSigma };
+  const best = s.results.filter((r) => r.label === "right-key").sort((a, b) => b.z - a.z)[0];
+  return { bestRight: s.verdict.bestRight, phase: best && best.phase, maxAbsWrong: s.verdict.maxAbsWrong, markRecovered: s.verdict.markRecovered, sigma: s.residualSigma };
 }
 async function psnr(aPath, bPath) {
   const a = await sharp(aPath).ensureAlpha().raw().toBuffer({ resolveWithObject: true });

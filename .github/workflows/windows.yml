@@ -29,10 +29,10 @@ jobs:
           echo VSPATH=%VSPATH%
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" >nul
           cd windows
-          rc /nologo viewer.rc
-          cl /nologo /W4 /O2 /DUNICODE /D_UNICODE viewer.c proofcore.c gcm.c viewer.res /Fe:ccs-proof-viewer-windows.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib bcrypt.lib ole32.lib oleaut32.lib dwmapi.lib shell32.lib advapi32.lib
-          cl /nologo /W4 /O2 crosscheck.c proofcore.c gcm.c /Fe:crosscheck.exe /link bcrypt.lib
-          cl /nologo /W4 /O2 coretest.c proofcore.c /Fe:coretest.exe
+          rc /nologo viewer.rc || exit /b 1
+          cl /nologo /W4 /O2 /DUNICODE /D_UNICODE viewer.c proofcore.c gcm.c viewer.res /Fe:ccs-proof-viewer-windows.exe /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib bcrypt.lib ole32.lib oleaut32.lib dwmapi.lib shell32.lib advapi32.lib || exit /b 1
+          cl /nologo /W4 /O2 crosscheck.c proofcore.c gcm.c /Fe:crosscheck.exe /link bcrypt.lib || exit /b 1
+          cl /nologo /W4 /O2 coretest.c proofcore.c /Fe:coretest.exe || exit /b 1
           dir *.exe
           dumpbin /nologo /dependents ccs-proof-viewer-windows.exe
           certutil -hashfile ccs-proof-viewer-windows.exe SHA256

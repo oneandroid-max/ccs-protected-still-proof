@@ -5,7 +5,10 @@ photo on every format where a block is viable, and makes every other copy tracea
 per-format status live in [PLAN.md](PLAN.md).
 
 - **The Android viewer** (the block): https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer.apk — our own app; the window is flagged secure, so Android itself refuses to put it in a screenshot, a recording, a cast or the recent-apps thumbnail, while the photo on screen is drawn clean. Source in `android/`.
-- **The page** (traceable, not blocked): https://oneandroid-max.github.io/ccs-protected-still-proof/ (the key goes after `#k=`; the PIN is given separately)
+- **The Windows viewer** (the block, built and signed by a Windows runner; unsigned by any publisher): https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer-windows.exe — the window asks Windows to leave it out of every capture and measures its own screen area, including the Print Screen key, before and after decrypting. Source in `windows/`.
+- **The door**: https://oneandroid-max.github.io/ccs-protected-still-proof/ — never draws the photo; hands the link's key (`#k=`) to the installed viewer and offers the installers.
+- **The traceable page** (not a block; the research bench): https://oneandroid-max.github.io/ccs-protected-still-proof/trace/ (the key goes after `#k=`; the PIN is given separately)
+- **The web research bench**: https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/ — every candidate for a black capture on the web, tried one at a time.
 - The first proof, vendor DRM (Widevine), kept for comparison on Android: https://oneandroid-max.github.io/ccs-protected-still-proof/widevine/
 
 The page is served with a ten-minute cache; after a change, add `?v=<anything new>` to the address.
@@ -32,9 +35,9 @@ The page is served with a ten-minute cache; after a change, add `?v=<anything ne
    the page: the easy, honest path.
 6. **The readout shows only what the page measured** on the device in front of you.
 
-## What the page cannot do
+## What the traceable page cannot do
 
-The page cannot make a capture come out black: the browser hands every frame to the device, and nothing
+The traceable page cannot make a capture come out black: the browser hands every frame to the device, and nothing
 inside a page can refuse the device's own capture. The Android viewer below does refuse it, because an
 installed app of ours can ask the system for that. A screen recording of the page captures both frames
 and averaging them recovers the photo. A camera can photograph the screen. A developer console can read

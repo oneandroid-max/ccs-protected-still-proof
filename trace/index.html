@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>The traceable page</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+  :root {
+    --bg: #f6f4ef; --fg: #1b1a17; --muted: #6b665c; --panel: #ffffff; --line: #d9d4c8;
+    --accent: #1f4e8c; --accent-ink: #ffffff; --ok: #1d6b3a; --bad: #a83a2b;
+    --display: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15171a; --fg: #ecece6; --muted: #a39f94; --panel: #1f2226; --line: #3a3d42; --accent: #7fb0ea; --accent-ink: #0f1a2a; --ok: #6fd39a; --bad: #ff8a78; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--display); font-size: 15px; line-height: 1.5; }
+  [hidden] { display: none !important; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 16px; }
+  h1 { font-size: 1.35rem; line-height: 1.2; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+  p { margin: 0; max-width: 65ch; }
+  .lede { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input[type=text] { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+  button { font: inherit; font-size: 0.9rem; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #stage { background: #000; border-radius: 10px; overflow: hidden; position: relative; min-height: 160px; }
+  #proof { display: block; max-width: 100%; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; pointer-events: none; }
+  #msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-align: center; padding: 16px; font-size: 0.95rem; pointer-events: none; }
+  .credit { font-size: 0.8rem; color: var(--muted); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; font-variant-numeric: tabular-nums; }
+  dt { color: var(--muted); } dd { margin: 0; font-family: var(--mono); font-size: 0.85rem; word-break: break-word; }
+  ol { margin: 0; padding-left: 1.2em; display: grid; gap: 6px; }
+  .note { font-size: 0.85rem; color: var(--muted); }
+  #test-still { display: block; max-width: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>The traceable page, not a block</h1>
+  <p class="lede"><strong>This page is the research bench and the traceability demonstration; it does not block a capture.</strong> The door that hands the photo to the installed viewer is at <a href="../">the root of this site</a>. The photo below is stored only encrypted. The key comes from this link and the PIN you type, and nothing else. The photo is drawn on the screen, never served as a file, in two alternating frames that your eye blends into the picture while a screenshot catches only one noisy frame. Every copy that leaves this page, by screenshot, recording or share, carries an invisible mark naming the viewer and the hour. No vendor service is involved on any platform.</p>
+
+  <div class="panel">
+    <h2>Open the photo</h2>
+    <div class="row">
+      <input id="pin" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="PIN" aria-label="6-digit PIN">
+      <button id="show" class="primary">Show the photo</button>
+    </div>
+    <p class="note">The PIN was given to you with this link. The link carries its own key after the # sign; browsers never send that part to any server.</p>
+  </div>
+
+  <div id="stage">
+    <canvas id="proof" width="0" height="0" aria-label="The protected photo"></canvas>
+    <div id="msg">Type the PIN to open the photo.</div>
+  </div>
+  <p class="credit">© Candid Color Systems · this view is marked to its viewer</p>
+  <div class="row">
+    <button id="stop" disabled>Stop the alternation</button>
+    <button id="share" disabled>Download the share card</button>
+  </div>
+
+  <div class="panel">
+    <h2>What this device is doing (measured on this device)</h2>
+    <dl>
+      <dt>PIN</dt><dd id="r-pin">waiting</dd>
+      <dt>Mode</dt><dd id="r-mode">idle</dd>
+      <dt>Frame rate</dt><dd id="r-fps">not measured yet</dd>
+      <dt>Playing</dt><dd id="r-playing">no</dd>
+      <dt>Canvas</dt><dd id="r-canvas">—</dd>
+      <dt>Pixel ratio</dt><dd id="r-dpr">—</dd>
+      <dt>Reduced motion</dt><dd id="r-motion">—</dd>
+      <dt>Viewer mark</dt><dd id="r-mark">—</dd>
+      <dt>Noise amplitude</dt><dd id="r-amp">—</dd>
+      <dt>Device time</dt><dd id="r-time">—</dd>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <h2>Try it</h2>
+    <ol>
+      <li>Type the PIN and wait until "Playing" reads yes. You should see the photo with a fine shimmer.</li>
+      <li>Take a screenshot with the device's buttons and open it from your gallery. The photo area should be a noisy, broken copy; the rest of the page looks normal.</li>
+      <li>Start a screen recording, stop it, and play it back. It shows the frames flickering; a recording can be averaged back into the photo, and that copy still carries your mark.</li>
+      <li>Tap "Stop the alternation". The photo becomes a still. A screenshot now captures it cleanly, and that copy still carries your mark.</li>
+      <li>Download the share card: the honest copy a family is given, credited and marked.</li>
+    </ol>
+  </div>
+
+  <div class="panel">
+    <h2>What this cannot do</h2>
+    <p>This page cannot make a capture come out black: the browser hands every frame to the device, and nothing inside a page can refuse the device's own capture. The <a href="https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer.apk">Android viewer</a>, an installed app of ours, does refuse it. A screen recording of this page captures both frames and averaging them recovers the photo. A camera can photograph the screen. A developer console can read the canvas. A device that limits animation, such as an iPhone in Low Power Mode, is shown the marked still instead, and a screenshot captures it cleanly. Every one of those copies still carries the viewer's mark. The promise of this process is that a leak is traceable and a casual capture is worthless, not that a capture is impossible.</p>
+  </div>
+
+  <div class="panel">
+    <h2>The share the family is given</h2>
+    <p>The share card is a smaller copy with the studio's name and a place for the gallery link, carrying the same invisible mark. It is the easy path: free, credited, and traceable, so there is no reason to capture the screen.</p>
+  </div>
+
+  <div class="panel">
+    <h2>What is where</h2>
+    <dl>
+      <dt>Photo file</dt><dd>photo.enc — AES-256-GCM, key from PBKDF2-SHA256 of the link key and the PIN; the key is in no file</dd>
+      <dt>Page code</dt><dd>viewer.js and mark.js — plain browser code, no library, no network call but the photo file itself</dd>
+      <dt>Android viewer</dt><dd><a href="https://github.com/oneandroid-max/ccs-protected-still-proof/releases/download/viewers/ccs-proof-viewer.apk">ccs-proof-viewer.apk</a> — our own app: the window is flagged secure, so Android refuses every capture while the photo is drawn clean</dd>
+      <dt>The plan</dt><dd><a href="https://github.com/oneandroid-max/ccs-protected-still-proof/blob/main/PLAN.md">PLAN.md</a> — the goal, every format, what each gives today, what is open</dd>
+      <dt>First proof</dt><dd><a href="../widevine/">widevine/</a> — the vendor-DRM version, kept for comparison on Android</dd>
+    </dl>
+  </div>
+
+  <canvas id="test-still" hidden aria-hidden="true"></canvas>
+</div>
+<script type="module" src="viewer.js"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});</script>
+</body>
+</html>

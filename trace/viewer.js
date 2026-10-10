@@ -1,7 +1,7 @@
 // viewer.js — the proof page's engine. Plain browser APIs only; no library, no service.
 // What it does and cannot do is written on the page and in README.md. Every readout value here is
 // measured by this code on this device; nothing is echoed from a setting.
-import { TILE, MARK_AMPLITUDE, hourBucket, markSeed, tilePattern, markId, xorshift128 } from "./mark.js";
+import { TILE, MARK_AMPLITUDE, hourBucket, markSeed, tilePattern, markId, xorshift128 } from "../mark.js";
 
 const $ = (id) => document.getElementById(id);
 const el = {
@@ -202,7 +202,7 @@ async function show() {
   el.msg.hidden = false; el.msg.textContent = "Checking the PIN…";
   let plain;
   try {
-    const res = await fetch("photo.enc", { cache: "no-store" });
+    const res = await fetch("../photo.enc", { cache: "no-store" });
     if (!res.ok) throw new Error("photo.enc " + res.status);
     const file = parseHeader(new Uint8Array(await res.arrayBuffer()));
     const t0 = performance.now();

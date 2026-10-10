@@ -29,6 +29,7 @@
 #include <wincodec.h>
 #include <dwmapi.h>
 #include <shlobj.h>
+#include <knownfolders.h>
 #include <shellapi.h>
 #include <math.h>
 #include <stdio.h>
