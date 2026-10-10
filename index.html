@@ -118,14 +118,17 @@
     cfg.drm.advanced = { "com.widevine.alpha": { videoRobustness: ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] } };
   }
   player.configure(cfg);
-  player.getNetworkingEngine().registerRequestFilter(function (type, request) {
-    if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) request.headers["X-Viewer-Session"] = "PIN48213";
-  });
+  // Production: the licence request carries the viewer's session (a token in the body or a header
+  // the licence service allows) so the licence is bound to the PIN. Nothing is added here: Google's
+  // public proxy allows only its own request headers, and any other header fails the browser's
+  // pre-check, so the licence request never leaves the phone (measured 2026-10-10, code 6007).
   player.addEventListener("error", function (e) {
     var err = e.detail || {};
+    var inner = err.data && err.data[1] && err.data[1].code ? err.data[1] : null;
+    var detail = inner ? ", detail " + inner.code + (inner.data && inner.data[1] ? " http " + inner.data[1] : "") : "";
     msg.hidden = false;
-    msg.textContent = "Could not play the protected proof (code " + err.code + "). " + (mode === "widevine" ? "On an iPhone this proof needs FairPlay, which needs CCS's Apple certificate; try ?mode=clearkey to test the pipeline only." : "");
-    drmEl.textContent = "failed, code " + err.code;
+    msg.textContent = "Could not play the protected proof (code " + err.code + detail + "). " + (mode === "widevine" ? "On an iPhone this proof needs FairPlay, which needs CCS's Apple certificate." : "");
+    drmEl.textContent = "failed, code " + err.code + detail;
   });
   try {
     await player.load(manifestUrl);
@@ -133,9 +136,10 @@
     drmEl.textContent = info ? info.keySystem : (isClearKey ? "org.w3.clearkey" : "none");
     var robust = info && (info.videoRobustness || "");
     levelEl.textContent = robust || "not reported";
-    if (mode === "widevine") {
-      if (/HW_SECURE/.test(robust)) { levelEl.className = "ok"; verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of the photo area should be black. Take one and look."; }
-      else if (robust) { levelEl.className = "bad"; verdict.textContent = "Software-only protection on this device: a screenshot may still capture the photo. The licence was granted, so the pipeline works; the capture block depends on the device."; }
+    var what = mode === "google" ? "Google's test clip" : "the photo";
+    if (!isClearKey) {
+      if (/HW_SECURE/.test(robust)) { levelEl.className = "ok"; verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : ""); }
+      else if (robust) { levelEl.className = "bad"; verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted, so the pipeline works; the capture block depends on the device."; }
     } else { verdict.textContent = "ClearKey mode: the pipeline plays, but nothing stops a screenshot. Open the page without ?mode=clearkey on a phone for the real test."; }
     video.addEventListener("playing", function () { playingEl.textContent = "yes"; msg.hidden = true; });
     await video.play().catch(function () {});
