@@ -456,6 +456,27 @@ test("legitimate encodes pass the check with the real packager: CBR filler, acce
   notice("FairPlay legitimate encodes", seen.join("; "));
 });
 
+// A packager that writes Apple's form as asked, then puts every sample's clear bytes back into it, leaving its
+// records saying "encrypted": the fault a records check cannot see (the fifth review). Only for the FairPlay call.
+async function clearBytesPackager() {
+  const f = join(tmp, "packager-clear-bytes");
+  await fs.writeFile(f, `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process"), fs = require("node:fs");
+const real = ${JSON.stringify(tools.packager)}, args = process.argv.slice(2);
+const r = spawnSync(real, args, { stdio: "inherit" });
+if (r.status !== 0 || !args.includes("cbcs")) process.exit(r.status ?? 1);
+const spec = args.find((a) => a.startsWith("in=")), input = spec.match(/^in=([^,]+)/)[1], out = spec.match(/output=([^,]+)/)[1], plain = out + ".plain.mp4";
+if (spawnSync(real, ["in=" + input + ",stream=video,output=" + plain, "--segment_duration", "2", "--fragment_duration", "2"], { stdio: "inherit" }).status !== 0) process.exit(1);
+import(${JSON.stringify(new URL("../../service/lib/pipeline.mjs", import.meta.url).href)}).then(({ readTrack }) => {
+  const enc = fs.readFileSync(out), clear = fs.readFileSync(plain), e = readTrack(enc), c = readTrack(clear);
+  e.samples.forEach(({ r }, i) => clear.copy(enc, r.at, c.samples[i].r.at, c.samples[i].r.at + r.size));
+  fs.writeFileSync(out, enc); fs.rmSync(plain);
+});
+`);
+  await fs.chmod(f, 0o755);
+  return f;
+}
+
 // The byte check every Apple form now passes (the fifth review): the records say which blocks are encrypted, the
 // bytes must agree. A real form passes; a block recorded as encrypted but put back to the clip's own bytes, a
 // byte of a clear run changed, or a decryption with another key is refused.
@@ -588,6 +609,15 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "d".repeat(24)).fairplay, false, "but gets no Apple form");
   assert.ok(logged.some((l) => /no FairPlay form for d{24}: the FairPlay form failed its byte check: .*decrypt with the form's own key to something other than the clip/.test(l)), "refused by the byte check: " + logged.filter((l) => /FairPlay/.test(l)).join(" | "));
   assert.ok(!(await fs.readdir(join(siteDir, "photos", "d".repeat(24)))).some((f) => /^fp/.test(f)), "and no Apple form is left behind");
+  // the fifth review's case itself: a form whose records say encrypted while its bytes are the clip's own
+  process.env.WORKER_BLOB_FILE = await upload(await solid("plum.png", 320, 240, "0x8e44ad"));
+  logged.length = 0; console.log = (...a) => { logged.push(a.join(" ")); };
+  let leftClear;
+  try { leftClear = await worker({ payload: { action: "add", id: "e".repeat(24), name: "e.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: await clearBytesPackager() }, com: COM }); }
+  finally { console.log = consoleLog; }
+  assert.equal(leftClear.status, "ready");
+  assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "e".repeat(24)).fairplay, false, "no Apple form for bytes left clear");
+  assert.ok(logged.some((l) => /no FairPlay form for e{24}: the FairPlay form failed its byte check: .*blocks recorded as encrypted are the clip's own bytes/.test(l)), "refused by the byte check: " + logged.filter((l) => /FairPlay/.test(l)).join(" | "));
   notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour; the token inside the form's folder); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; an expiring token renewed (1/1/0), another Axinom key: 2/0/0; a page request for the backfill refused; a bad key left the picture ready without a form`);
 });
 
@@ -607,6 +637,8 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   await buildFairPlayCard({ tools, outDir: again });
   for (const f of ["master.m3u8", "video.m3u8", "video.mp4", "info.json"]) assert.ok((await fs.readFile(join(out, f))).equals(await fs.readFile(join(again, f))), `${f}: the same bytes on a second build`);
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
+  assert.ok(info.byteCheck.encryptedBlocks > 0 && info.byteCheck.blocksLeftClear === 0 && info.byteCheck.decryptedWrong === 0, "the card passes the byte check: " + JSON.stringify(info.byteCheck));
+  await assert.rejects(buildFairPlayCard({ tools: { ...tools, packager: await clearBytesPackager() }, outDir: await fs.mkdtemp(join(tmp, "card-clear-")) }), /the card's FairPlay form failed its byte check: .*blocks recorded as encrypted are the clip's own bytes/, "a card whose bytes were left clear is refused by the byte check");
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);
   notice("FairPlay card", `${info.keyUri}; ${info.bytes} bytes; decryptCheck ${JSON.stringify(info.decryptCheck)}; ${info.packager}`);
