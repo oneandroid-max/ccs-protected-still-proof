@@ -11,7 +11,7 @@
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
   button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #d9d4c8; background: #fff; cursor: pointer; }
   button.primary { background: #1f4e8c; color: #fff; border-color: #1f4e8c; font-weight: 600; }
-  .stage { background: #000; border-radius: 10px; aspect-ratio: 3 / 4; max-height: 60vh; display: grid; place-items: center; color: #fff; text-align: center; margin: 0 auto; }
+  .stage { background: #000; border-radius: 10px; aspect-ratio: 3 / 4; max-height: 60vh; display: grid; place-items: center; color: #fff; text-align: center; margin: 0 auto; position: relative; }
   video { display: block; max-width: 100%; max-height: 60vh; background: #000; border-radius: 10px; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
   dt { color: #6b665c; } dd { margin: 0; word-break: break-word; }
@@ -22,7 +22,7 @@
 </head>
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
-<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM (Widevine in Chrome, PlayReady in Edge) decrypts it inside the device's protected path. Where the device grants <em>hardware</em> protection the phone or PC withholds the frame from every capture; where it grants only software decryption the capture shows the video. What plays here is a labeled test pattern, not the portrait, because this page is measuring one thing: whether your device's protected path blacks out a capture. The keys are the vendors' public test keys and protect nothing. Read the result first, then tap Play.</p>
+<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM (Widevine in Chrome, PlayReady in Edge) decrypts it inside the device's protected path, played here by the same player the first proof used. Where the device grants <em>hardware</em> protection the phone or PC withholds the frame from every capture; where it grants only software decryption the capture shows the video. What plays is a labeled test pattern, not the portrait, because this page measures one thing: whether your device's protected path blacks out a capture. The keys are the vendors' public test keys and protect nothing. Read the result first, then tap Play.</p>
 
 <div class="row">
   <button id="auto" class="primary">Play (this browser's DRM)</button>
@@ -36,115 +36,59 @@
   <dt>Granted</dt><dd id="r-granted">—</dd>
   <dt>Expected capture</dt><dd id="r-expect">tap Play</dd>
   <dt>Licence</dt><dd id="r-lic">—</dd>
-  <dt>Key status</dt><dd id="r-key">—</dd>
-  <dt>Video</dt><dd id="r-video">—</dd>
+  <dt>Playing</dt><dd id="r-play">—</dd>
   <dt>Platform</dt><dd id="r-platform">—</dd>
   <dt>Device time</dt><dd id="r-time">—</dd>
 </dl>
 
-<div class="stage" id="stage"><video id="v" playsinline muted loop></video></div>
+<div class="stage" id="stage"><video id="v" playsinline muted loop autoplay></video></div>
 
 <h2>Attempts, in order</h2>
 <pre id="log"></pre>
 <p><a href="../">Back to the list of candidates</a> · <a href="../../../widevine/">the first Widevine proof (2026-10-09)</a></p>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>
 <script>
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
-  let info;
-  try { info = await (await fetch("info.json", { cache: "no-store" })).json(); } catch (e) { set("r-ks", "info.json not built yet — the packaging run has not finished", "bad"); return; }
-  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   const video = $("v");
 
-  const widevineAttempts = ["HW_SECURE_ALL", "HW_SECURE_DECODE", "HW_SECURE_CRYPTO", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"].map((r) => ({ keySystem: "com.widevine.alpha", robustness: r, hardware: r.startsWith("HW_") }));
-  const playreadyAttempts = [
-    { keySystem: "com.microsoft.playready.recommendation.3000", robustness: "", hardware: true },
-    { keySystem: "com.microsoft.playready.recommendation", robustness: "3000", hardware: true },
-    { keySystem: "com.microsoft.playready.recommendation", robustness: "2000", hardware: false },
-    { keySystem: "com.microsoft.playready.recommendation", robustness: "", hardware: false },
-    { keySystem: "com.microsoft.playready", robustness: "", hardware: false },
-  ];
-
-  async function request(attempts, asset) {
-    const contentType = `video/mp4; codecs="${asset.codecs || info.codecs}"`;
-    for (const a of attempts) {
-      const config = { initDataTypes: ["cenc"], videoCapabilities: [{ contentType, robustness: a.robustness }], persistentState: "optional", distinctiveIdentifier: "optional", sessionTypes: ["temporary"] };
-      try {
-        const access = await navigator.requestMediaKeySystemAccess(a.keySystem, [config]);
-        const g = access.getConfiguration();
-        const robustness = (g.videoCapabilities && g.videoCapabilities[0] && g.videoCapabilities[0].robustness) || "";
-        log(`${a.keySystem} robustness "${a.robustness}": GRANTED (read back "${robustness}")`);
-        return { access, attempt: a, robustness };
-      } catch (e) { log(`${a.keySystem} robustness "${a.robustness}": refused (${e.name})`); }
-    }
-    return null;
-  }
-
-  function playreadyBody(message) {
-    const u16 = new TextDecoder("utf-16le").decode(message), u8 = new TextDecoder("utf-8").decode(message);
-    const xml = u16.indexOf("PlayReadyKeyMessage") >= 0 ? u16 : (u8.indexOf("PlayReadyKeyMessage") >= 0 ? u8 : null);
-    if (!xml) return { body: message, headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "\"http://schemas.microsoft.com/DRM/2007/03/protocols/AcquireLicense\"" } };
-    const doc = new DOMParser().parseFromString(xml, "application/xml");
-    const headers = {};
-    for (const h of doc.getElementsByTagName("HttpHeader")) headers[h.getElementsByTagName("name")[0].textContent] = h.getElementsByTagName("value")[0].textContent;
-    const challenge = doc.getElementsByTagName("Challenge")[0];
-    const body = challenge.getAttribute("encoding") === "base64encoded" ? b64(challenge.textContent) : new TextEncoder().encode(challenge.textContent);
-    return { body, headers };
-  }
+  shaka.polyfill.installAll();
+  if (!shaka.Player.isBrowserSupported()) { set("r-ks", "this browser cannot play protected video", "bad"); return; }
 
   async function play(which) {
-    $("log").textContent = "";
-    const asset = which === "playready" ? info.playready : info.widevine;
-    if (!asset) { set("r-ks", `the ${which} file is not built yet`, "bad"); return; }
-    const got = await request(which === "playready" ? playreadyAttempts : widevineAttempts, asset);
-    if (!got) { set("r-ks", `${which}: no configuration granted (this browser has no ${which === "playready" ? "PlayReady" : "Widevine"}, or not for H.264)`, "bad"); set("r-expect", "nothing plays, nothing to capture", "bad"); return; }
-    set("r-ks", got.attempt.keySystem);
-    set("r-granted", `robustness "${got.robustness || got.attempt.robustness || "(none asked)"}"`, got.attempt.hardware ? "ok" : "bad");
-    set("r-expect", got.attempt.hardware ? "hardware protection: a screenshot or recording of the video area should be BLACK. Take one." : "software decryption only: the capture will show the video. That is this device's answer, not a bug.", got.attempt.hardware ? "ok" : "bad");
-    const mediaKeys = await got.access.createMediaKeys();
-    await video.setMediaKeys(mediaKeys);
-    const session = mediaKeys.createSession("temporary");
-    session.addEventListener("message", async (ev) => {
-      try {
-        let res;
-        if (which === "playready") {
-          const base = asset.licenseServer;
-          const urls = [`${base}?cfg=(kid:${asset.kidGuid},sl:3000)`, `${base}?cfg=(kid:${asset.kidGuid},sl:2000)`, `${base}?cfg=(kid:${asset.kidGuid})`];
-          const { body, headers } = playreadyBody(ev.message);
-          for (const url of urls) { res = await fetch(url, { method: "POST", headers, body }); log(`licence ${url.slice(url.indexOf("cfg="))}: HTTP ${res.status}`); if (res.ok) break; }
-        } else {
-          res = await fetch(asset.licenseServer, { method: "POST", body: ev.message }); log(`licence: HTTP ${res.status}`);
-        }
-        const lic = await res.arrayBuffer();
-        set("r-lic", `HTTP ${res.status}, ${lic.byteLength} bytes`, res.ok ? "ok" : "bad");
-        if (!res.ok) { set("r-key", new TextDecoder().decode(lic).slice(0, 300)); return; }
-        await session.update(lic);
-        const s = []; session.keyStatuses.forEach((v) => s.push(v));
-        set("r-key", s.length ? s.join(", ") : "no key status reported", s.indexOf("usable") >= 0 ? "ok" : "bad");
-      } catch (e) { set("r-lic", "failed: " + e.message, "bad"); }
+    $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—");
+    const manifest = which === "playready" ? "playready.mpd" : "widevine.mpd";
+    const player = new shaka.Player();
+    await player.attach(video);
+    const cfg = { drm: { servers: {}, advanced: {} } };
+    if (which === "playready") {
+      cfg.drm.servers["com.microsoft.playready"] = "https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:2000)";
+      cfg.drm.advanced["com.microsoft.playready"] = { videoRobustness: ["3000", "2000"] };
+    } else {
+      cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
+      cfg.drm.advanced["com.widevine.alpha"] = { videoRobustness: ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] };
+    }
+    player.configure(cfg);
+    player.getNetworkingEngine().registerResponseFilter((type, response) => {
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`licence response: ${response.data.byteLength} bytes`); }
     });
-    session.addEventListener("keystatuseschange", () => { const s = []; session.keyStatuses.forEach((v) => s.push(v)); set("r-key", s.join(", ") || "none"); });
-    const contentType = `video/mp4; codecs="${asset.codecs || info.codecs}"`;
-    // Ask for the licence once, from the page's PSSH if we have it (the path that returned HTTP 200 + usable keys),
-    // else from the in-stream PSSH the packager embedded (the "encrypted" event carries it).
-    let requested = false;
-    const doRequest = async (type, data) => { if (requested) return; requested = true; try { log(`generateRequest(${type}, ${data.byteLength} bytes)`); await session.generateRequest(type, data); } catch (err) { set("r-lic", "generateRequest failed: " + err.message, "bad"); } };
-    if (asset.pssh) { await doRequest("cenc", b64(asset.pssh)); }
-    else { video.addEventListener("encrypted", (e) => doRequest(e.initDataType, e.initData)); }
-    if (!("MediaSource" in window) || !MediaSource.isTypeSupported(contentType)) { set("r-video", "MediaSource does not support " + contentType, "bad"); return; }
-    const ms = new MediaSource();
-    video.src = URL.createObjectURL(ms);
-    ms.addEventListener("sourceopen", async () => {
-      const sb = ms.addSourceBuffer(contentType);
-      const bytes = await (await fetch(asset.file, { cache: "force-cache" })).arrayBuffer();
-      sb.addEventListener("updateend", () => { if (ms.readyState === "open") ms.endOfStream(); }, { once: true });
-      sb.appendBuffer(bytes);
-    });
-    video.addEventListener("error", () => set("r-video", "video error " + (video.error && video.error.code) + ": " + (video.error && video.error.message), "bad"));
-    try { await video.play(); } catch (e) { set("r-video", "play refused: " + e.message, "bad"); }
-    setTimeout(() => set("r-video", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? " (did not play)" : ". Take a screenshot now."}`, video.paused ? "bad" : "ok"), 2800);
+    player.addEventListener("error", (e) => { const err = e.detail || e; set("r-ks", `error ${err.code}`, "bad"); log(`shaka error ${err.code}: ${(err.data || []).join(" ")}`); });
+    try {
+      log(`loading ${manifest} …`);
+      await player.load(manifest);
+      const info = player.drmInfo();
+      const ks = info ? info.keySystem : "none", robust = (info && info.videoRobustness) || "";
+      const hw = /HW_SECURE|3000/.test(robust);
+      set("r-ks", ks);
+      set("r-granted", robust || "(level not reported)", hw ? "ok" : "bad");
+      set("r-expect", hw ? "hardware protection: a screenshot or recording of the video area should be BLACK. Take one." : "software decryption: the capture will show the video. That is this device's answer, not a bug.", hw ? "ok" : "bad");
+      await video.play().catch(() => {});
+      const tick = () => { set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok"); };
+      tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
+    } catch (e) { set("r-ks", "load failed: " + (e.code || e.message), "bad"); log("load failed: " + (e.code || e.message)); }
   }
 
   const isEdge = /Edg\//.test(navigator.userAgent);
