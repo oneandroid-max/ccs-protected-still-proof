@@ -15,6 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
+      - name: Axinom's documentation (the sandbox cannot reach docs.axinom.com) — the pages' text
+        run: |
+          cat > /tmp/text.py <<'PY'
+          import sys, re, html.parser
+          class T(html.parser.HTMLParser):
+              def __init__(s): super().__init__(); s.out=[]; s.on=0; s.skip=0
+              def handle_starttag(s, t, a):
+                  if t in ("article","main"): s.on+=1
+                  if t in ("script","style","nav","svg","button"): s.skip+=1
+                  if t in ("p","li","tr","h1","h2","h3","h4","h5","pre","br","table","dt","dd","blockquote"): s.out.append("\n")
+                  if t in ("h1","h2","h3","h4"): s.out.append("## ")
+                  if t in ("td","th"): s.out.append(" | ")
+                  if t == "li": s.out.append("- ")
+              def handle_endtag(s, t):
+                  if t in ("article","main"): s.on-=1
+                  if t in ("script","style","nav","svg","button"): s.skip-=1
+              def handle_data(s, d):
+                  if s.on>0 and s.skip<=0: s.out.append(d)
+          t=T(); t.feed(sys.stdin.read())
+          txt=re.sub(r"[ \t]+"," ","".join(t.out)); txt=re.sub(r"\n\s*\n+","\n",txt)
+          print(txt.strip()[:24000])
+          PY
+          for u in https://docs.axinom.com/services/drm/how-to-guides/create-account https://docs.axinom.com/services/drm/quickstart/ https://docs.axinom.com/services/drm/how-to-guides/legacy-credentials https://docs.axinom.com/services/drm/license-service/entitlement-message https://docs.axinom.com/services/drm/license-service/entitlement-message/content-key-usage-policies; do
+            echo "=================== $u"; curl -sSL -m 30 "$u" | python3 /tmp/text.py; echo
+          done
       - name: The protected and the clear HLS test playlists
         run: |
           for m in https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8 https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8; do
