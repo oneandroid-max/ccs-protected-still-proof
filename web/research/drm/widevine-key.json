@@ -1,0 +1,25 @@
+{
+  "contentId": "ccs-proof-drm-1",
+  "keyServer": "https://license.uat.widevine.com/cenc/getcontentkey/widevine_test",
+  "licenseProxy": "https://cwip-shaka-proxy.appspot.com/no_auth",
+  "signer": "widevine_test",
+  "status": "OK",
+  "tracks": [
+    {
+      "type": "SD",
+      "keyId": "cfef68e5dced55479a0d85f2587b6d22",
+      "key": "717bb6d49ab3982ad37e6aae07a0d948",
+      "psshData": "Ig9jY3MtcHJvb2YtZHJtLTFI49yVmwY=",
+      "psshBoxes": "AAAAN3Bzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABciD2Njcy1wcm9vZi1kcm0tMUjj3JWbBg=="
+    },
+    {
+      "type": "HD",
+      "keyId": "889db65efede5b77b3c72b20755f9e98",
+      "key": "9774d4330d585d6db3f6ccc08655ef7e",
+      "psshData": "Ig9jY3MtcHJvb2YtZHJtLTFI49yVmwY=",
+      "psshBoxes": "AAAAN3Bzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABciD2Njcy1wcm9vZi1kcm0tMUjj3JWbBg=="
+    }
+  ],
+  "fetchedAt": "2026-10-11T01:40:29.500Z",
+  "note": "Test-only key from Google's Widevine UAT server with the public test signer; the licence proxy issues it to anyone. It exercises the protected video path and protects nothing."
+}
