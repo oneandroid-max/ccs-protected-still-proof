@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "04:05 UTC"
+  EXPECT_VERSION: "04:20 UTC"
 
 jobs:
   look:
@@ -46,14 +46,20 @@ jobs:
           xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari-later.png
           ls -l web/research/drm/results/
 
+      # Run 38110515494 lost the iPhone screenshots when this step failed with "could not create image
+      # from display": the display is now woken before each capture, the capture is retried once, and a
+      # failure here no longer stops the save.
       - name: Mac, Safari — open the link and screenshot
+        continue-on-error: true
         run: |
           open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}m#readout"
           sleep 40
-          screencapture -x web/research/drm/results/mac-safari.png
+          caffeinate -u -t 2
+          screencapture -x web/research/drm/results/mac-safari.png || { sleep 5; caffeinate -u -t 2; screencapture -x web/research/drm/results/mac-safari.png; }
           ls -l web/research/drm/results/
 
       - name: Save the screenshots
+        if: always()
         run: |
           printf '{"run":%s,"expectVersion":"%s","takenAt":"%s"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/safari-look.json
           git config user.name "github-actions[bot]"
