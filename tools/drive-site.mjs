@@ -46,7 +46,7 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
 await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID]) {
+async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = []) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
@@ -54,7 +54,7 @@ async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID]) {
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
-    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped: [] })));
+    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped })));
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
@@ -277,14 +277,27 @@ try {
   // (0) the very first look at the combined view fails (the site cannot be reached): no request while
   // its state is unknown; once the site answers that there is none, the page asks
   api.metaAbort = true; api.noMosaic = true;
+  const k0 = asks(); // counted BEFORE the page loads, so a request made at load is seen
   let { c: c0, pg: p0 } = await clockPage("normal");
-  const k0 = asks();
   await settle(p0, "00:30");
   check(asks() === k0, "the combined view's state unknown (the site unreachable): no request");
   api.metaAbort = false;
   await settle(p0, "00:30");
   check(asks() === k0 + 1, "once the site answers that there is none, the page asks");
   await c0.close(); api.noMosaic = false;
+  // (t) a view that left a picture out counts as current, so the page would stop refreshing: "Try again"
+  // asks, says so, and keeps refreshing until a view made after it arrives
+  await publishMosaic(undefined, [ID], [{ id: ID2, name: "second.jpg", reason: "test" }]);
+  const kt = asks();
+  const { c: ct, pg: pt } = await clockPage("two");
+  check(/Left out \(could not be read back\): second\.jpg/.test(await pt.textContent("#all")) && asks() === kt, "a picture left out is named, with Try again, and nothing is asked on its own: " + (await pt.textContent("#all")));
+  await pt.click("#ask-all");
+  await new Promise((r) => setTimeout(r, 1500));
+  check(asks() === kt + 1 && /Asked again at/.test(await pt.textContent("#all")), "Try again asks and says so");
+  await publishMosaic(new Date(Date.now() + 60000).toISOString(), [ID, ID2]);
+  await settle(pt, "00:30");
+  check(/All 2 in one protected view/.test(await pt.textContent("#all")) && !/Left out/.test(await pt.textContent("#all")), "and the page keeps refreshing until the remade view arrives: " + (await pt.textContent("#all")));
+  await ct.close();
   // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
   api.noMosaic = true;
   let n0 = asks(), { c: ca, pg: pa } = await clockPage("fresh");
