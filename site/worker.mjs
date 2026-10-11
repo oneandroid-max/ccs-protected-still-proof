@@ -308,7 +308,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   let com = null;
   if (process.env.AXINOM_COM_KEY_ID || process.env.AXINOM_COM_KEY) {
     try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); }
-    catch (e) { console.log(`WARNING: the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
+    catch (e) { console.log(`::warning title=Apple form::the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
   } else console.log("the Axinom key is not set: no Apple (FairPlay) form (Apple devices stay held back)");
   const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com });
   console.log(`result: ${r.status}${r.error ? " — " + r.error : ""}${r.count !== undefined ? ` (${r.count} picture(s))` : ""}`);
