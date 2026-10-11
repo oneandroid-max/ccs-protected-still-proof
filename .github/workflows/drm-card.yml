@@ -1,0 +1,98 @@
+# Route 1 TEST CARD. Renders a labeled card (never the owner's photo) and packages it with its OWN keys,
+# separate from the photo's: Widevine under its own content id (Google's UAT key server, public test
+# signer) and PlayReady under its own key id (the key Microsoft's public test server derives for it,
+# tools/playready-test-key.mjs). The page's test mode (?levels=software) and every runner workflow
+# (?clip=card) play this card, so a measurement screenshot can never contain the photo.
+# The keys are the vendors' public test keys: the card is public by design.
+name: drm card
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/drm-card.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARD_KID: "5cfcb567f2f19d08a30b20483d92e930"
+  CARD_KID_GUID: "5CFCB567-F2F1-9D08-A30B-20483D92E930"
+  CARD_WV_CONTENT_ID: "ccs-proof-drm-card"
+
+jobs:
+  card:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive the card's PlayReady test key (checked against the photo's known pair first)
+        run: |
+          node tools/playready-test-key.mjs --self-test
+          echo "CARD_KEY=$(node tools/playready-test-key.mjs $CARD_KID)" >> "$GITHUB_ENV"
+
+      - name: Render the card
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          mkdir -p /tmp/card
+          FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0x1f4e8c:s=720x960:r=15:d=2" \
+            -vf "drawtext=fontfile=$FONT:text='CCS PROOF':fontcolor=white:fontsize=72:x=(w-tw)/2:y=330, \
+                 drawtext=fontfile=$FONT:text='TEST CARD':fontcolor=white:fontsize=56:x=(w-tw)/2:y=430, \
+                 drawtext=fontfile=$FONT:text='not the photo':fontcolor=0xffd36b:fontsize=34:x=(w-tw)/2:y=520, \
+                 drawtext=fontfile=$FONT:text='a screenshot here should be black':fontcolor=0xcfe0ff:fontsize=26:x=(w-tw)/2:y=600" \
+            -c:v libx264 -profile:v main -level 3.1 -pix_fmt yuv420p -g 15 -movflags +faststart /tmp/card/card.mp4
+          ffprobe -hide_banner -v error -select_streams v:0 -show_entries stream=codec_name,profile,level,width,height -of json /tmp/card/card.mp4
+
+      - name: Package the card for Widevine and PlayReady
+        run: |
+          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64
+          chmod +x /tmp/packager; /tmp/packager --version
+          CID=$(printf '%s' "$CARD_WV_CONTENT_ID" | xxd -p | tr -d '\n')
+          /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-widevine.mp4 \
+            --enable_widevine_encryption \
+            --key_server_url https://license.uat.widevine.com/cenc/getcontentkey/widevine_test \
+            --content_id "$CID" --signer widevine_test \
+            --aes_signing_key 1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9 \
+            --aes_signing_iv d58ce954203b7c9a9a9d467f59839249 \
+            --protection_systems Widevine --protection_scheme cenc --clear_lead 0 \
+            --segment_duration 2 --fragment_duration 2 \
+            --mpd_output web/research/drm/card-widevine.mpd
+          LA="https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${CARD_KID_GUID},sl:2000)"
+          /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-playready.mp4 \
+            --enable_raw_key_encryption --keys "label=:key_id=${CARD_KID}:key=${CARD_KEY}" \
+            --protection_systems PlayReady --protection_scheme cenc --clear_lead 0 \
+            --segment_duration 2 --fragment_duration 2 \
+            --playready_extra_header_data "<LA_URL>$(printf '%s' "$LA" | sed 's/&/\&amp;/g')</LA_URL>" \
+            --mpd_output web/research/drm/card-playready.mpd
+
+      - name: Check every fragment carries its sample-encryption boxes, and the key ids are the card's own
+        run: |
+          node - <<'EOF'
+          const fs = require("fs");
+          for (const f of ["web/research/drm/card-widevine.mp4", "web/research/drm/card-playready.mp4"]) {
+            const data = fs.readFileSync(f); const count = {}; const kids = new Set();
+            const walk = (off, end) => { while (off + 8 <= end) { let s = data.readUInt32BE(off); const t = data.toString("latin1", off+4, off+8);
+              if (s===1) s = Number(data.readBigUInt64BE(off+8)); if (s===0) s = end-off;
+              count[t] = (count[t]||0)+1; if (t==="tenc") kids.add(data.toString("hex", off+16, off+32));
+              if (["moov","trak","mdia","minf","stbl","moof","traf","sinf","schi","mvex"].includes(t)) walk(off+8, off+s);
+              if (t==="stsd") walk(off+16, off+s); if (t==="encv") walk(off+8+78, off+s); off += s; } };
+            walk(0, data.length);
+            console.log(f, data.length, "bytes", JSON.stringify({ moof: count.moof||0, senc: count.senc||0, saiz: count.saiz||0, tenc: count.tenc||0, kids: [...kids] }));
+            if (!count.moof || (count.senc||0) < count.moof || (count.saiz||0) < count.moof) { console.error("FAIL: a fragment is missing its sample-encryption boxes"); process.exit(1); }
+            // the photo's key ids (PlayReady, Widevine), read from video-playready.mp4 and video-widevine.mp4
+            for (const photoKid of ["9e0ffaba46a81decdc6fce6f0cafa51a", "6c09ac09f6c55b09a97481e75687a873"])
+              if (kids.has(photoKid)) { console.error("FAIL: the card must not use the photo's key id " + photoKid); process.exit(1); }
+            if (kids.size !== 1) { console.error("FAIL: expected exactly one key id, found " + kids.size); process.exit(1); }
+          }
+          EOF
+
+      - name: Commit the card
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/research/drm/card-widevine.mp4 web/research/drm/card-widevine.mpd web/research/drm/card-playready.mp4 web/research/drm/card-playready.mpd
+          if git diff --cached --quiet; then echo "card unchanged"; exit 0; fi
+          git commit -m "research(drm): route 1 test card, packaged under its own keys (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
