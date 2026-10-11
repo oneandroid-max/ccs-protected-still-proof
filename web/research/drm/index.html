@@ -24,7 +24,7 @@
 </head>
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows). <strong>The photo is shown only where the device keeps it out of screenshots.</strong> This page asks the browser for hardware protection levels and nothing lower; a browser that can only decrypt in software is never given the key, so the photo is never decrypted there and is held back. It starts on its own when the page opens; the buttons only run it again.</p>
+<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows). <strong>The photo is shown only where screenshots are known to come out black:</strong> with hardware protection on any device, and with software protection in Chrome and Edge on Windows and Android, where screenshots were measured black. On other browsers and platforms the photo is held back until each is measured the same way. It starts on its own when the page opens; the buttons only run it again.</p>
 
 <div class="row">
   <button id="auto" class="primary">Play again</button>
@@ -35,6 +35,7 @@
 <h2 id="readout">What this device is doing — read this first</h2>
 <dl>
   <dt>Page version</dt><dd id="r-ver">—</dd>
+  <dt>Rule here</dt><dd id="r-rule">—</dd>
   <dt>Key system</dt><dd id="r-ks">starting…</dd>
   <dt>Granted</dt><dd id="r-granted">—</dd>
   <dt>Expected capture</dt><dd id="r-expect">loading…</dd>
@@ -57,7 +58,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 03:35 UTC — hardware only (test switch: ?levels=software)";
+  const PAGE_VERSION = "2026-10-11 03:45 UTC — hardware; software in Chrome/Edge on Windows & Android";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -65,73 +66,85 @@
   const showMsg = (t) => { msg.textContent = t; msg.hidden = false; };
   const hidePhoto = () => { video.style.visibility = "hidden"; try { video.pause(); } catch (e) {} };
 
-  // The only protection levels this page will accept: the ones where decoded frames stay in the
-  // device's protected path, so a screenshot or recording cannot read them.
-  //   Widevine HW_SECURE_ALL / HW_SECURE_DECODE (HW_SECURE_CRYPTO is excluded: it decodes into
-  //   ordinary memory). PlayReady SL3000 (hardware), through the "recommendation" key system,
-  //   because plain com.microsoft.playready ignores the requested level and stays at SL2000.
-  // TEST SWITCH, off unless the link says ?levels=software: asks for SOFTWARE levels only, to measure
-  // whether this browser keeps software-decrypted video out of screenshots. The hold-back rule is
-  // the default and is unchanged; this switch exists only to answer that one question.
+  // THE RULE (the owner's decision, 2026-10-11). The photo is shown only where screenshots are known
+  // to come out black:
+  //   - hardware protection, anywhere: Widevine HW_SECURE_ALL / HW_SECURE_DECODE, PlayReady SL3000
+  //     (HW_SECURE_CRYPTO is excluded: it decodes into ordinary memory);
+  //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) only in Chrome and Edge on
+  //     Windows and Android, where the owner's screenshots under software protection were black.
+  // Everywhere else the photo is held back until that browser and platform are measured the same way.
+  // How a level is known: each request names levels of ONE kind, and a browser can only grant a level
+  // it was asked for — so a grant tells which kind was granted. (The player library's
+  // drmInfo().videoRobustness is not the grant: it echoes the first level requested.)
+  const ua = navigator.userAgent;
+  const PLATFORM = /Android/.test(ua) ? "Android" : /iPhone|iPad|iPod/.test(ua) ? "iPhone/iPad" : /Windows NT/.test(ua) ? "Windows" : /Macintosh|Mac OS X/.test(ua) ? "Mac" : /CrOS/.test(ua) ? "ChromeOS" : /Linux|X11/.test(ua) ? "Linux" : "other";
+  const BROWSER = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /Firefox\/|FxiOS|SamsungBrowser|OPR\/|OPT\//.test(ua) ? "other" : /Chrome\/|CriOS/.test(ua) ? "Chrome" : "other";
+  const SOFTWARE_MEASURED = (PLATFORM === "Windows" || PLATFORM === "Android") && (BROWSER === "Chrome" || BROWSER === "Edge");
+  // TEST SWITCH, off unless the link says ?levels=software: software levels only, on any platform, to
+  // measure whether a browser keeps software-decrypted video out of screenshots.
   const TEST_SOFTWARE = new URLSearchParams(location.search).get("levels") === "software";
-  const HW_WIDEVINE = TEST_SOFTWARE ? ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] : ["HW_SECURE_ALL", "HW_SECURE_DECODE"];
-  const HW_PLAYREADY = TEST_SOFTWARE ? ["2000"] : ["3000"];
-  const LEVEL_WORD = TEST_SOFTWARE ? "software" : "hardware";
-  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the photo plays. Normal links hold the photo back here."; document.querySelector("h1").after(b); }
-  // How "hardware" is known: the browser can only grant a level that was asked for, and this page
-  // asks for hardware levels only, so any grant at all is a hardware grant. (The player library's
-  // own drmInfo().videoRobustness is NOT the grant — it echoes the first level requested — so this
-  // page no longer prints it.)
+  const TIERS = {
+    "widevine-hardware":  { system: "widevine",  word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
+    "widevine-software":  { system: "widevine",  word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
+    "playready-hardware": { system: "playready", word: "hardware", levels: ["3000"], sl: 3000 },
+    "playready-software": { system: "playready", word: "software", levels: ["2000"], sl: 2000 },
+  };
+  const ORDER = TEST_SOFTWARE ? ["widevine-software", "playready-software"]
+    : SOFTWARE_MEASURED ? ["widevine-hardware", "widevine-software", "playready-hardware"]
+    : ["widevine-hardware", "playready-hardware"];
+  set("r-rule", TEST_SOFTWARE ? "TEST: software only, on any platform (measurement)"
+    : SOFTWARE_MEASURED ? `${BROWSER} on ${PLATFORM}: hardware protection, or software protection (screenshots measured black here)`
+    : `${BROWSER === "other" ? "this browser" : BROWSER} on ${PLATFORM}: hardware protection only (software not yet measured here)`);
+  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the photo plays."; document.querySelector("h1").after(b); }
   const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; return `${d.code || "?"}${inner}`; };
 
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
     set("r-ks", "held back — this browser cannot play protected video", "bad");
     set("r-expect", "the photo is not shown on this browser", "bad");
-    showMsg("This browser can't keep the photo out of screenshots, so it isn't shown here.");
+    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here.");
     return;
   }
 
   let current = null;
-  // Try one key system with hardware levels only. Returns "ok" when the photo plays under hardware
-  // protection, "fail" otherwise (the browser has no such DRM, or none at a hardware level).
-  async function tryOne(which) {
+  // Try one tier (one key system, one kind of level). Returns "ok" when the photo plays, "unavailable"
+  // when the browser offers no such level, "failed-after-grant" when it did but no licence/frame came.
+  async function tryOne(tierName) {
+    const t = TIERS[tierName];
     hidePhoto();
-    const manifest = which === "playready" ? "playready.mpd" : "widevine.mpd";
+    const manifest = t.system === "playready" ? "playready.mpd" : "widevine.mpd";
     if (current) { try { await current.destroy(); } catch (e) {} current = null; }
     const player = new shaka.Player(); current = player;
     await player.attach(video);
     const cfg = { drm: { servers: {}, advanced: {}, keySystemsMapping: {} } };
-    if (which === "playready") {
+    if (t.system === "playready") {
       const ks = "com.microsoft.playready.recommendation";
       cfg.drm.keySystemsMapping["com.microsoft.playready"] = ks;
-      cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:${TEST_SOFTWARE ? 2000 : 3000})`;
-      cfg.drm.advanced[ks] = { videoRobustness: HW_PLAYREADY };
+      cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:${t.sl})`;
+      cfg.drm.advanced[ks] = { videoRobustness: t.levels };
     } else {
       cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
-      cfg.drm.advanced["com.widevine.alpha"] = { videoRobustness: HW_WIDEVINE };
+      cfg.drm.advanced["com.widevine.alpha"] = { videoRobustness: t.levels };
     }
     player.configure(cfg);
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${which} licence response: ${response.data.byteLength} bytes`); }
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${tierName} licence response: ${response.data.byteLength} bytes`); }
     });
     // Every error the player raises is written down, so nothing fails silently.
     let lastError = null;
-    player.addEventListener("error", (e) => { lastError = errText(e); log(`${which}: player error ${lastError}`); });
-    const levels = which === "playready" ? HW_PLAYREADY : HW_WIDEVINE;
-    log(`${which}: asking for ${LEVEL_WORD} protection only (${levels.join(", ")}) …`);
+    player.addEventListener("error", (e) => { lastError = errText(e); log(`${tierName}: player error ${lastError}`); });
+    log(`${tierName}: asking for ${t.word} protection only (${t.levels.join(", ")}) …`);
     try {
       await player.load(manifest);
     } catch (e) {
-      log(`${which}: not available at a hardware level here (error ${errText(e)})`);
+      log(`${tierName}: not available here (error ${errText(e)})`);
       try { await player.destroy(); } catch (x) {} current = null;
       return "unavailable";
     }
     const info = player.drmInfo();
-    const ks = info ? info.keySystem : "none";
-    set("r-ks", ks);
-    set("r-granted", `${LEVEL_WORD} — the browser accepted a ${LEVEL_WORD}-only request (${levels.join(" or ")})`, TEST_SOFTWARE ? "bad" : "ok");
-    log(`${which}: the browser accepted the ${LEVEL_WORD}-only request; waiting for the licence and the first frame …`);
+    set("r-ks", info ? info.keySystem : "none");
+    set("r-granted", `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST_SOFTWARE ? "bad" : "ok"));
+    log(`${tierName}: the browser accepted the ${t.word}-only request; waiting for the licence and the first frame …`);
     // Count it as shown only when the video is really playing (licence arrived, frames decoded).
     video.style.visibility = "visible";
     const started = await new Promise((resolve) => {
@@ -142,13 +155,15 @@
       video.play().catch(() => {});
     });
     if (!started) {
-      log(`${which}: no playback within 15 s${lastError ? " — last error " + lastError : " — no licence or no decoded frame"}`);
+      log(`${tierName}: no playback within 15 s${lastError ? " — last error " + lastError : " — no licence or no decoded frame"}`);
       hidePhoto();
       try { await player.destroy(); } catch (x) {} current = null;
       return "failed-after-grant";
     }
-    msg.hidden = true; window.__photoShown = true;
-    set("r-expect", TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots" : "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one.", TEST_SOFTWARE ? "bad" : "ok");
+    msg.hidden = true; window.__photoShown = tierName;
+    set("r-expect", TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots"
+      : t.word === "hardware" ? "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one."
+      : `software protection: in ${BROWSER} on ${PLATFORM} screenshots were measured black (2026-10-11). Take one.`, TEST_SOFTWARE ? "bad" : "ok");
     const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
@@ -157,33 +172,33 @@
   async function play(order) {
     $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
-    let hardwareButNoLicence = false;
+    let grantedButNoLicence = false;
     for (let i = 0; i < order.length; i++) {
       const r = await tryOne(order[i]);
       if (r === "ok") return;
-      if (r === "failed-after-grant") hardwareButNoLicence = true;
+      if (r === "failed-after-grant") grantedButNoLicence = true;
       if (i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
     hidePhoto();
-    if (hardwareButNoLicence) {
-      set("r-ks", "held back — hardware protection was available, but no licence or frame arrived (see Attempts)", "bad");
-      set("r-granted", "hardware was accepted; playback did not start", "bad");
+    if (grantedButNoLicence) {
+      set("r-ks", "held back — protection was available, but no licence or frame arrived (see Attempts)", "bad");
+      set("r-granted", "a level was accepted; playback did not start", "bad");
       set("r-expect", "the photo is not shown, so there is nothing to capture", "bad");
       showMsg("The protected photo could not load right now, so it isn't shown.");
       return;
     }
-    set("r-ks", "held back — no hardware protection in this browser", "bad");
-    set("r-granted", "nothing at a hardware level", "bad");
+    set("r-ks", "held back — none of the protection this page accepts is available in this browser", "bad");
+    set("r-granted", "nothing this page accepts", "bad");
     set("r-expect", "the photo is not shown on this browser, so there is nothing to capture", "bad");
-    showMsg("This browser can't keep the photo out of screenshots, so it isn't shown here.");
+    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here.");
   }
 
-  $("auto").addEventListener("click", () => play(["widevine", "playready"]));
-  $("wv").addEventListener("click", () => play(["widevine"]));
-  $("pr").addEventListener("click", () => play(["playready"]));
+  $("auto").addEventListener("click", () => play(ORDER));
+  $("wv").addEventListener("click", () => play(ORDER.filter((n) => n.startsWith("widevine"))));
+  $("pr").addEventListener("click", () => play(ORDER.filter((n) => n.startsWith("playready"))));
 
-  // Start on open: a viewer taps the link and the photo appears where the device can protect it.
-  play(["widevine", "playready"]);
+  // Start on open: a viewer taps the link and the photo appears where the rule allows it.
+  play(ORDER);
 })();
 </script>
 </body>
