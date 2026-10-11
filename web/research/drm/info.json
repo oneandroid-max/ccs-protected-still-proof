@@ -1,19 +1,19 @@
 {
-  "content": "a labeled test pattern, not the portrait; the portrait goes through the same path once the mechanism is proven",
+  "content": "the owner's photo (sealed in the sandbox; the clear picture is never committed)",
   "codecs": "avc1.4d001f",
   "width": 720,
-  "height": 960,
+  "height": 862,
   "widevine": {
     "file": "video-widevine.mp4",
-    "bytes": 29754,
+    "bytes": 287813,
     "contentId": "ccs-proof-drm-test",
     "licenseServer": "https://cwip-shaka-proxy.appspot.com/no_auth",
     "pssh": "AAAAOnBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABoiEmNjcy1wcm9vZi1kcm0tdGVzdEjj3JWbBg==",
-    "note": "test-only: Google's public test licence proxy issues this key to anyone presenting the content's PSSH"
+    "note": "test-only: Google's public test licence proxy issues this key to anyone presenting the PSSH"
   },
   "playready": {
     "file": "video-playready.mp4",
-    "bytes": 30516,
+    "bytes": 288575,
     "kid": "9e0ffaba46a81decdc6fce6f0cafa51a",
     "kidGuid": "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A",
     "licenseServer": "https://test.playready.microsoft.com/service/rightsmanager.asmx",
@@ -21,6 +21,6 @@
     "note": "test-only: Microsoft's public test licence server issues this key to anyone asking with the key id"
   },
   "packager": "packager version v3.9.3-0a8ba4f-release",
-  "builtAt": "2026-10-11T02:04:12.606Z",
-  "run": 3
+  "builtAt": "2026-10-11T02:30:19.144Z",
+  "run": 5
 }

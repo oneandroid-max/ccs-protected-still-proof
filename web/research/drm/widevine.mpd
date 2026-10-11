@@ -2,15 +2,16 @@
 <!--Generated with https://github.com/shaka-project/shaka-packager version v3.9.3-0a8ba4f-release-->
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 DASH-MPD.xsd" xmlns:cenc="urn:mpeg:cenc:2013" profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" minBufferTime="PT2S" type="static" mediaPresentationDuration="PT2S">
   <Period id="0">
-    <AdaptationSet id="0" contentType="video" width="720" height="960" frameRate="15360/1024" subsegmentAlignment="true" par="3:4">
+    <AdaptationSet id="0" contentType="video" width="720" height="862" frameRate="15360/1024" subsegmentAlignment="true" par="5:6">
+      <SupplementalProperty schemeIdUri="urn:mpeg:mpegB:cicp:TransferCharacteristics" value="2"/>
       <ContentProtection value="cenc" schemeIdUri="urn:mpeg:dash:mp4protection:2011" cenc:default_KID="6c09ac09-f6c5-5b09-a974-81e75687a873"/>
       <ContentProtection schemeIdUri="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed">
         <cenc:pssh>AAAAOnBzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABoiEmNjcy1wcm9vZi1kcm0tdGVzdEjj3JWbBg==</cenc:pssh>
       </ContentProtection>
-      <Representation id="0" bandwidth="114800" codecs="avc1.4d401f" mimeType="video/mp4" sar="1:1">
+      <Representation id="0" bandwidth="1146936" codecs="avc1.4d401f" mimeType="video/mp4" sar="3448:3447">
         <BaseURL>video-widevine.mp4</BaseURL>
-        <SegmentBase indexRange="1010-1053" timescale="15360">
-          <Initialization range="0-1009"/>
+        <SegmentBase indexRange="1035-1078" timescale="15360">
+          <Initialization range="0-1034"/>
         </SegmentBase>
       </Representation>
     </AdaptationSet>
