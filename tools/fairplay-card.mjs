@@ -22,9 +22,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packageFairPlay, checkFairPlay, checkBoxes, probe } from "../service/lib/pipeline.mjs";
+import { packageFairPlay, checkFairPlay, verifyFairPlayBytes, checkBoxes, probe } from "../service/lib/pipeline.mjs";
 import { run } from "../service/lib/util.mjs";
-import { AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey, readAxinomSettings } from "../site/axinom.mjs";
+import { AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey, readAxinomSettings, checkTokenWithAxinom, tokenSignedWith } from "../site/axinom.mjs";
 import { derivePlayReadyTestKey } from "./playready-test-key.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
@@ -60,6 +60,8 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     const data = await fs.readFile(join(work, "fp", "video.mp4"));
     const check = checkFairPlay(await fs.readFile(join(work, "fp", "video.m3u8"), "utf8"), data, ids);
     if (!check.ok) throw new Error("the card's FairPlay form failed its check: " + check.problems.join("; "));
+    const bytes = await verifyFairPlayBytes(tools.packager, work, ids); // the same byte check a picture's form passes
+    if (!bytes.ok) throw new Error("the card's FairPlay form failed its byte check: " + bytes.problems.join("; "));
     // 3. decrypted back two independent ways it must be exactly the clear card; undecrypted it must not
     const byFfmpeg = await firstFrame(tools, join(work, "fp", "video.mp4"), ["-decryption_key", ids.key]);
     await run(tools.packager, [`in=${join(work, "fp", "video.mp4")},stream=video,output=${join(work, "decrypted.mp4")}`, "--enable_raw_key_decryption", "--keys", `key_id=${ids.kid}:key=${ids.key}`]);
@@ -89,7 +91,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
       ...(com ? { comKeyId: com.id, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE } : {}),
     };
     await fs.writeFile(join(outDir, "info.json"), JSON.stringify(info, null, 2) + "\n");
-    return info;
+    return { ...info, byteCheck: { encryptedBlocks: bytes.encryptedBlocks, blocksLeftClear: bytes.blocksLeftClear, clearBytesChanged: bytes.clearBytesChanged, decryptedWrong: bytes.decryptedWrong } }; // printed, not written (the public card's files stay as they were)
   } finally {
     await fs.rm(work, { recursive: true, force: true });
   }
@@ -104,13 +106,14 @@ export async function buildOwnCard({ tools, root, com }) {
   for (const d of await fs.readdir(root)) if (/^[0-9a-f]{8}$/.test(d) && d !== folder) await fs.rm(join(root, d), { recursive: true, force: true });
   return { folder, ...info };
 }
-// Whether the own-account form in `root` is still good for this key (same account and licence address, 14+
-// days left).
+// Whether the own-account form in `root` is still good for this key (same account and licence address, its
+// token signed with this key's value, so a corrected value remakes it, 14+ days left).
 export async function ownCardCurrent(root, com, now = Date.now()) {
   try {
     const cur = JSON.parse(await fs.readFile(join(root, "current.json"), "utf8"));
     if (!/^[0-9a-f]{8}$/.test(String(cur.folder))) return false;
     for (const f of [...FILES, "token.txt", "info.json"]) await fs.access(join(root, cur.folder, f));
+    if (!tokenSignedWith((await fs.readFile(join(root, cur.folder, "token.txt"), "utf8")).trim(), com.key)) return false;
     return String(cur.comKeyId || "").toLowerCase() === com.id.toLowerCase() && (cur.license || AXINOM_FAIRPLAY_LICENSE) === (com.license || AXINOM_FAIRPLAY_LICENSE) && Date.parse(cur.expires) > now + 14 * 86400000;
   } catch { return false; }
 }
@@ -127,6 +130,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(join(REPO, "site"))).fairplayLicense); // fails plainly when malformed
       if (await ownCardCurrent(ownDir, com)) console.log("the own-account form of the card is current: unchanged");
       else { await fs.mkdir(ownDir, { recursive: true }); console.log(JSON.stringify(await buildOwnCard({ tools, root: ownDir, com }), null, 2)); }
+      // Axinom asked, from here, whether it accepts the card's token: the key id and the key value as a pair, at
+      // the account's address. A refusal stops the job (red) with Axinom's own words; the key is never printed.
+      const cur = JSON.parse(await fs.readFile(join(ownDir, "current.json"), "utf8"));
+      const answer = await checkTokenWithAxinom((await fs.readFile(join(ownDir, cur.folder, "token.txt"), "utf8")).trim(), com.license);
+      if (!answer.accepted) { console.log(`Axinom REFUSED the own card's token (key id ${com.id}, at ${com.license}): ${answer.message}`); process.exitCode = 1; }
+      else console.log(`Axinom accepts the own card's token: key id ${com.id} and its key value match, at ${com.license} (its answer to a dummy request: "${answer.message}")`);
     }
   }
 }

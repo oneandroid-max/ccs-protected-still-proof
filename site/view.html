@@ -65,7 +65,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 16:25 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address";
+  const PAGE_VERSION = "2026-10-11 17:22 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -157,7 +157,12 @@
   if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
   if (TEST_FAIRPLAY) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "APPLE TEST MODE: this link plays a TEST CARD through Apple's FairPlay, never the photo, to measure whether this iPhone, iPad or Mac keeps FairPlay video out of screenshots. Take a screenshot once the card plays: the card should come out black."; document.querySelector("h1").after(b); }
   if (TEST_CLEAR) { const b = document.createElement("p"); b.style.cssText = "background:#6b4e16;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "CONTROL MODE: this link plays the TEST CARD with NO protection (ClearKey), so a screenshot SHOULD show it. If the capture is black here too, a black capture on this machine proves nothing."; document.querySelector("h1").after(b); }
-  const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; return `${d.code || "?"}${inner}`; };
+  // Axinom's reason for refusing a licence (X-AxDRM-ErrorMessage, which its CORS lets a page read): from a
+  // response's headers, or from a player error that carries an HTTP response (shaka: data[3] of a network
+  // error, itself data[0] of a licence error)
+  const axinomSays = (h) => (h && (h["x-axdrm-errormessage"] || h["X-AxDRM-ErrorMessage"])) || "";
+  const axinomReason = (d) => { for (const x of [d, d && d.data && d.data[0]]) { const why = x && x.data && axinomSays(x.data[3]); if (why) return why; } return ""; };
+  const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; const why = axinomReason(d); return `${d.code || "?"}${inner}${why ? "; Axinom: " + why : ""}`; };
 
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
@@ -209,7 +214,10 @@
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = fp.token; log(`${tierName}: licence request sent with this clip's token`); }
     });
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${tierName} licence response: ${response.data.byteLength} bytes`); }
+      if (type !== shaka.net.NetworkingEngine.RequestType.LICENSE) return;
+      const refused = fp ? axinomSays(response.headers) : ""; // Axinom answers a refusal with its reason in a header
+      if (refused) { set("r-lic", `refused by Axinom: ${refused}`, "bad"); log(`${tierName} licence refused by Axinom: ${refused}`); }
+      else { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${tierName} licence response: ${response.data.byteLength} bytes`); }
     });
     // Every error the player raises is written down, so nothing fails silently.
     let lastError = null;

@@ -16,8 +16,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { importKeyHex, open, seal, sealText, openText, fromBase64, toHex, randomBytes } from "./crypto.js";
-import { renderClip, packageClip, checkBoxes, newProtectionIds, probe, packageFairPlay, checkFairPlay } from "../service/lib/pipeline.mjs";
-import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
+import { renderClip, packageClip, checkBoxes, newProtectionIds, probe, packageFairPlay, checkFairPlay, verifyFairPlayBytes } from "../service/lib/pipeline.mjs";
+import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, comKeyCheck, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
 import { run as execFile } from "../service/lib/util.mjs";
 import { jpegOrientation } from "../service/lib/exif.mjs";
 import { sniffImage } from "../service/lib/util.mjs";
@@ -44,6 +44,9 @@ async function addFairPlay({ tools, work, outDir, key, com }) {
   await packageFairPlay(tools.packager, work, ids);
   const check = checkFairPlay(await fs.readFile(join(work, "fp", "video.m3u8"), "utf8"), await fs.readFile(join(work, "fp", "video.mp4")), ids);
   if (!check.ok) throw new Error("the FairPlay form failed its check: " + check.problems.join("; "));
+  // and by its bytes: what the records call encrypted is, and it decrypts back to exactly the clip
+  const bytes = await verifyFairPlayBytes(tools.packager, work, ids);
+  if (!bytes.ok) throw new Error("the FairPlay form failed its byte check: " + bytes.problems.join("; "));
   const token = mintToken(com, ids.kid, ids.key);
   const expires = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).expiration_date;
   await fs.writeFile(join(work, "fp", "token.enc"), await sealText(key, token));
@@ -52,7 +55,7 @@ async function addFairPlay({ tools, work, outDir, key, com }) {
   await fs.mkdir(part, { recursive: true });
   for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
   await fs.rename(part, join(outDir, folder));
-  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
+  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, comKeyCheck: comKeyCheck(com), expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
 }
 // Removes every Apple form in `dir` but the one the meta now records (and anything half-made).
 async function removeOtherFairPlay(dir, fairplay) {
@@ -61,13 +64,14 @@ async function removeOtherFairPlay(dir, fairplay) {
   for (const d of names) if (/^fp-[0-9a-f]{8}(\.part)?$/.test(d) && d !== keep) await fs.rm(join(dir, d), { recursive: true, force: true });
 }
 // Whether a recorded Apple form is there and still good: all four files, its token made with THIS Axinom
-// key (one made with another cannot be licensed) for THIS licence address, and more than TOKEN_RENEW_DAYS
-// left on it.
+// key (one made with another cannot be licensed: the same key id with a corrected key value counts as
+// another, by the key's check value) for THIS licence address, and more than TOKEN_RENEW_DAYS left on it.
 export async function fairPlayCurrent(dir, fairplay, com, now = Date.now()) {
   if (!fairplay || !/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(fairplay.master))) return false;
   const folder = fairplay.master.split("/")[0];
   try { for (const f of FP_FILES) await fs.access(join(dir, folder, f)); } catch { return false; }
   if (com && String(fairplay.comKeyId || "").toLowerCase() !== com.id.toLowerCase()) return false;
+  if (com && fairplay.comKeyCheck !== comKeyCheck(com)) return false;
   if (com && (fairplay.license || AXINOM_FAIRPLAY_LICENSE) !== (com.license || AXINOM_FAIRPLAY_LICENSE)) return false;
   return Date.parse(fairplay.expires) > now + TOKEN_RENEW_DAYS * 86400000;
 }

@@ -32,6 +32,8 @@ test("the clip's size: upright, rotated, capped at the longest side, always even
   assert.deepEqual(targetSize({ width: 100, height: 50 }, 1), { width: 128, height: 64 });
   assert.deepEqual(targetSize({ width: 50, height: 100 }, 6), { width: 128, height: 64 });
   assert.deepEqual(targetSize({ width: 2000, height: 3 }, 1), { width: MAX_SIDE, height: 2 }, "never past the largest size, even if the short side stays under the minimum");
+  for (const bad of [{ width: 0, height: 0 }, { width: 0, height: 600 }, { width: 900 }, { width: -4, height: 4 }, { width: NaN, height: 4 }])
+    assert.throws(() => targetSize(bad, 1), /the picture's size is/, JSON.stringify(bad)); // no clip is drawn from a size of nothing
 });
 
 test("ffmpeg renders a sideways phone photo upright and caps a large one (real ffmpeg)", async () => {

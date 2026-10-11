@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
-import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
-import { checkFairPlay, packageFairPlay, renderClip } from "../../service/lib/pipeline.mjs";
+import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
+import { checkFairPlay, checkFairPlayBytes, verifyFairPlayBytes, readTrack, packageFairPlay, renderClip, SAMPLE_OPEN_MAX } from "../../service/lib/pipeline.mjs";
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
 import { run as worker, readGallery, fairPlayCurrent, TOKEN_RENEW_DAYS } from "../worker.mjs";
@@ -36,7 +36,7 @@ test("the communication key is read strictly: both values, a GUID, 32 bytes; the
   assert.equal(c.id, COM.id.toUpperCase(), "kept as given (trimmed): Axinom compares it with its own record"); assert.ok(c.key.equals(COM.key));
   assert.equal(c.license, AXINOM_FAIRPLAY_LICENSE, "without an address of its own: Axinom's shared one");
   assert.equal(readCommunicationKey(COM.id, COM.key.toString("base64"), OWN_LICENSE).license, OWN_LICENSE);
-  for (const bad of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-widevine-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-fairplay-licensing.axprod.net.example.com/AcquireLicense"])
+  for (const bad of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-widevine-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-fairplay-licensing.axprod.net.example.com/AcquireLicense", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense"])
     assert.throws(() => readCommunicationKey(COM.id, COM.key.toString("base64"), bad), /not one of Axinom's/, bad);
 });
 
@@ -45,9 +45,12 @@ test("the account's own licence address (site/axinom.json): the committed one is
   assert.match(committed.fairplayLicense, FAIRPLAY_LICENSE_ADDRESS); assert.notEqual(committed.fairplayLicense, AXINOM_FAIRPLAY_LICENSE, "the account's own, not the shared one");
   const d = await fs.mkdtemp(join(tmp, "settings-"));
   assert.deepEqual(await readAxinomSettings(d), { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }, "no file: the shared address");
-  for (const [body, re] of [["not json", /not readable JSON/], [JSON.stringify({ fairplayLicense: "https://licence.example.com/AcquireLicense" }), /not one of Axinom's/], [JSON.stringify({ fairplayLicense: "https://a.b.drm-fairplay-licensing.axprod.net/AcquireLicense" }), /not one of Axinom's/]]) {
+  for (const [body, re] of [["not json", /not readable JSON/], [JSON.stringify({ fairplayLicense: "https://licence.example.com/AcquireLicense" }), /not one of Axinom's/], [JSON.stringify({ fairplayLicense: "https://a.b.drm-fairplay-licensing.axprod.net/AcquireLicense" }), /not one of Axinom's/],
+    [JSON.stringify({ fairplayLicense: "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense" }), /not one of Axinom's/], [JSON.stringify({ fairplayLicense: null }), /not one of Axinom's/], [JSON.stringify({ fairplayLicense: 7 }), /not one of Axinom's/], ["[]", /not an object of settings/], ["null", /not an object of settings/]]) {
     await fs.writeFile(join(d, "axinom.json"), body); await assert.rejects(readAxinomSettings(d), re, body);
   }
+  await fs.writeFile(join(d, "axinom.json"), "{}");
+  assert.deepEqual(await readAxinomSettings(d), { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }, "no setting in the file: the shared address (only a missing setting means that)");
   notice("FairPlay licence address", `committed: ${committed.fairplayLicense}`);
 });
 
@@ -91,6 +94,28 @@ test("a minted token: HS256 under the communication key, the content key encrypt
   assert.equal(kidToUuid("4060A865887842679CBF91AE5BAE1E72"), "4060a865-8878-4267-9cbf-91ae5bae1e72");
 });
 
+// The card job's check that Axinom accepts our account's token (the key id and the key value as a pair), from a
+// runner: a dummy request whose answer names the request when the token is good. Axinom's three answers below
+// were measured 2026-10-11 17:15Z (site/axinom.mjs).
+test("the token check asks Axinom with a dummy request and accepts only its answer about the request, never one about the token", async () => {
+  const seen = [];
+  const reply = (message) => async (url, init) => { seen.push({ url, init }); return { status: 200, headers: new Headers(message === null ? {} : { "X-AxDRM-ErrorMessage": message }) }; };
+  const good = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply("Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."));
+  assert.equal(good.accepted, true);
+  assert.deepEqual([seen[0].url, seen[0].init.method, seen[0].init.headers["X-AxDRM-Message"], seen[0].init.body.length], [OWN_LICENSE, "POST", "TOKEN-1", TOKEN_CHECK_BODY_BYTES], "the token, to the account's address, with a dummy body");
+  for (const m of ["Invalid DRM message. The signature is invalid.", "License denied. The DRM message references the ID of an unknown communication key.", "", null]) {
+    const r = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply(m));
+    assert.equal(r.accepted, false, `refused: ${JSON.stringify(m)}`); assert.ok(r.message.length > 0, "with Axinom's words, or the HTTP status");
+  }
+  await assert.rejects(checkTokenWithAxinom("TOKEN-1", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense", reply("x")), /not one of Axinom's/);
+  assert.equal(seen.length, 5, "nothing is sent to an address that is not Axinom's");
+  // a token's signature read back with the key, and the key's check value: both tell a corrected key VALUE
+  // (the same key id) from the one a form was made with
+  const token = mintToken(COM, newFairPlayIds().kid, newFairPlayIds().key), other = nodeRandom(32);
+  assert.equal(tokenSignedWith(token, COM.key), true); assert.equal(tokenSignedWith(token, other), false); assert.equal(tokenSignedWith("not.a-token", COM.key), false);
+  assert.match(comKeyCheck(COM), /^[0-9a-f]{16}$/); assert.equal(comKeyCheck(COM), comKeyCheck({ ...COM })); assert.notEqual(comKeyCheck(COM), comKeyCheck({ ...COM, key: other }));
+});
+
 test("the pages use Axinom's licence service, certificate and PUBLIC token, the same in both, and the token unlocks only the public test key", async () => {
   const route1 = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
   const apple = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
@@ -111,7 +136,7 @@ test("the pages use Axinom's licence service, certificate and PUBLIC token, the 
 // token; with nothing made yet, or a folder name of any other shape, or no token there, nothing is played.
 test("the Apple check page plays our account's card only from the folder current.json names, with that folder's token", async () => {
   const page = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
-  const from = page.indexOf("  let ownToken = null, ownBase = null, ownLicense = LICENSE;"), to = page.indexOf("\n})();", from);
+  const from = page.indexOf("  let ownToken = null, ownBase = null, ownLicense = LICENSE,"), to = page.indexOf("\n})();", from);
   assert.ok(from > 0 && to > from, "the page's own-card lines are where this test reads them");
   const lines = page.slice(from, to), OWN = page.match(/const OWN = "([^"]+)";/)[1], LICENSE = page.match(/const LICENSE = "([^"]+)";/)[1];
   const LICENSE_ADDRESS = new RegExp(page.match(/const LICENSE_ADDRESS = \/(.+)\/;/)[1]);
@@ -135,9 +160,10 @@ test("the Apple check page plays our account's card only from the folder current
   // the account's own licence address, recorded with the card: the token goes there; any other host, nowhere
   r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", license: OWN_LICENSE }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
   assert.deepEqual(r.plays.map((a) => a[5]), [OWN_LICENSE], "the account's own address");
-  for (const license of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", ""]) {
+  for (const license of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", "", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense"]) {
     r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", license }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
     assert.deepEqual(r.plays, [], `address ${JSON.stringify(license)}: nothing played`); assert.ok(!r.seen.some((u) => /token\.txt/.test(u)), `and no token fetched for ${JSON.stringify(license)}`);
+    assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /refused: its licence address is not Axinom's/.test(text)), `the cell names the refusal, not a missing account: ${JSON.stringify(r.sets)}`);
   }
   // any other folder name is never followed; a folder without a token plays nothing
   for (const folder of ["../../site", "1a2b3c4", "1A2B3C4D", "1a2b3c4d/..", "1a2b3c4d0", "", null]) {
@@ -147,6 +173,7 @@ test("the Apple check page plays our account's card only from the folder current
   }
   r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }) });
   assert.deepEqual(r.plays, [], "no token there: nothing played");
+  assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /its token is missing/.test(text)), JSON.stringify(r.sets));
   r = await runWith({ [OWN + "current.json"]: "not json" });
   assert.deepEqual(r.plays, [], "an unreadable current.json: nothing played");
 });
@@ -187,22 +214,24 @@ const senc = (slices, ivSize, count = slices.length, flags = 2) => box("senc", B
 // ending with the slice. A third number says how many clear bytes are the slice's own (default: 12 when
 // the run has room for an SEI before it, else all of it; with no protected bytes, none: the run is all SEI);
 // a fourth moves the end the slice's length declares by that many bytes.
-function sampleBytes(records, keyframe, size) {
+// `clearNal` is the NAL header of the clear run's unit that is not a slice (an SEI by default); `idr` writes every
+// slice as a keyframe's (NAL type 5) whatever the sample's flags say.
+function sampleBytes(records, keyframe, size, { clearNal = 0x06, idr = false } = {}) {
   const parts = [];
   for (const [c, p, own = p > 0 ? (c >= 17 ? 12 : c) : 0, shift = 0] of records) {
-    if (c - own > 0) { const sei = Buffer.alloc(c - own); sei.writeUInt32BE(c - own - 4); sei[4] = 0x06; parts.push(sei); }
-    if (own + p > 0) { const sl = Buffer.alloc(own + p); sl.writeUInt32BE(own - 4 + p + shift); sl[4] = keyframe ? 0x65 : 0x41; parts.push(sl); }
+    if (c - own > 0) { const sei = Buffer.alloc(c - own); sei.writeUInt32BE(c - own - 4); sei[4] = clearNal; parts.push(sei); }
+    if (own + p > 0) { const sl = Buffer.alloc(own + p); sl.writeUInt32BE(own - 4 + p + shift); sl[4] = keyframe || idr ? 0x65 : 0x41; parts.push(sl); }
   }
   const b = Buffer.concat(parts);
   return b.length >= size ? b.subarray(0, size) : Buffer.concat([b, Buffer.alloc(size - b.length)]);
 }
-function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1, prot = [900, 700], slices = prot.map((p) => [[10, p]]), sizes = slices.map((ss) => ss.reduce((a, [c, p]) => a + c + p, 0)), flags = [0, NOT_KEY], defaults = "per-sample", sencCount = slices.length, sencFlags = 2, trafTail = Buffer.alloc(0), tencHead = [1, 0, 0, 0, 0, 0x19, 1], avcC = true }) {
+function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1, prot = [900, 700], slices = prot.map((p) => [[10, p]]), sizes = slices.map((ss) => ss.reduce((a, [c, p]) => a + c + p, 0)), flags = [0, NOT_KEY], defaults = "per-sample", sencCount = slices.length, sencFlags = 2, trafTail = Buffer.alloc(0), stblTail = Buffer.alloc(0), tencHead = [1, 0, 0, 0, 0, 0x19, 1], avcC = true, clearNal, idr }) {
   const tenc = box("tenc", Buffer.from([...tencHead, perSampleIvSize]), Buffer.from(kid, "hex"), perSampleIvSize ? Buffer.alloc(0) : Buffer.concat([Buffer.from([16]), Buffer.from(iv, "hex")]));
   const sinf = box("sinf", box("frma", "avc1"), box("schm", Buffer.from([0, 0, 0, 0]), scheme, Buffer.from([0, 1, 0, 0])), box("schi", tenc));
   const encv = box("encv", Buffer.alloc(78), ...(avcC ? [box("avcC", Buffer.from([1, 0x4d, 0, 0x28, 0xff, 0xe0, 0]))] : []), sinf);
   const stsd = box("stsd", Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]), encv);
   const trex = box("trex", Buffer.from([0, 0, 0, 0]), u32(1), u32(1), u32(0), u32(0), u32(defaults === "trex" ? flags[1] : 0));
-  const moov = box("moov", box("trak", box("mdia", box("minf", box("stbl", stsd)))), box("mvex", trex));
+  const moov = box("moov", box("trak", box("mdia", box("minf", box("stbl", stsd, stblTail)))), box("mvex", trex));
   const table = (offset) => defaults === "per-sample"
     ? [box("tfhd", Buffer.from([0, 2, 0, 0]), u32(1)), box("trun", Buffer.from([0, 0, 0x06, 0x01]), u32(sizes.length), u32(offset), ...sizes.flatMap((s, i) => [u32(s), u32(flags[i])]))]
     : [defaults === "tfhd" ? box("tfhd", Buffer.from([0, 2, 0, 0x20]), u32(1), u32(flags[1])) : box("tfhd", Buffer.from([0, 2, 0, 0]), u32(1)),
@@ -210,7 +239,7 @@ function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1
   // the samples follow their 'moof' in an 'mdat', the data offset counted from the start of the 'moof'
   const moofAt = (offset) => box("moof", box("traf", ...table(offset), senc(slices, perSampleIvSize, sencCount, sencFlags), box("saiz", Buffer.alloc(9)), box("saio", Buffer.alloc(12)), trafTail));
   const isKey = (i) => !((defaults === "per-sample" ? flags[i] : i === 0 ? flags[0] : flags[1]) & NOT_KEY);
-  const moof = moofAt(moofAt(0).length + 8), mdat = box("mdat", ...sizes.map((size, i) => sampleBytes(slices[i] || [], isKey(i), size)));
+  const moof = moofAt(moofAt(0).length + 8), mdat = box("mdat", ...sizes.map((size, i) => sampleBytes(slices[i] || [], isKey(i), size, { clearNal, idr: idr && i > 0 })));
   const frags = Array.from({ length: fragments }, () => Buffer.concat([moof, mdat]));
   return Buffer.concat([moov, ...frags]);
 }
@@ -241,6 +270,12 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
   // long clear runs of NAL units that are not slices carry no picture: the encoder's settings note (688
   // bytes), CBR filler (16,639 bytes, measured): accepted, however long
   assert.deepEqual(checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[17000, 6343]], [[16649, 13]]] }), ids).problems, [], "long runs that are not slices");
+  // what our encoder writes in a clear run is accepted (an SEI, an access unit delimiter, filler), and slices
+  // with no encrypted block up to SAMPLE_OPEN_MAX bytes in a frame (ten of 25 bytes: 250)
+  for (const clearNal of [0x06, 0x09, 0x0c]) assert.deepEqual(checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[30, 900]], [[30, 700]]], clearNal }), ids).problems, [], `NAL type ${clearNal}`);
+  assert.equal(SAMPLE_OPEN_MAX, 256);
+  const ten = checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 10 }, () => [10, 15])] }), ids);
+  assert.deepEqual([ten.problems, ten.openBytesMax], [[], 250], "250 bytes in slices with no encrypted block: accepted");
   // each way it can be wrong is named
   const other = newFairPlayIds();
   const cases = [
@@ -307,6 +342,18 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     // a sample count no file could hold is refused, not looped over (records and table entries of no bytes)
     [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("senc"); f[at + 7] = 0; f.writeUInt32BE(0xffffffff, at + 8); return f; })(), ids), /cannot be read: a fragment lists 4294967295 samples/],
     [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("trun"); f[at + 6] = 0; f.writeUInt32BE(0xffffffff, at + 8); return f; })(), ids), /cannot be read: a fragment lists 4294967295 samples/],
+    // the fifth review's cases. A keyframe's slice (NAL type 5) in a sample flagged as not a keyframe is a
+    // keyframe all the same (here with 15 protected bytes: nothing of it encrypted)
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 15], idr: true }), ids), /1 of 2 keyframes have a slice with no encrypted block/],
+    // 400 slices of 15 protected bytes in a frame that is not a keyframe: 10,000 bytes a decoder reads without
+    // the key; 11 such slices (275 bytes) are already more than SAMPLE_OPEN_MAX
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 400 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes of slices with no encrypted block \(most: 10000\)/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 11 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes of slices with no encrypted block \(most: 275\)/],
+    // a clear run holding a NAL unit our encoder never writes (20: a coded slice extension, which is picture)
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[30, 900]], [[30, 700]]], clearNal: 0x14 }), ids), /do not follow their slices/],
+    // sample groups of encryption settings, in a fragment or in the movie's sample table
+    [checkFairPlay(playlist, fakeFile({ ...ids, trafTail: box("sbgp", Buffer.alloc(4), "seig", u32(1), u32(2), u32(1)) }), ids), /sample groups of encryption settings \('seig'\)/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, stblTail: box("sgpd", Buffer.from([1, 0, 0, 0]), "seig", u32(20), u32(1), Buffer.alloc(20)) }), ids), /sample groups of encryption settings \('seig'\)/],
   ];
   for (const [r, re] of cases) { assert.equal(r.ok, false, `a form that should fail with ${re} passed the check`); assert.ok(r.problems.some((p) => re.test(p)), `${re} in ${JSON.stringify(r.problems)}`); }
 });
@@ -409,6 +456,37 @@ test("legitimate encodes pass the check with the real packager: CBR filler, acce
   notice("FairPlay legitimate encodes", seen.join("; "));
 });
 
+// The byte check every Apple form now passes (the fifth review): the records say which blocks are encrypted, the
+// bytes must agree. A real form passes; a block recorded as encrypted but put back to the clip's own bytes, a
+// byte of a clear run changed, or a decryption with another key is refused.
+test("the byte check: a real form passes; a block recorded as encrypted but left clear, a changed clear byte, or another key's decryption is refused (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const dir = await fs.mkdtemp(join(tmp, "bytes-")), pic = join(dir, "pic.png");
+  await exec("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x480:d=1", "-frames:v", "1", pic]);
+  await renderClip(tools, pic, join(dir, "clip.mp4"));
+  const ids = newFairPlayIds();
+  await packageFairPlay(tools.packager, dir, ids);
+  const good = await verifyFairPlayBytes(tools.packager, dir, ids);
+  assert.deepEqual(good.problems, []);
+  assert.ok(good.encryptedBlocks > 0 && good.blocksLeftClear === 0 && good.clearBytesChanged === 0 && good.decryptedWrong === 0, JSON.stringify(good));
+  assert.deepEqual((await fs.readdir(dir)).sort(), ["clip.mp4", "fp", "pic.png"], "its working files are removed");
+  // the same comparison on the files themselves, then each one changed
+  await exec(tools.packager, ["in=clip.mp4,stream=video,output=clear.mp4", "--segment_duration", "2", "--fragment_duration", "2"], { cwd: dir });
+  await exec(tools.packager, ["in=fp/video.mp4,stream=video,output=dec.mp4", "--enable_raw_key_decryption", "--keys", `key_id=${ids.kid}:key=${ids.key}`], { cwd: dir });
+  const enc = await fs.readFile(join(dir, "fp", "video.mp4")), clear = await fs.readFile(join(dir, "clear.mp4")), dec = await fs.readFile(join(dir, "dec.mp4"));
+  assert.deepEqual(checkFairPlayBytes(enc, clear, dec).problems, []);
+  const e = readTrack(enc), c = readTrack(clear), first = e.samples[0], [cl] = first.rec[0];
+  const at = first.r.at + cl, cat = c.samples[0].r.at + cl; // the keyframe's first protected byte, in each file
+  const leftClear = Buffer.from(enc); clear.copy(leftClear, at, cat, cat + 16);
+  const a = checkFairPlayBytes(leftClear, clear, dec);
+  assert.ok(a.problems.some((p) => new RegExp(`^1 of ${good.encryptedBlocks} blocks recorded as encrypted are the clip's own bytes`).test(p)), JSON.stringify(a.problems));
+  const changed = Buffer.from(enc); changed[at - 1] ^= 0xff; // the last clear byte of the slice's head
+  assert.ok(checkFairPlayBytes(changed, clear, dec).problems.some((p) => /^1 bytes recorded as clear differ from the clip's/.test(p)));
+  const wrong = await verifyFairPlayBytes(tools.packager, dir, { ...ids, key: newFairPlayIds().key }).catch((x) => ({ problems: ["the packager refused: " + x.message] }));
+  assert.ok(wrong.problems.some((p) => /decrypt with the form's own key to something other than the clip|the packager refused/.test(p)), JSON.stringify(wrong.problems));
+  notice("FairPlay byte check", `real form: ${good.encryptedBlocks} blocks encrypted, 0 left clear, 0 clear bytes changed, decrypted back exactly; refused: ${a.problems[0]}; another key: ${wrong.problems[0]}`);
+});
+
 test("the worker with the Axinom key: a new picture gets its Apple form, its token (sealed) carries the key that decrypts it; the combined view too; a backfill adds the form to an older picture (needs shaka-packager)", async (t) => {
   if (!(await havePackager(t))) return;
   const KEY = await deriveKey("a test password, twelve+", toBase64(new Uint8Array(16).fill(7)), 1000);
@@ -472,6 +550,9 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, COM, Date.parse(m.fairplay.expires) - (TOKEN_RENEW_DAYS - 1) * 86400000), false, "less than the renewal margin left: not current");
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "made with another key: not current");
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, license: OWN_LICENSE }), false, "made for another licence address: not current");
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, key: nodeRandom(32) }), false, "the same key id with a corrected key value: not current");
+  assert.equal(m.fairplay.comKeyCheck, comKeyCheck(COM), "the meta records the key's check value, never the key");
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), { ...m.fairplay, comKeyCheck: undefined }, COM), false, "a form with no check value recorded: remade");
   await fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...m, fairplay: { ...m.fairplay, expires: new Date(Date.now() + 3 * 86400000).toISOString() } })));
   assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 1, already: 1, failed: 0 }, "the expiring one is renewed");
   const a3 = await verify(A, [39, 174, 96], 640, 480);
@@ -536,6 +617,7 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.equal(own.decryptCheck.ffmpeg, 0);
   assert.equal(await ownCardCurrent(root, COM), true, "current: same account, 60 days left");
   assert.equal(await ownCardCurrent(root, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "another account: remade");
+  assert.equal(await ownCardCurrent(root, { ...COM, key: nodeRandom(32) }), false, "the same key id with a corrected key value: remade");
   assert.equal(JSON.parse(await fs.readFile(join(root, "current.json"), "utf8")).license, AXINOM_FAIRPLAY_LICENSE, "current.json records the licence address the token is for");
   assert.equal(await ownCardCurrent(root, { ...COM, license: OWN_LICENSE }), false, "another licence address: remade");
   assert.equal(await ownCardCurrent(root, COM, Date.parse(own.expires) - 13 * 86400000), false, "13 days left: remade");

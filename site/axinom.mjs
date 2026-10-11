@@ -5,7 +5,7 @@
 // a licence. The method follows Axinom's own quick start (github.com/Axinom/drm-quick-start,
 // EntitlementService.js): AES-256-CBC without padding under the communication key, the IV being the key
 // id's bytes, and an HS256 JWT. Node only (the job), no outside packages.
-import { createCipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 
@@ -24,11 +24,46 @@ export const FAIRPLAY_LICENSE_ADDRESS = /^https:\/\/(?:[a-z0-9][a-z0-9-]{0,62}\.
 export async function readAxinomSettings(siteDir) {
   let raw;
   try { raw = await fs.readFile(join(siteDir, "axinom.json"), "utf8"); } catch { return { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }; }
-  let fairplayLicense;
-  try { fairplayLicense = String(JSON.parse(raw).fairplayLicense ?? AXINOM_FAIRPLAY_LICENSE).trim(); } catch { throw new Error("site/axinom.json is not readable JSON"); }
-  if (!FAIRPLAY_LICENSE_ADDRESS.test(fairplayLicense)) throw new Error("site/axinom.json names a FairPlay licence address that is not one of Axinom's (https://<prefix>.drm-fairplay-licensing.axprod.net/AcquireLicense)");
+  let settings;
+  try { settings = JSON.parse(raw); } catch { throw new Error("site/axinom.json is not readable JSON"); }
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("site/axinom.json is not an object of settings");
+  if (!("fairplayLicense" in settings)) return { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }; // only a missing setting means the shared address
+  const fairplayLicense = settings.fairplayLicense;
+  if (typeof fairplayLicense !== "string" || !FAIRPLAY_LICENSE_ADDRESS.test(fairplayLicense)) throw new Error("site/axinom.json names a FairPlay licence address that is not one of Axinom's (https://<prefix>.drm-fairplay-licensing.axprod.net/AcquireLicense)");
   return { fairplayLicense };
 }
+
+// Whether Axinom's licence service accepts a token's key id and signature, asked from anywhere (a runner, no
+// Apple device): a licence request carrying the token and a dummy body of TOKEN_CHECK_BODY_BYTES zero bytes.
+// Axinom reads the token before such a body, so its answer (header X-AxDRM-ErrorMessage) names the body when
+// the key id and the signature are good, and the token when not. Measured 2026-10-11 17:15Z at the account's
+// address and at the shared one, alike, with Axinom's public token, the same token signed with another key,
+// and one naming an unknown key id:
+//   good:           "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."
+//   another key:    "Invalid DRM message. The signature is invalid."
+//   unknown key id: "License denied. The DRM message references the ID of an unknown communication key."
+// Only the first counts as accepted. It proves the key pair and the address, not the rest of the token's
+// message, which Axinom reads after the device's request: a device still has the last word.
+export const TOKEN_CHECK_BODY_BYTES = 176;
+export const TOKEN_ACCEPTED = /^Invalid license request\. Supported versions are /;
+export async function checkTokenWithAxinom(token, license, fetchFn = fetch) {
+  if (!FAIRPLAY_LICENSE_ADDRESS.test(String(license))) throw new Error("the FairPlay licence address is not one of Axinom's");
+  const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES) });
+  const message = String(r.headers.get("x-axdrm-errormessage") || "").trim();
+  return { accepted: TOKEN_ACCEPTED.test(message), status: r.status, message: message || `no message (HTTP ${r.status})` };
+}
+
+// Whether a token was signed with this communication key (HS256 under the key's 32 bytes).
+export function tokenSignedWith(token, key) {
+  const [head, body, sig] = String(token).split(".");
+  if (!head || !body || !sig) return false;
+  const want = createHmac("sha256", key).update(`${head}.${body}`).digest(), got = Buffer.from(sig, "base64url");
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+// A short check value of a communication key (16 hex of HMAC-SHA256 under the key, of a fixed label): it tells
+// whether a form's token was made with the key now set when the token itself is sealed. It reveals no more about
+// the key than a token's own signature does.
+export const comKeyCheck = (com) => createHmac("sha256", com.key).update("ccs-proof communication key check").digest("hex").slice(0, 16);
 
 // Axinom's PUBLIC test key: the content key of its own public FairPlay test stream ("v10 HLS H264
 // single key"), published with a licence token that never expires, in github.com/Axinom/public-test-vectors

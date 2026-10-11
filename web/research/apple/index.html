@@ -78,7 +78,7 @@
   const $ = (id) => document.getElementById(id);
   const set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 16:25 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address + clear control)";
+  const PAGE_VERSION = "2026-10-11 17:22 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address, Axinom's reason when it refuses + clear control)";
   set("r-ver", PAGE_VERSION);
   set("r-ua", navigator.userAgent);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
@@ -139,6 +139,12 @@
     return;
   }
 
+  // Axinom's reason for refusing a licence (X-AxDRM-ErrorMessage, which its CORS lets a page read): from a
+  // response's headers, or from a player error that carries an HTTP response (shaka: data[3] of a network
+  // error, itself data[0] of a licence error)
+  const axinomSays = (h) => (h && (h["x-axdrm-errormessage"] || h["X-AxDRM-ErrorMessage"])) || "";
+  const axinomReason = (d) => { for (const x of [d, d && d.data && d.data[0]]) { const why = x && x.data && axinomSays(x.data[3]); if (why) return why; } return ""; };
+
   // one protected video: its own player, Axinom's licence service and certificate, the public token
   async function protectedPlay(videoId, p, url, what, token = TOKEN, license = LICENSE) {
     const v = $(videoId);
@@ -148,9 +154,12 @@
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = token; log(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
     });
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
+      if (type !== shaka.net.NetworkingEngine.RequestType.LICENSE) return;
+      const refused = axinomSays(response.headers); // Axinom answers a refusal with its reason in a header
+      if (refused) { set(p + "-lic", "refused by Axinom: " + refused, "bad"); log(what + ": licence refused by Axinom: " + refused); }
+      else { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
     });
-    player.addEventListener("error", (e) => { const d = e.detail || {}; log(what + ": player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "")); });
+    player.addEventListener("error", (e) => { const d = e.detail || {}; const why = axinomReason(d); log(what + ": player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "") + (why ? "; Axinom: " + why : "")); });
     try {
       await player.load(url);
       const info = player.drmInfo();
@@ -165,16 +174,18 @@
   }
   await protectedPlay("vp", "p", PROTECTED, "film (protected)");
   await protectedPlay("vk", "k", CARD, "our card (protected)");
-  let ownToken = null, ownBase = null, ownLicense = LICENSE;
+  let ownToken = null, ownBase = null, ownLicense = LICENSE, ownWhy = "not made yet: it needs our Axinom account", ownLog = "not made yet (needs the Axinom account's key in the repository's secrets)";
   try {
     const c = await fetch(OWN + "current.json?v=" + Date.now(), { cache: "no-store" });
     const cur = c.ok ? await c.json() : {};
     const folder = String(cur.folder || "");
     ownLicense = cur.license === undefined ? LICENSE : String(cur.license); // the account's own licence address, recorded with its card
-    if (/^[0-9a-f]{8}$/.test(folder) && LICENSE_ADDRESS.test(ownLicense)) { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); }
-  } catch (e) {}
+    if (!/^[0-9a-f]{8}$/.test(folder)) {} // not made yet (the reason above)
+    else if (!LICENSE_ADDRESS.test(ownLicense)) { ownWhy = "refused: its licence address is not Axinom's"; ownLog = "refused: current.json names a licence address that is not Axinom's, so its token is sent nowhere"; }
+    else { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); else { ownWhy = "its token is missing"; ownLog = "its folder's token.txt could not be read (HTTP " + r.status + ")"; } }
+  } catch (e) { ownWhy = "could not be read"; ownLog = "current.json could not be read: " + e.message; }
   if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken, ownLicense);
-  else { set("o-ks", "—"); set("o-play", "not made yet: it needs our Axinom account", "bad"); log("our card, our account: not made yet (needs the Axinom account's key in the repository's secrets)"); }
+  else { set("o-ks", "—"); set("o-play", ownWhy, "bad"); log("our card, our account: " + ownLog); }
 })();
 </script>
 </body>
