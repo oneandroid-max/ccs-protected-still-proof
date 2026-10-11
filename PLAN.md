@@ -193,7 +193,13 @@ device for it; no outside service is in the chain.
     - The guard's rules for the CI drive read weaker than they claimed: a secret named in brackets, a command or action before the guard, and `node ./tools/…` all slipped past. Each is now refused, in the walk too.
   - **Also changed:** the tokens now restrict Widevine to hardware clients (HW_SECURE_ALL), as PlayReady already was (3000), so a software client of either is never handed a picture's key. The FairPlay section stays at Axinom's defaults (AirPlay and cable adapters allowed, HDCP type 0) until a device measurement and the owner decide.
   - **Found on the way, NOT yet handled:** each new Axinom environment has its own licence addresses. Axinom's page says "the host names carry a prefix specific to your environment" (read on a runner, run 38152588035). Our pages use Axinom's generic address, which is measured to work with Axinom's public token. Whether it also works with a new environment's tokens is NOT known. Everything using our own account stays dormant until the account exists and the owner's measurement switch is set, so the reviewer agreed this does not block the merge. The next reviewed change: record the licence and certificate addresses with each form, let the page send a token only to Axinom's hosts, and re-check CORS on the new address.
-  - **Measured:** pending; CI runs after this push.
+  - **Measured** (`b8e3137`):
+    - CI site test: 31 of 31, none skipped (run 38153838796).
+    - CI drive: 81 of 81 (run 38153836337).
+    - Here, with the real packager: 31 of 31, none skipped. A four-slice keyframe comes out as `[706,6343] [12,3904] [13,13486] [13,13370]`, exactly the reviewer's; it passes, and with slice 2 marked clear it is refused by both new rules.
+    - **Watched failing:** 13 deliberate breaks of these fixes, each failing its named test: the keyframe judged per frame again (also caught by the real four-slice test), no clear-run limit, media data not looked for, records box not read to its end, header fields read past their box (two), any folder name followed on the Apple page, the guard's four old wordings, Widevine left open, a cleared subsample flag.
+    - **Axinom's FairPlay server, now reachable from here:** it checks the device's request before the token. A good token and a tampered one got the same refusal for a dummy request, so tokens can only be proven with a real Apple device's request (the Apple check page does that).
+  - **Next:** the reviewer's fourth pass, on these fixes, before merge.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
