@@ -82,12 +82,10 @@
     try {
       await player.load(manifest);
     } catch (e) {
-      const code = e && e.code;
-      log(`${which}: load failed ${code}`);
-      // 6000 unsupported scheme, 6001 requested key-system config unavailable: this browser has no such DRM
-      if (code === 6000 || code === 6001) return "unavailable";
-      set("r-ks", `${which}: load failed ${code}`, "bad");
-      return "error";
+      const code = (e && e.code) || e;
+      log(`${which}: not usable here (error ${code})`);
+      set("r-ks", `${which}: not usable in this browser (error ${code})`, "bad");
+      return "fail";
     }
     const info = player.drmInfo();
     const ks = info ? info.keySystem : "none", robust = (info && info.videoRobustness) || "";
@@ -102,19 +100,18 @@
 
   async function play(order) {
     $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…");
-    for (const which of order) {
-      const r = await tryOne(which);
-      if (r === "ok" || r === "error") return;
-      log(`${which} is not available in this browser; trying the next…`);
+    for (let i = 0; i < order.length; i++) {
+      const r = await tryOne(order[i]);
+      if (r === "ok") return;                 // stop at the first that plays
+      if (order.length > 1 && i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
-    set("r-ks", "this browser has neither Widevine nor PlayReady for this video", "bad");
-    set("r-expect", "nothing plays, nothing to capture", "bad");
+    // all attempts failed; a single-button attempt leaves its own error on screen
+    if (order.length > 1) { set("r-ks", "no usable DRM in this browser for this video", "bad"); set("r-expect", "nothing plays, nothing to capture", "bad"); }
   }
 
-  // Prefer the system most likely to give HARDWARE protection on each platform, then fall back:
-  //   Windows → PlayReady first (hardware SL3000), else Widevine; everywhere else → Widevine first, else PlayReady.
-  const isWindows = /Windows NT/.test(navigator.userAgent);
-  $("auto").addEventListener("click", () => play(isWindows ? ["playready", "widevine"] : ["widevine", "playready"]));
+  // Widevine first everywhere — it gave hardware protection on every device tested (Android, Edge and
+  // Chrome on Windows) — then fall back to PlayReady for a browser that has no Widevine (e.g. some Edge).
+  $("auto").addEventListener("click", () => play(["widevine", "playready"]));
   $("wv").addEventListener("click", () => play(["widevine"]));
   $("pr").addEventListener("click", () => play(["playready"]));
 })();
