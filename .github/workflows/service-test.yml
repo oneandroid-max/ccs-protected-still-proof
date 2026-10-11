@@ -1,0 +1,43 @@
+# Proves the test site before it is hosted anywhere: the full test suite with real ffmpeg and the real
+# shaka-packager (the pipeline test is REQUIRED here, never skipped), then the Docker image is built
+# exactly as Render builds it, started, and its health must report both tools present.
+name: service test
+
+on:
+  push:
+    branches: [main]
+    paths: ["service/**", "tools/playready-test-key.mjs", "web/research/drm/index.html", "render.yaml", ".github/workflows/service-test.yml"]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg and shaka-packager
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          sudo chmod +x /usr/local/bin/packager && packager --version
+      - name: node --test (the pipeline test must run)
+        env: { REQUIRE_PACKAGER: "1", PACKAGER_BIN: /usr/local/bin/packager }
+        run: node --version && node --test --test-reporter spec "service/test/*.test.mjs"
+
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image as Render will
+        run: docker build -f service/Dockerfile -t ccs-proof-test .
+      - name: Start it and read its health
+        run: |
+          docker run -d --name t -p 10000:10000 -e PROOF_PASSWORD=correct-horse-battery -e SESSION_SECRET=0123456789abcdef0123456789abcdef -e DATA_DIR=/data ccs-proof-test
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:10000/api/health > /tmp/h.json && break; sleep 1; done
+          cat /tmp/h.json; echo
+          sleep 3; curl -sf http://127.0.0.1:10000/api/health > /tmp/h.json
+          node -e 'const h=require("/tmp/h.json"); console.log(h.tools); if(!h.ok||h.tools.problem||!/ffmpeg version/.test(h.tools.ffmpeg)||!/packager/.test(h.tools.packager)) { console.error("the image is missing a tool"); process.exit(1); }'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:10000/login)" = "200"
+          docker logs t
+          docker rm -f t

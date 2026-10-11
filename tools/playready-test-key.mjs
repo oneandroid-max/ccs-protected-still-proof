@@ -22,7 +22,9 @@ export function derivePlayReadyTestKey(kidHex) {
   return key.toString("hex");
 }
 
-const arg = process.argv[2];
+import { pathToFileURL } from "node:url";
+// The command-line part runs only when this file is the program, never when it is imported.
+const arg = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href ? process.argv[2] : undefined;
 if (arg === "--self-test") {
   // the photo's key id and the key the test server issued for it (route 1, 2026-10-11)
   const got = derivePlayReadyTestKey("9e0ffaba46a81decdc6fce6f0cafa51a");

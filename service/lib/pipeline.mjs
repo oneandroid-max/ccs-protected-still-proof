@@ -1,0 +1,140 @@
+// Turns one uploaded picture into the two protected clips the viewer plays, exactly as the proof's
+// workflows do: ffmpeg renders the still to a 2-second H.264 clip (EXIF orientation honoured, longest
+// side at most MAX_SIDE), then shaka-packager encrypts it for Widevine (key from Google's UAT key
+// server, public test signer) and for PlayReady (the key Microsoft's public test server derives for a
+// fresh key id). Every fragment is then checked for its sample-encryption boxes before the photo is
+// marked ready. The keys are the vendors' PUBLIC test keys: a skilled person can decrypt these clips
+// until CCS's own production credentials replace the test servers.
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { run, nowIso } from "./util.mjs";
+import { jpegOrientation, ORIENTATION_FILTER } from "./exif.mjs";
+import { derivePlayReadyTestKey } from "../../tools/playready-test-key.mjs";
+
+export const MAX_SIDE = 1280;
+export const WIDEVINE_TEST = {
+  keyServer: "https://license.uat.widevine.com/cenc/getcontentkey/widevine_test",
+  signer: "widevine_test",
+  aesKey: "1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9",
+  aesIv: "d58ce954203b7c9a9a9d467f59839249",
+};
+export const PLAYREADY_TEST_SERVER = "https://test.playready.microsoft.com/service/rightsmanager.asmx";
+
+export const kidToGuid = (kid) => { const h = kid.toUpperCase(); return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`; };
+
+export async function probe(ffprobe, file) {
+  const { stdout } = await run(ffprobe, ["-hide_banner", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", file]);
+  const s = JSON.parse(stdout).streams?.[0];
+  if (!s || !s.width || !s.height) throw new Error("the picture could not be read");
+  return { width: s.width, height: s.height };
+}
+
+const even = (x) => Math.max(2, Math.round(x / 2) * 2);
+
+// The clip's size: the picture as the viewer sees it (rotated upright), longest side at most MAX_SIDE.
+export function targetSize({ width, height }, orientation) {
+  const swap = orientation >= 5;
+  const w = swap ? height : width, h = swap ? width : height;
+  const f = Math.min(1, MAX_SIDE / Math.max(w, h));
+  return { width: even(w * f), height: even(h * f) };
+}
+
+export async function renderClip(tools, input, outClip, { orientation = 1 } = {}) {
+  const dims = await probe(tools.ffprobe, input);
+  const size = targetSize(dims, orientation);
+  const rot = ORIENTATION_FILTER[orientation] || "";
+  const vf = `${rot ? rot + "," : ""}loop=loop=29:size=1:start=0,setpts=N/(15*TB),scale=${size.width}:${size.height},format=yuv420p`;
+  await run(tools.ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-noautorotate", "-i", input,
+    "-vf", vf, "-r", "15", "-t", "2", "-c:v", "libx264", "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p",
+    "-g", "15", "-movflags", "+faststart", outClip]);
+  const out = await probe(tools.ffprobe, outClip);
+  return { source: dims, orientation, ...out };
+}
+
+export async function packageClip(packager, dir, { wvContentId, prKid, prKey, prKidGuid }) {
+  const cid = Buffer.from(wvContentId, "utf8").toString("hex");
+  await run(packager, ["in=clip.mp4,stream=video,output=video-widevine.mp4",
+    "--enable_widevine_encryption", "--key_server_url", WIDEVINE_TEST.keyServer,
+    "--content_id", cid, "--signer", WIDEVINE_TEST.signer, "--aes_signing_key", WIDEVINE_TEST.aesKey, "--aes_signing_iv", WIDEVINE_TEST.aesIv,
+    "--protection_systems", "Widevine", "--protection_scheme", "cenc", "--clear_lead", "0",
+    "--segment_duration", "2", "--fragment_duration", "2", "--mpd_output", "widevine.mpd"], { cwd: dir });
+  const la = `${PLAYREADY_TEST_SERVER}?cfg=(kid:${prKidGuid},sl:2000)`.replace(/&/g, "&amp;");
+  await run(packager, ["in=clip.mp4,stream=video,output=video-playready.mp4",
+    "--enable_raw_key_encryption", "--keys", `label=:key_id=${prKid}:key=${prKey}`,
+    "--protection_systems", "PlayReady", "--protection_scheme", "cenc", "--clear_lead", "0",
+    "--segment_duration", "2", "--fragment_duration", "2",
+    "--playready_extra_header_data", `<LA_URL>${la}</LA_URL>`, "--mpd_output", "playready.mpd"], { cwd: dir });
+}
+
+// Counts the boxes that matter in a packaged file and collects its key ids and protection systems.
+export function checkBoxes(data) {
+  const count = {}; const kids = new Set(); const pssh = [];
+  const walk = (off, end) => {
+    while (off + 8 <= end) {
+      let s = data.readUInt32BE(off); const t = data.toString("latin1", off + 4, off + 8);
+      if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off;
+      if (s < 8) return;
+      count[t] = (count[t] || 0) + 1;
+      if (t === "pssh") pssh.push(data.toString("hex", off + 12, off + 28));
+      if (t === "tenc") kids.add(data.toString("hex", off + 16, off + 32));
+      if (["moov", "trak", "mdia", "minf", "stbl", "moof", "traf", "sinf", "schi", "mvex"].includes(t)) walk(off + 8, off + s);
+      if (t === "stsd") walk(off + 16, off + s);
+      if (t === "encv") walk(off + 8 + 78, off + s);
+      off += s;
+    }
+  };
+  walk(0, data.length);
+  const r = { moof: count.moof || 0, senc: count.senc || 0, saiz: count.saiz || 0, saio: count.saio || 0, tenc: count.tenc || 0, kids: [...kids], pssh };
+  r.ok = r.moof > 0 && r.senc >= r.moof && r.saiz >= r.moof && r.saio >= r.moof && r.tenc > 0;
+  return r;
+}
+
+export function newProtectionIds(id) {
+  const prKid = randomBytes(16).toString("hex");
+  return { wvContentId: `ccs-proof-${id}`, prKid, prKidGuid: kidToGuid(prKid) };
+}
+
+// Runs the whole pipeline for one record and updates its status: processing → ready | failed.
+export async function processPhoto(tools, store, id) {
+  const rec = store.get(id);
+  if (!rec) return;
+  const dir = store.dir(id);
+  await store.update(id, { status: "processing", error: null });
+  try {
+    const original = join(dir, `original.${rec.ext}`);
+    const orientation = rec.type === "image/jpeg" ? jpegOrientation(await fs.readFile(original)) : 1;
+    const clip = await renderClip(tools, original, join(dir, "clip.mp4"), { orientation });
+    await packageClip(tools.packager, dir, { ...rec, prKey: derivePlayReadyTestKey(rec.prKid) });
+    const wv = checkBoxes(await fs.readFile(join(dir, "video-widevine.mp4")));
+    const pr = checkBoxes(await fs.readFile(join(dir, "video-playready.mp4")));
+    if (!wv.ok || !pr.ok) throw new Error(`a packaged file is missing its sample-encryption boxes (widevine ${JSON.stringify(wv)}, playready ${JSON.stringify(pr)})`);
+    if (!pr.kids.includes(rec.prKid)) throw new Error("the PlayReady file does not carry this photo's key id");
+    await fs.rm(join(dir, "clip.mp4"), { force: true }); // the clear clip is not kept
+    await store.update(id, { status: "ready", readyAt: nowIso(), width: clip.width, height: clip.height, orientation,
+      boxes: { widevine: { moof: wv.moof, senc: wv.senc, kids: wv.kids }, playready: { moof: pr.moof, senc: pr.senc, kids: pr.kids } } });
+  } catch (e) {
+    await store.update(id, { status: "failed", error: String(e.message || e).slice(0, 600) });
+  }
+}
+
+// One photo at a time; a photo is queued by id and processed in order.
+export function makeQueue(tools, store, log = () => {}) {
+  const queue = []; let running = false;
+  async function drain() {
+    if (running) return; running = true;
+    try {
+      while (queue.length) {
+        const id = queue.shift();
+        log(`processing ${id}`);
+        await processPhoto(tools, store, id);
+        const r = store.get(id);
+        log(`${id}: ${r ? r.status : "gone"}${r && r.error ? " — " + r.error : ""}`);
+      }
+    } finally { running = false; }
+  }
+  return {
+    enqueue(id) { queue.push(id); drain().catch((e) => log(`queue error: ${e.message}`)); },
+    pending() { return queue.length + (running ? 1 : 0); },
+  };
+}
