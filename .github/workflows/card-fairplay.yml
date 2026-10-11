@@ -1,8 +1,9 @@
 # Route 1's TEST CARD in Apple's FairPlay form (tools/fairplay-card.mjs): the same packaging code as the
 # owner's pictures, under Axinom's PUBLIC test key, so a real iPhone, iPad or Mac can prove the packaging
 # through Axinom's public licence token before any account exists. The tool decrypts its output two
-# independent ways (ffmpeg, shaka-packager) and fails unless both give back exactly the clear card; the
-# output is the same byte for byte from one run to the next, so a run with nothing new commits nothing.
+# independent ways (ffmpeg, shaka-packager) and fails unless both give back exactly the clear card. The
+# public form is packaged with a fixed clock, so it comes out the same byte for byte from one run to the
+# next and a run with nothing new commits nothing (without it the files' timestamps differ every run).
 # With the Axinom evaluation key in the secrets it ALSO makes the card's own-account form
 # (card-fairplay-own/: a random key, a licence token minted by our account, in clear because it unlocks
 # only this public card), renewed weekly before its token runs out. Reads site/axinom.mjs for the key

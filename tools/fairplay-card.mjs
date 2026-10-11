@@ -54,7 +54,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     const size = await probe(tools.ffprobe, join(work, "clip.mp4"));
     // 2. Apple's form, by the code that packages the owner's pictures
     const ids = com ? newFairPlayIds() : cardFairPlayIds();
-    await packageFairPlay(tools.packager, work, ids);
+    await packageFairPlay(tools.packager, work, ids, { fixedClock: !com }); // the public form: the same bytes every time
     const data = await fs.readFile(join(work, "fp", "video.mp4"));
     const check = checkFairPlay(await fs.readFile(join(work, "fp", "video.m3u8"), "utf8"), data, ids);
     if (!check.ok) throw new Error("the card's FairPlay form failed its check: " + check.problems.join("; "));

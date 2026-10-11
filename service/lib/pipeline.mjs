@@ -71,13 +71,15 @@ export async function packageClip(packager, dir, { wvContentId, prKid, prKey, pr
 // playlist carrying the key address Axinom's licence service reads (skd://<key id>:<IV>). Writes
 // fp/master.m3u8, fp/video.m3u8 and fp/video.mp4 in `dir`. The key comes from the caller (never a key
 // server): the licence is issued later, against a token that carries the key encrypted for Axinom.
-export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }) {
+// fixedClock (the public test card only): creation and modification times written as 0, so the same input
+// packages to the same bytes every time (otherwise they are the clock's, and only they differ).
+export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }, { fixedClock = false } = {}) {
   await fs.mkdir(join(dir, "fp"), { recursive: true });
   await run(packager, ["in=clip.mp4,stream=video,output=fp/video.mp4,playlist_name=video.m3u8",
     "--enable_raw_key_encryption", "--keys", `label=:key_id=${kid}:key=${key}`, "--iv", iv,
     "--protection_systems", "FairPlay", "--protection_scheme", "cbcs", "--clear_lead", "0",
     "--hls_key_uri", keyUri, "--segment_duration", "2", "--fragment_duration", "2",
-    "--hls_master_playlist_output", "fp/master.m3u8"], { cwd: dir });
+    "--hls_master_playlist_output", "fp/master.m3u8", ...(fixedClock ? ["--use_fake_clock_for_muxer"] : [])], { cwd: dir });
 }
 
 // What a FairPlay output must carry before it is published: the playlist's key line with this key

@@ -273,6 +273,11 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   const u = info.decryptCheck.undecrypted;
   assert.ok(u === "decoding refused" || u === "no frame decoded" || /^a frame of another size/.test(u) || (typeof u === "number" && u >= 40), "undecrypted it is not the card: " + u);
   assert.ok(info.samples > 0 && info.samplesEncrypted === info.samples, `every sample encrypted: ${info.samplesEncrypted} of ${info.samples}`);
+  // the public form comes out the same byte for byte every time (fixed clock), so a run with nothing new commits nothing
+  const again = await fs.mkdtemp(join(tmp, "card-again-"));
+  await new Promise((r) => setTimeout(r, 1100)); // a different second on the clock
+  await buildFairPlayCard({ tools, outDir: again });
+  for (const f of ["master.m3u8", "video.m3u8", "video.mp4", "info.json"]) assert.ok((await fs.readFile(join(out, f))).equals(await fs.readFile(join(again, f))), `${f}: the same bytes on a second build`);
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);
