@@ -129,8 +129,8 @@ export function buildViewTemplate(indexHtml) {
   t = once(t, "<title>Route 1: the browser's protected video path</title>", "<title>Protected view</title>", "title");
   t = once(t, "<style>", '<style nonce="__NONCE__">', "style");
   t = once(t, "<h1>Route 1: the browser's own protected video path</h1>", "<h1>Protected view: __NAME__</h1>", "heading");
-  t = once(t, '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>',
-    '<script nonce="__NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>', "player script");
+  t = once(t, '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>',
+    '<script nonce="__NONCE__" src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>', "player script");
   t = once(t, "<script>\n(async () => {", '<script nonce="__NONCE__">\n(async () => {', "page script");
   t = once(t, 'name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"',
     'name: "your picture: __NAME_JS__", widevine: "/media/__ID__/widevine.mpd", playready: "/media/__ID__/playready.mpd", prKid: "__PRKID__"', "photo clip");

@@ -87,6 +87,9 @@ async function mockedContext() {
     return route.fulfill({ status: 404, body: "{}" });
   });
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
+  // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
+  // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
+  await ctx.route("**/site/view.html*", async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
   return ctx;
 }
 

@@ -19,10 +19,10 @@ export function buildView(indexHtml) {
   let t = indexHtml;
   t = once(t, "<title>Route 1: the browser's protected video path</title>", "<title>Protected view — CCS proof test site</title>", "title");
   t = once(t, "<h1>Route 1: the browser's own protected video path</h1>", '<h1 id="title">Protected view</h1>', "heading");
-  t = once(t, '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>',
-    '<script>window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n'
-    + '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"></script>\n'
-    + '<script type="module" src="view-prelude.js"></script>', "player script");
+  // the player library's tag carries its integrity hash (read from the CDN on a runner, live-check.yml)
+  const PLAYER = '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>';
+  t = once(t, PLAYER,
+    '<script>window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js"></script>', "player script");
   t = once(t, "<script>\n(async () => {", '<script>\n(async () => {\n  const CTX = await window.__ccsReady; // the picture, decrypted in memory by view-prelude.js\n  document.getElementById("title").textContent = "Protected view: " + CTX.name;', "page script");
   t = once(t, 'name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"',
     'name: "your picture: " + CTX.name, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid', "photo clip");
