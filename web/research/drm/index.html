@@ -22,19 +22,20 @@
 </head>
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
-<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM decrypts it inside the device's protected path, played here by the same player the first proof used. Chrome and Edge on Android use Widevine; Edge on Windows uses PlayReady; Safari uses FairPlay. Where the device grants <em>hardware</em> protection the screen shows the picture while every capture of it is black; where it grants only software decryption the capture shows the video. Read the result first, then tap Play — it tries whatever DRM this browser actually has.</p>
+<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM decrypts it inside the device's protected path, played here by the same player the first proof used. Chrome and Edge on Android use Widevine; Edge on Windows uses PlayReady; Safari uses FairPlay. Where the device grants <em>hardware</em> protection the screen shows the picture while every capture of it is black; where it grants only software decryption the capture shows the video. The photo starts on its own when this page opens, using whatever DRM this browser has; the buttons only run it again.</p>
 
 <div class="row">
-  <button id="auto" class="primary">Play (this browser's DRM)</button>
+  <button id="auto" class="primary">Play again</button>
   <button id="wv">Widevine</button>
   <button id="pr">PlayReady</button>
 </div>
 
 <h2>What this device is doing — read this first</h2>
 <dl>
-  <dt>Key system</dt><dd id="r-ks">not asked yet</dd>
+  <dt>Page version</dt><dd id="r-ver">—</dd>
+  <dt>Key system</dt><dd id="r-ks">starting…</dd>
   <dt>Granted</dt><dd id="r-granted">—</dd>
-  <dt>Expected capture</dt><dd id="r-expect">tap Play</dd>
+  <dt>Expected capture</dt><dd id="r-expect">loading…</dd>
   <dt>Licence</dt><dd id="r-lic">—</dd>
   <dt>Playing</dt><dd id="r-play">—</dd>
   <dt>Platform</dt><dd id="r-platform">—</dd>
@@ -51,6 +52,8 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
+  const PAGE_VERSION = "2026-10-11 02:55 UTC — starts on open, Widevine first";
+  set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
   const video = $("v");
@@ -114,6 +117,10 @@
   $("auto").addEventListener("click", () => play(["widevine", "playready"]));
   $("wv").addEventListener("click", () => play(["widevine"]));
   $("pr").addEventListener("click", () => play(["playready"]));
+
+  // Start on open, like the first proof: a viewer taps the link and the photo appears, no button.
+  // Muted video may autoplay without a tap, and the DRM request needs no tap either.
+  play(["widevine", "playready"]);
 })();
 </script>
 </body>
