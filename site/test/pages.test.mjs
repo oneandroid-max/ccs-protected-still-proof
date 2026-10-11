@@ -176,6 +176,8 @@ test("the guard holds every way of bringing in a packager to the pinned, checked
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager ${PIN} ${MIRROR}`)], NAMED],
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -K /tmp/more -o /usr/local/bin/packager ${PIN}`)], NAMED],
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o $(echo /usr/local/bin/packager) ${PIN}`)], NAMED],
+    // ... and an output built by a command even with a check line to match it (only the plain-path rule refuses this)
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o $(pwd)/p ${PIN}`).replace(/(echo "7a3cf35a[0-9a-f]+  )\/usr\/local\/bin\/packager(" \| sha256sum -c - \|\| exit 1)/, "$1$(pwd)/p$2")], NAMED],
     // the check missing, changed, commented out, made harmless
     [[ST, (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -[^\n]*/, "")], UNCHECKED],
     [[".github/workflows/drm-package.yml", (t) => t.replace("7a3cf35ad146fd78", "0000000000000000")], UNCHECKED],
