@@ -115,7 +115,7 @@ export async function buildMosaic({ siteDir, key, tools }) {
     for (const u of used) args.push("-i", u.still);
     const chain = []; let prev = "0:v";
     used.forEach((u, i) => {
-      const t = layout.tiles[i];
+      const t = layout.tiles[used.length - 1 - i]; // MUTATION: pictures swapped
       chain.push(`[${i + 1}:v]scale=${t.w}:${t.h}:flags=lanczos,setsar=1[s${i}]`, `[${prev}][s${i}]overlay=${t.x}:${t.y}[o${i}]`);
       prev = `o${i}`;
     });
