@@ -58,7 +58,7 @@ const writePhotoMeta = async (license = OWN_LICENSE) => fs.writeFile(join(photoD
 await writePhotoMeta();
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = [], fairplay = null) {
+async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = [], fairplay = null, kept = null) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
@@ -66,7 +66,7 @@ async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], ski
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
-    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped, fairplay })));
+    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped, fairplay, ...(kept ? { kept } : {}) })));
   if (fairplay) { const f = join(dir, fairplay.master.split("/")[0]); await fs.mkdir(f, { recursive: true }); await fs.writeFile(join(f, "token.enc"), await sealText(PHOTO, "MOSAIC.TOKEN.VALUE")); }
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
@@ -145,7 +145,7 @@ async function mockedContext(opts = {}) {
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
-  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue());
+  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => { api.metaReads = (api.metaReads || 0) + 1; return api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue(); });
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
@@ -296,7 +296,7 @@ try {
   check(await until5(/Asked again at/, 15000) && asks() === b5 + 2, "Ask again asks and says so: " + (await t5()));
   await publishMosaic(undefined, [ID, ID2]);
   await p5.clock.fastForward("00:30");
-  check(await until5(/All 2 in one protected view/, 15000), "and the page keeps refreshing until the remade view arrives: " + (await t5()));
+  check(await until5(/All 2 in one protected view/, 15000) && !/being remade/.test(await t5()), "and the page keeps refreshing until the remade view arrives, then no longer says it is being remade (its clock twenty minutes ahead of the job's): " + (await t5()));
   await dctx.close();
   // the three timing rules, each on its own fresh page and fake clock
   async function clockPage(mode) {
@@ -322,17 +322,30 @@ try {
   check(asks() === k0 + 1, "once the site answers that there is none, the page asks");
   await c0.close(); api.noMosaic = false;
   // (t) a view that left a picture out counts as current, so the page would stop refreshing: "Try again"
-  // asks, says so, and keeps refreshing until a view made after it arrives
-  await publishMosaic(undefined, [ID], [{ id: ID2, name: "second.jpg", reason: "test" }]);
+  // asks, says so, and keeps refreshing until the job answers. The job may keep the view as it is (a rebuild would
+  // remove its Apple form; the tenth review: the page then said "being remade" for ten minutes): the page shows that
+  // answer with its reason and stops waiting. Asked again, a view made after it arrives
+  const builtT = new Date().toISOString(), leftOutT = [{ id: ID2, name: "second.jpg", reason: "test" }];
+  await publishMosaic(builtT, [ID], leftOutT);
   const kt = asks();
   const { c: ct, pg: pt } = await clockPage("two");
   check(/Left out \(could not be read back\): second\.jpg/.test(await pt.textContent("#all")) && asks() === kt, "a picture left out is named, with Try again, and nothing is asked on its own: " + (await pt.textContent("#all")));
   await pt.click("#ask-all");
   await new Promise((r) => setTimeout(r, 1500));
   check(asks() === kt + 1 && /Asked again at/.test(await pt.textContent("#all")), "Try again asks and says so");
-  await publishMosaic(new Date(Date.now() + 60000).toISOString(), [ID, ID2]);
+  await publishMosaic(builtT, [ID], leftOutT, null, { at: new Date().toISOString(), why: "rebuilding it would remove its Apple form, and Axinom did not accept our key (Axinom: a test)" });
   await settle(pt, "00:30");
-  check(/All 2 in one protected view/.test(await pt.textContent("#all")) && !/Left out/.test(await pt.textContent("#all")), "and the page keeps refreshing until the remade view arrives: " + (await pt.textContent("#all")));
+  const tk = await pt.textContent("#all");
+  check(/Last tried at \d\d:\d\d: kept as it is — rebuilding it would remove its Apple form, and Axinom did not accept our key \(Axinom: a test\)/.test(tk) && !/being remade/.test(tk) && /Try again/.test(tk), "the job's answer, kept as it is, is shown with its reason; nothing says it is being remade; Try again stays: " + tk);
+  const reads = api.metaReads;
+  await settle(pt, "00:30"); await settle(pt, "00:30");
+  check(api.metaReads === reads, `and the page stops waiting for a remake that is not coming (${api.metaReads - reads} more reads of the view)`);
+  await pt.click("#ask-all");
+  await new Promise((r) => setTimeout(r, 1500));
+  check(asks() === kt + 2 && /Asked again at .*being remade/.test(await pt.textContent("#all")), "asked again: the earlier answer is not taken for this one: " + (await pt.textContent("#all")));
+  await publishMosaic(new Date((await pt.evaluate(() => Date.now())) + 60000).toISOString(), [ID, ID2]);
+  await settle(pt, "00:30");
+  check(/All 2 in one protected view/.test(await pt.textContent("#all")) && !/Left out|being remade|kept as it is/.test(await pt.textContent("#all")), "and the page keeps refreshing until the remade view arrives: " + (await pt.textContent("#all")));
   await ct.close();
   // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
   api.noMosaic = true;

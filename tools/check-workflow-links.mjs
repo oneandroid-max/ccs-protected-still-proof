@@ -20,9 +20,9 @@
 // no secret, nothing uploaded, no capture, running no tool but itself and this guard, and the drive file
 // pinned by content below (2026-10-11: the second review asked for the drive's checks in CI).
 //
-// THIRD RULE (2026-10-11, the sixth to ninth reviews): outside comments and step names, shaka-packager is named
-// only by the pinned download, checked against its SHA-256 by the exact line that follows it; nothing under
-// .github/ lets a failure pass.
+// THIRD RULE (2026-10-11, the sixth to tenth reviews): a packager gets onto a runner or into an image only by the
+// pinned download, in a workflow or a Dockerfile, checked against its SHA-256 by the exact line that follows it; a
+// workflow that downloads it lets no failure pass; every known download is counted (details below).
 //
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
@@ -130,7 +130,7 @@ const PINNED = {
   ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
   "tools/walk-site.mjs": "4b2222eaa660a66bd8aa75eaf46f9821063cfa20f6f374b78e0250cf0bf1e5ce",
   ".github/workflows/site-drive.yml": "561f8bb83320ec4c3981fb399b5f09dbd4edf669fcb5826fee480f793a3dfbe7",
-  "tools/drive-site.mjs": "8cec691ba3eaee61b6eea72b91e1b74637143be5cd97239e384deba0dd404b16",
+  "tools/drive-site.mjs": "2cd7699b041e51986a48e7fa1a008711d9fce0e2671e2c7e8b3897ad9686de00",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");
@@ -140,49 +140,114 @@ const walker = code(read("tools/walk-site.mjs"));
 const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicEncrypt(");
 if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
 
-// THIRD RULE (2026-10-11; the sixth review found three of nine downloads unpinned while the plan said all were;
-// the seventh, eighth and ninth each stepped around the version before, the ninth also finding the eighth's rewrite
-// narrower than what it replaced). shaka-packager is the one program the jobs fetch and run, on pictures among
-// other things. Read: the repository's files (tracked or new, not ignored: git ls-files; every file where there is
-// no git) that are YAML under .github/ (workflows and actions), Dockerfiles or Containerfiles, or shell scripts;
-// whole-line comments left out.
-//   (A) Outside those comments and YAML `name:` lines, shaka-packager may be named ONLY by the pinned download line,
-//       `curl -sSL -o <file> <pinned release>` (in a Dockerfile, after RUN), and that line may stand only in a
-//       workflow (.github/workflows/) or a Dockerfile, never in an action or a script a step could call: no other
-//       source, version, image, action, container, package or install, however written.
-//   (B) The very next line must be, exactly, that file's SHA-256 check: in YAML and scripts `echo "<sha256>  <file>"
-//       | sha256sum -c - || exit 1` (a trailing comment allowed); in a Dockerfile `&& echo "<sha256>  <file>" |
-//       sha256sum -c -`, after which the instruction may go on only with `&& …` lines.
-//   (C) A workflow that downloads it lets no failure pass: no `continue-on-error` but false.
-// This catches mistakes. An author set on getting around it (a name built from parts, say) can; review catches that.
+// THIRD RULE (2026-10-11; the sixth review found three of nine downloads unpinned while the plan said all were; the
+// seventh to tenth each found the version before stepped around, the ninth and tenth also finding a rewrite that saw
+// less than what it replaced). shaka-packager is the one program the jobs fetch and run, on pictures among other
+// things, and they run whatever file PACKAGER_BIN or the PATH names; so the rule is about how a packager gets onto a
+// runner or into an image. Read: every file in the repository but what git ignores (where git cannot say, nothing is
+// left out), of these kinds: YAML anywhere (workflows, actions, compose files), Dockerfiles and Containerfiles,
+// Makefiles, package manifests and lock files, and shell, PowerShell and batch scripts. NOT read: JavaScript and
+// Python files (a Node or Python script that fetches one is for review to catch). Whole-line comments are left out,
+// and so is a trailing comment ('#' after a space, outside quotes).
+//   (A) A line that names a packager ("packager" in any form: shaka-packager, packager-linux-x64, setup-packager,
+//       /usr/local/bin/packager) AND could bring one in (an address; a fetch, copy, archive, install or package
+//       command; a container image, an action or an action's input; in a Dockerfile an image to build on, ADD, COPY
+//       from anything but one of its own stages, or a build mount from an image) must be the pinned download: `curl -o <file> <pinned release>`, its
+//       only other options -f, -s, -S, -L or their long forms, quotes allowed (in a Dockerfile after RUN); and that
+//       line may stand only in a workflow (.github/workflows/) or a Dockerfile. A YAML step's, job's or workflow's
+//       name brings nothing in.
+//   (B) The very next line must be that file's SHA-256 check, exactly: in a workflow `echo "<sha256>  <file>" |
+//       sha256sum -c - || exit 1` (a trailing comment allowed); in a Dockerfile `&& echo "<sha256>  <file>" |
+//       sha256sum -c -`, after which the instruction may go on only with lines that start with '&&' and hold no ';',
+//       '||' or lone '&' (each could swallow a failed check).
+//   (C) A workflow that downloads it lets no failure pass: no `continue-on-error` but false, its key quoted or not.
+//   (D) Every known download is counted (DOWNLOADERS): a file with more or fewer than listed fails, so a guard that
+//       reads less than it should, or a workflow that stops downloading, is seen; a new download is listed there.
+// This catches mistakes. An author set on getting around it (a name built from parts, a binary fetched under another
+// name and named only in PACKAGER_BIN) can; review catches that.
 const PACKAGER_URL = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
 const PACKAGER_SHA256 = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
+const DOWNLOADERS = {
+  ".github/workflows/card-fairplay.yml": 1, ".github/workflows/drm-card.yml": 1, ".github/workflows/drm-package.yml": 1,
+  ".github/workflows/service-test.yml": 1, ".github/workflows/site-fairplay.yml": 1, ".github/workflows/site-photos.yml": 2,
+  ".github/workflows/site-test.yml": 1, "service/Dockerfile": 1,
+};
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const everyFile = (d) => { let names = []; try { names = readdirSync(d); } catch { return []; } return names.flatMap((x) => { const p = d === "." ? x : join(d, x); if (x === "node_modules" || x === ".git") return []; const st = lstatSync(p); return st.isDirectory() ? everyFile(p) : [p]; }); };
-let repoFiles;
-try { repoFiles = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split("\0").filter(Boolean); }
-catch { repoFiles = everyFile("."); }
-const isYaml = (f) => /^\.github\/.+\.ya?ml$/.test(f), isDocker = (f) => /(^|\/)(Dockerfile|Containerfile)[^/]*$|\.(dockerfile|containerfile)$/i.test(f), isScript = (f) => /\.sh$/.test(f);
-const DOWNLOAD = new RegExp(`^\\s*(?:RUN\\s+)?curl -sSL -o (\\S+) ${esc(PACKAGER_URL)}(?:\\s+\\\\)?$`);
+// every file, as '/' paths (a Windows checkout judges as Linux CI does); what git ignores is never committed, so it is
+// left out; if git cannot say (no git, not a repository, any failure), nothing is left out
+const repoFiles = everyFile(".").map((p) => p.replace(/\\/g, "/"));
+let ignored = new Set();
+try { ignored = new Set(execFileSync("git", ["check-ignore", "-z", "--stdin"], { input: repoFiles.join("\0") + "\0", encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }).split("\0").filter(Boolean)); } catch {}
+const kind = (f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f) ? "workflow"
+  : /(^|\/)(Dockerfile|Containerfile)[^/]*$|\.(dockerfile|containerfile)$/i.test(f) ? "docker"
+  : /\.ya?ml$/i.test(f) || /(^|\/)(GNUmakefile|[Mm]akefile)$|\.mk$/.test(f) || /(^|\/)(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock)$/.test(f) || /\.(sh|bash|zsh|ps1|psm1|cmd|bat)$/i.test(f) ? "other" : null;
+// a trailing comment: '#' at the start or after a space, outside quotes
+const uncomment = (line) => { let q = ""; for (let i = 0; i < line.length; i++) { const c = line[i]; if (q) { if (c === "\\" && q === '"') i++; else if (c === q) q = ""; } else if (c === "'" || c === '"') q = c; else if (c === "\\") i++; else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i); } return line; };
+const BRINGS = new RegExp([
+  "[a-z][a-z0-9+.-]*://",
+  "\\b(curl|wget|aria2c|axel|invoke-webrequest|iwr|invoke-restmethod|irm|start-bitstransfer|bitsadmin|certutil|fetch|svn|scp|rsync|s?ftp|tftp)\\b",
+  "\\bgh\\s+(release|api|run\\s+download)\\b", "\\bgit\\s+(clone|fetch|pull|submodule|archive)\\b",
+  "\\b(cp|mv|ln|install|dd|tar|unzip|7z|gunzip|bunzip2|unxz|zstd)\\b",
+  "\\b(npm|npx|pnpm|yarn|bunx|pip3?|pipx|uvx?|conda|mamba|apt|apt-get|aptitude|dpkg|yum|dnf|rpm|apk|zypper|pacman|brew|choco|winget|scoop|snap|flatpak|nix|nix-env|cargo|gem|composer)\\b",
+  "\\bgo\\s+(install|get|run)\\b", "\\bdotnet\\s+tool\\b",
+  "\\b(docker|podman|nerdctl|buildah|ctr|crane|skopeo|oras)\\b", "\\bfrom=",
+  "\\b(uses|image|container|services|with)\\s*:",
+].join("|"), "i");
+function bringsIn(code, docker, stages) {
+  if (docker) {
+    const from = code.match(/^\s*FROM\s+(?:--\S+\s+)*(\S+)/i);
+    if (from) return /packager/i.test(from[1]); // only the image it is built on can bring one; a stage's name brings nothing
+    if (/^\s*(ADD|COPY)\b/i.test(code)) { const src = code.match(/--from=(\S+)/i); return !(src && stages.has(src[1].toLowerCase())); }
+  }
+  return BRINGS.test(code);
+}
+// the pinned download line: the output file, or null
+const unquote = (w) => /^"[^"]*"$|^'[^']*'$/.test(w) ? w.slice(1, -1) : w;
+function pinnedDownload(code) {
+  const words = code.trim().replace(/\s+\\$/, "").replace(/^RUN\s+/, "").split(/\s+/);
+  if (words[0] !== "curl") return null;
+  let out = null, url = null;
+  for (let k = 1; k < words.length; k++) {
+    const w = words[k];
+    if (/^-[fsSL]+$/.test(w) || /^--(fail|silent|show-error|location)$/.test(w)) continue;
+    if ((w === "-o" || w === "--output") && out === null && k + 1 < words.length) { out = unquote(words[++k]); continue; }
+    if (unquote(w) === PACKAGER_URL && url === null) { url = w; continue; }
+    return null;
+  }
+  return url && out && /^[\w./${}-]+$/.test(out) ? out : null;
+}
 let downloads = 0;
-for (const f of [...new Set(repoFiles)].filter((x) => isYaml(x) || isDocker(x) || isScript(x)).sort()) {
-  let text; try { text = read(f); } catch { continue; } // a dangling link: nothing to read
-  const lines = text.split("\n"), docker = isDocker(f);
-  let fetches = 0;
+const counts = {};
+for (const f of repoFiles.filter((x) => !ignored.has(x) && kind(x)).sort()) {
+  let text; try { text = read(f); } catch { continue; } // a dangling link, or a link to a folder: nothing to read
+  const k = kind(f), docker = k === "docker", yaml = /\.ya?ml$/i.test(f), lines = text.split("\n"), stages = new Set();
+  let withAt = -1, fetches = 0;
   lines.forEach((line, i) => {
     if (/^\s*#/.test(line)) return;
-    if (!/shaka-packager/i.test(line) || (isYaml(f) && /^\s*-?\s*name\s*:/.test(line))) return;
-    const m = line.match(DOWNLOAD);
-    if (!m) { bad.push(`${f}:${i + 1}: names shaka-packager other than by the pinned download (curl -sSL -o <file> ${PACKAGER_URL}): no other source, image, action or install`); return; }
-    downloads++; fetches++;
-    if (!(docker || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f))) bad.push(`${f}:${i + 1}: downloads shaka-packager outside a workflow or a Dockerfile (an action or a script could be run where a failure passes)`);
-    const out = m[1];
+    const code = uncomment(line), indent = code.search(/\S/);
+    if (withAt >= 0 && indent >= 0 && indent <= withAt) withAt = -1; // the end of an action's inputs
+    const inWith = withAt >= 0 && indent > withAt;
+    if (yaml && /^\s*(?:-\s+)?with\s*:\s*$/.test(code)) withAt = code.indexOf("with");
+    if (docker) { const st = code.match(/^\s*FROM\s+(?:--\S+\s+)*\S+\s+AS\s+(\S+)/i); if (st) stages.add(st[1].toLowerCase()); }
+    if (!/packager/i.test(code)) return;
+    if (yaml && !inWith && /^\s*(?:-\s+)?name\s*:/.test(code)) return; // a name brings nothing in
+    if (!inWith && !bringsIn(code, docker, stages)) return;
+    const out = inWith ? null : pinnedDownload(code);
+    if (!out) { bad.push(`${f}:${i + 1}: brings in a packager other than by the pinned download (curl -o <file> ${PACKAGER_URL}, checked on the next line): no other source, version, image, action, artifact, cache, copy, archive or install`); return; }
+    downloads++; fetches++; counts[f] = (counts[f] || 0) + 1;
+    if (k !== "workflow" && !docker) bad.push(`${f}:${i + 1}: downloads shaka-packager outside a workflow or a Dockerfile (an action or a script could be run where a failure passes)`);
     const check = docker ? new RegExp(`^\\s*&& echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c -(?:\\s+\\\\)?$`) : new RegExp(`^\\s*echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c - \\|\\| exit 1(?:\\s+#.*)?$`);
     if (!check.test(lines[i + 1] || "")) { bad.push(`${f}:${i + 1}: the downloaded packager must be checked against its SHA-256 on the very next line, exactly: ${docker ? "&& " : ""}echo "${PACKAGER_SHA256.slice(0, 12)}…  ${out}" | sha256sum -c -${docker ? "" : " || exit 1"}`); return; }
-    if (docker) for (let j = i + 2; j < lines.length && /\\\s*$/.test(lines[j - 1]); j++) if (!/^\s*&&\s/.test(lines[j])) bad.push(`${f}:${j + 1}: after the packager's check, this instruction may go on only with '&& …' lines (anything else could swallow a failed check)`);
+    if (docker) for (let j = i + 2; j < lines.length && /\\\s*$/.test(lines[j - 1]); j++) {
+      const c = uncomment(lines[j]);
+      if (!/^\s*&&\s/.test(c) || /;|\|\||(?<![&<>])&(?![&>])/.test(c.replace(/^\s*&&/, ""))) bad.push(`${f}:${j + 1}: after the packager's check, this instruction may go on only with '&& …' lines holding no ';', '||' or lone '&' (each could swallow a failed check)`);
+    }
   });
-  if (fetches) lines.forEach((line, i) => { if (!/^\s*#/.test(line) && /continue-on-error\s*:(?!\s*false\b)/.test(line)) bad.push(`${f}:${i + 1}: downloads shaka-packager and lets a failure pass (continue-on-error)`); });
+  if (fetches) lines.forEach((line, i) => { if (!/^\s*#/.test(line) && /continue-on-error["']?\s*:(?!\s*false\b)/.test(uncomment(line))) bad.push(`${f}:${i + 1}: downloads shaka-packager and lets a failure pass (continue-on-error)`); });
 }
+for (const [f, n] of Object.entries(DOWNLOADERS)) if ((counts[f] || 0) !== n) bad.push(`${f}: expected ${n} pinned download${n === 1 ? "" : "s"} of shaka-packager, read ${counts[f] || 0} (a guard that reads less fails here; when a workflow changes, update DOWNLOADERS in tools/check-workflow-links.mjs)`);
+for (const f of Object.keys(counts)) if (!(f in DOWNLOADERS)) bad.push(`${f}: a pinned download of shaka-packager that DOWNLOADERS in tools/check-workflow-links.mjs does not list: add it there with its count`);
 
 if (bad.length) {
   console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site, ${downloads} packager downloads:`);

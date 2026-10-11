@@ -120,68 +120,115 @@ async function guardWith(extra, edit, files = {}) {
   await fs.rm(d, { recursive: true, force: true });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
-// THE GUARD'S THIRD RULE (the sixth to ninth reviews): outside comments and step names, shaka-packager is named only by
-// the pinned download, in a workflow or a Dockerfile, checked against its SHA-256 by the exact line after it; a
-// workflow that downloads it lets no failure pass. Every way around an earlier version that a review found is here.
-test("the guard holds every shaka-packager mention to the pinned, checked download", async () => {
+// THE GUARD'S THIRD RULE (the sixth to tenth reviews): a packager is brought in only by the pinned download, in a
+// workflow or a Dockerfile, checked against its SHA-256 by the exact line after it; a workflow that downloads it lets
+// no failure pass; every known download is counted. Every way around an earlier version that a review found is here.
+test("the guard holds every way of bringing in a packager to the pinned, checked download", async () => {
   const PIN = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
   const LATEST = "https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64";
+  const MIRROR = "https://mirror.example.com/packager-linux-x64";
   const base = await guardWith(null);
   assert.equal(base.code, 0, base.out); assert.match(base.out, /all 9 shaka-packager downloads are the pinned release, checked by its SHA-256/);
-  const step = (run) => (t) => t.replace("      - name: The generated view page is current", `      - run: ${run}\n      - name: The generated view page is current`);
-  const NAMED = /names shaka-packager other than by the pinned download/, UNCHECKED = /the downloaded packager must be checked against its SHA-256 on the very next line, exactly/;
+  const ST = ".github/workflows/site-test.yml", DF = "service/Dockerfile", AT = "      - name: The generated view page is current";
+  const step = (run) => (t) => t.replace(AT, `      - run: ${run}\n${AT}`);
+  const uses = (action, more = "") => (t) => t.replace(AT, `      - uses: ${action}\n${more ? more + "\n" : ""}${AT}`);
+  const afterRun = (text) => (t) => t.replace(/(\/usr\/local\/bin\/packager --version)\n/, `$1\n${text}\n`);
+  const NAMED = /brings in a packager other than by the pinned download/, UNCHECKED = /the downloaded packager must be checked against its SHA-256 on the very next line, exactly/;
+  const AFTER = /service\/Dockerfile:\d+: after the packager's check, this instruction may go on only with '&& …' lines/, LETS = /downloads shaka-packager and lets a failure pass/;
   const refused = [
-    // another source or version, an image, an action, a container, a package, however written
+    // another source or version, an image, an action, a container, a package
     [[".github/workflows/card-fairplay.yml", (t) => t.replace(PIN, LATEST)], NAMED],
-    [[".github/workflows/site-test.yml", step("gh release download v3.9.3 -R shaka-project/shaka-packager -p packager-linux-x64")], NAMED],
-    [[".github/workflows/site-test.yml", step("docker run --rm google/shaka-packager packager --version")], NAMED],
-    [[".github/workflows/site-test.yml", step("docker container run --rm google/shaka-packager packager --version")], NAMED],
-    [[".github/workflows/site-test.yml", step("podman run --rm google/shaka-packager packager --version")], NAMED],
-    [[".github/workflows/site-test.yml", step("docker run --rm ghcr.io/shaka-project/shaka-packager packager --version")], NAMED],
-    [[".github/workflows/site-test.yml", step("docker run --rm someone/shaka-packager packager --version")], NAMED],
-    [[".github/workflows/site-test.yml", step("npm install -g shaka-packager")], NAMED],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - uses: some-org/setup-shaka-packager@v1\n      - name: The generated view page is current")], NAMED],
-    [[".github/workflows/site-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container: someone/shaka-packager:v3.9.3")], NAMED],
-    [[".github/workflows/site-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container:\n      image: google/shaka-packager:v3.9.3")], NAMED],
-    [["service/Dockerfile", (t) => t.replace(/RUN curl -sSL -o \/usr\/local\/bin\/packager [^\n]*\n  && echo [^\n]*\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "COPY --from=google/shaka-packager:v3.9.3 /usr/bin/packager /usr/local/bin/packager")], NAMED],
+    [[ST, step("gh release download v3.9.3 -R shaka-project/shaka-packager -p packager-linux-x64")], NAMED],
+    [[ST, step("docker run --rm google/shaka-packager packager --version")], NAMED],
+    [[ST, step("docker container run --rm google/shaka-packager packager --version")], NAMED],
+    [[ST, step("podman run --rm google/shaka-packager packager --version")], NAMED],
+    [[ST, step("docker run --rm ghcr.io/shaka-project/shaka-packager packager --version")], NAMED],
+    [[ST, step("docker run --rm someone/shaka-packager packager --version")], NAMED],
+    [[ST, step("npm install -g shaka-packager")], NAMED],
+    [[ST, uses("some-org/setup-shaka-packager@v1")], NAMED],
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container: someone/shaka-packager:v3.9.3")], NAMED],
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container:\n      image: google/shaka-packager:v3.9.3")], NAMED],
+    [[DF, (t) => t.replace(/RUN curl -sSL -o \/usr\/local\/bin\/packager [^\n]*\n  && echo [^\n]*\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "COPY --from=google/shaka-packager:v3.9.3 /usr/bin/packager /usr/local/bin/packager")], NAMED],
+    // the tenth review: what c4cc277 refused and the next two versions let through (no "shaka-packager" on the line)
+    [[ST, step(`curl -sSL -o /usr/local/bin/packager ${MIRROR}`)], NAMED],
+    [[ST, step("docker run --rm someorg/packager:v3 --version")], NAMED],
+    [[ST, uses("someorg/setup-packager@v1")], NAMED],
+    [[DF, afterRun(`RUN curl -sSL -o /usr/local/bin/packager ${MIRROR}`)], NAMED],
+    // ... and what every version let through: an artifact or a cache of it, a copy, an archive, a package, a clone,
+    // another fetcher, a Dockerfile ADD, a COPY from an image or from the build context
+    [[ST, uses("actions/download-artifact@v4", "        with:\n          name: shaka-packager\n          path: /usr/local/bin")], NAMED],
+    [[ST, uses("actions/cache@v4", "        with:\n          path: /usr/local/bin/packager\n          key: v3.9.3")], NAMED],
+    [[ST, uses("actions/download-artifact@v4", "        with: { name: shaka-packager, path: /usr/local/bin }")], NAMED],
+    [[ST, step("sudo cp /opt/tools/packager /usr/local/bin/packager")], NAMED],
+    [[ST, step("tar -xzf tools.tgz -C /usr/local/bin packager")], NAMED],
+    [[ST, step("pip install shaka-packager")], NAMED],
+    [[ST, step("git clone --depth 1 https://github.com/shaka-project/shaka-packager")], NAMED],
+    [[ST, step(`wget -q -O /usr/local/bin/packager ${PIN}`)], NAMED],
+    [[DF, afterRun(`ADD ${PIN} /usr/local/bin/packager`)], NAMED],
+    [[DF, afterRun("COPY --from=someorg/packager /usr/bin/packager /usr/local/bin/packager")], NAMED],
+    [[DF, afterRun("COPY --from=someorg/tools:1 /usr/bin/packager /usr/local/bin/packager")], NAMED],
+    [[DF, afterRun("COPY bin/packager /usr/local/bin/packager")], NAMED],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM someorg/packager:v3 AS base")], NAMED],
+    [[DF, afterRun("RUN --mount=type=bind,from=someorg/packager,target=/p /p/packager --version")], NAMED],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
-    [[".github/workflows/site-test.yml", step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
+    [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
+    // a curl that is not only the pinned download: another address beside it, another option, an output built by a command
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager ${PIN} ${MIRROR}`)], NAMED],
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -K /tmp/more -o /usr/local/bin/packager ${PIN}`)], NAMED],
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o $(echo /usr/local/bin/packager) ${PIN}`)], NAMED],
     // the check missing, changed, commented out, made harmless
-    [[".github/workflows/site-test.yml", (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -[^\n]*/, "")], UNCHECKED],
+    [[ST, (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -[^\n]*/, "")], UNCHECKED],
     [[".github/workflows/drm-package.yml", (t) => t.replace("7a3cf35ad146fd78", "0000000000000000")], UNCHECKED],
-    [[".github/workflows/site-test.yml", (t) => t.replace(/(\n\s+)(echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -)/, "$1# $2")], UNCHECKED],
+    [[ST, (t) => t.replace(/(\n\s+)(echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -)/, "$1# $2")], UNCHECKED],
     [[".github/workflows/site-fairplay.yml", (t) => t.replace(/sha256sum -c - \|\| exit 1/, "sha256sum -c - || true")], UNCHECKED],
     [[".github/workflows/card-fairplay.yml", (t) => t.replace(/(\n\s+)(echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c - \|\| exit 1)/, "$1if false; then $2; fi")], UNCHECKED],
-    [["service/Dockerfile", (t) => t.replace(/ \\\n  && echo "[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -/, "")], UNCHECKED],
-    [["service/Dockerfile", (t) => t.replace(/\n  && echo ("[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -) \\/, "\n#  && echo $1 \\")], UNCHECKED],
-    // after the Dockerfile's check, only '&& …' may follow in that instruction
-    [["service/Dockerfile", (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  ; chmod +x /usr/local/bin/packager")], /service\/Dockerfile:\d+: after the packager's check, this instruction may go on only with '&& …' lines/],
-    [["service/Dockerfile", (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  | cat && chmod +x /usr/local/bin/packager")], /after the packager's check, this instruction may go on only with '&& …' lines/],
-    [["service/Dockerfile", (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  || chmod +x /usr/local/bin/packager")], /after the packager's check, this instruction may go on only with '&& …' lines/],
-    [["service/Dockerfile", (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  &amp;&amp; chmod +x /usr/local/bin/packager")], /after the packager's check, this instruction may go on only with '&& …' lines/],
-    // a workflow that downloads it letting a failure pass, however written
+    [[DF, (t) => t.replace(/ \\\n  && echo "[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -/, "")], UNCHECKED],
+    [[DF, (t) => t.replace(/\n  && echo ("[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -) \\/, "\n#  && echo $1 \\")], UNCHECKED],
+    // after the Dockerfile's check, only '&& …' lines with no ';', '||' or lone '&' (the tenth review: '&& … || true')
+    [[DF, (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  ; chmod +x /usr/local/bin/packager")], AFTER],
+    [[DF, (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  | cat && chmod +x /usr/local/bin/packager")], AFTER],
+    [[DF, (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  || chmod +x /usr/local/bin/packager")], AFTER],
+    [[DF, (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  &amp;&amp; chmod +x /usr/local/bin/packager")], AFTER],
+    [[DF, (t) => t.replace("/usr/local/bin/packager --version", "/usr/local/bin/packager --version || true")], AFTER],
+    [[DF, (t) => t.replace("/usr/local/bin/packager --version", "/usr/local/bin/packager --version; true")], AFTER],
+    [[DF, (t) => t.replace("/usr/local/bin/packager --version", "/usr/local/bin/packager --version &")], AFTER],
+    // a workflow that downloads it letting a failure pass, however written (the tenth review: the key quoted)
     [[".github/workflows/service-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    continue-on-error: true")], /service-test\.yml:\d+: downloads shaka-packager and lets a failure pass/],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - continue-on-error: true\n        run: echo x\n      - name: The generated view page is current")], /site-test\.yml:\d+: downloads shaka-packager and lets a failure pass/],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - { name: x, run: echo x, continue-on-error: true }\n      - name: The generated view page is current")], /site-test\.yml:\d+: downloads shaka-packager and lets a failure pass/],
+    [[ST, (t) => t.replace(AT, `      - continue-on-error: true\n        run: echo x\n${AT}`)], /site-test\.yml:\d+: downloads shaka-packager and lets a failure pass/],
+    [[ST, (t) => t.replace(AT, `      - { name: x, run: echo x, continue-on-error: true }\n${AT}`)], /site-test\.yml:\d+: downloads shaka-packager and lets a failure pass/],
+    [[ST, (t) => t.replace(AT, `      - "continue-on-error": true\n        run: echo x\n${AT}`)], LETS],
+    [[ST, (t) => t.replace(AT, `      - 'continue-on-error': yes\n        run: echo x\n${AT}`)], LETS],
   ];
   for (const [edit, re] of refused) { const g = await guardWith(null, edit); assert.equal(g.code, 1, `${edit[0]} refused: ${g.out}`); assert.match(g.out, re); }
-  // a new workflow fetching it another way; a download in an action, a script, another Dockerfile or a Containerfile
+  // a new workflow fetching it another way; a download in an action, a script of any kind, another Dockerfile, a
+  // Containerfile, a compose file anywhere, a Makefile, a package's own scripts
   const extra = await guardWith(LATEST);
-  assert.equal(extra.code, 1, extra.out); assert.match(extra.out, /zz-extra\.yml:\d+: names shaka-packager other than by the pinned download/);
-  const down = (out) => `curl -sSL -o ${out} ${PIN}\nchmod +x ${out}\n`;
+  assert.equal(extra.code, 1, extra.out); assert.match(extra.out, /zz-extra\.yml:\d+: brings in a packager other than by the pinned download/);
+  const down = (out) => `curl -sSL -o ${out} ${PIN}\nchmod +x ${out}\n`, OUTSIDE = (f) => new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+: downloads shaka-packager outside a workflow or a Dockerfile`);
   for (const [file, text, re] of [
-    [".github/actions/get-packager/action.yml", `name: get packager\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: |\n        ${down("/usr/local/bin/packager").split("\n").join("\n        ")}`, /\.github\/actions\/get-packager\/action\.yml:\d+: downloads shaka-packager outside a workflow or a Dockerfile/],
-    ["tools/get-packager.sh", `#!/bin/sh\n${down("/tmp/packager")}`, /tools\/get-packager\.sh:\d+: downloads shaka-packager outside a workflow or a Dockerfile/],
+    [".github/actions/get-packager/action.yml", `name: get packager\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: |\n        ${down("/usr/local/bin/packager").split("\n").join("\n        ")}`, OUTSIDE(".github/actions/get-packager/action.yml")],
+    ["tools/get-packager.sh", `#!/bin/sh\n${down("/tmp/packager")}`, OUTSIDE("tools/get-packager.sh")],
     ["docker/Containerfile", `FROM debian:bookworm-slim\nRUN curl -sSL -o /usr/local/bin/packager ${PIN} \\\n  && chmod +x /usr/local/bin/packager\n`, /docker\/Containerfile:\d+: the downloaded packager must be checked/],
     ["docker/packager.dockerfile", `FROM debian:bookworm-slim\nRUN curl -sSL -o /usr/local/bin/packager ${PIN}\n`, /docker\/packager\.dockerfile:\d+: the downloaded packager must be checked/],
+    ["tools/get-packager.bash", `#!/bin/bash\n${down("/tmp/packager")}`, OUTSIDE("tools/get-packager.bash")],
+    ["tools/get-packager.ps1", "Invoke-WebRequest -Uri https://example.com/packager-win-x64.exe -OutFile packager.exe\n", /tools\/get-packager\.ps1:1: brings in a packager other than by the pinned download/],
+    ["deploy/docker-compose.yml", "services:\n  pack:\n    image: someorg/packager:v3\n", /deploy\/docker-compose\.yml:3: brings in a packager other than by the pinned download/],
+    ["Makefile", `packager:\n\t${down("bin/packager").split("\n")[0]}\n`, OUTSIDE("Makefile")],
+    ["scripts/package.json", `{ "scripts": { "postinstall": "curl -sSL -o bin/packager ${PIN}" } }\n`, /scripts\/package\.json:1: brings in a packager other than by the pinned download/],
   ]) { const g = await guardWith(null, null, { [file]: text }); assert.equal(g.code, 1, `${file}: ${g.out}`); assert.match(g.out, re); }
-  // legitimate text: accepted
+  // legitimate text: accepted (the tenth review: the version before refused the last five)
   const accepted = [
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: packager --version\n      - name: The generated view page is current")]],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      # https://github.com/shaka-project/shaka-packager/releases/tag/v3.9.3\n      - name: The generated view page is current")]],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - name: x\n        continue-on-error: false\n        run: echo x\n      - name: The generated view page is current")]],
-    [["service/Dockerfile", (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager")]],
-    [["service/Dockerfile", (t) => t.replace(/ \\\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "\nRUN chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version")]],
+    [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: packager --version\n${AT}`)]],
+    [[ST, (t) => t.replace(AT, `      # https://github.com/shaka-project/shaka-packager/releases/tag/v3.9.3\n${AT}`)]],
+    [[ST, (t) => t.replace(AT, `      - name: x\n        continue-on-error: false\n        run: echo x\n${AT}`)]],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager")]],
+    [[DF, (t) => t.replace(/ \\\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "\nRUN chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version")]],
+    [[ST, step("echo hi # shaka-packager runs below; see https://github.com/shaka-project/shaka-packager")]],
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -fsSL -o /usr/local/bin/packager ${PIN}`)]],
+    [[ST, step('echo "shaka-packager $(packager --version)"')]],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, 'FROM $1\nLABEL description="ffmpeg and shaka-packager v3.9.3"')]],
+    [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager "${PIN}"`)]],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager") + "FROM node:22-bookworm-slim\nCOPY --from=packager /usr/local/bin/packager /usr/local/bin/packager\n"]],
   ];
   for (const [edit] of accepted) { const g = await guardWith(null, edit); assert.equal(g.code, 0, `${edit[0]} accepted: ${g.out}`); assert.match(g.out, /all 9 shaka-packager downloads/); }
   // a workflow that does NOT download it may let a step fail on (a measurement that goes on past one browser)
@@ -189,6 +236,36 @@ test("the guard holds every shaka-packager mention to the pinned, checked downlo
   // a dangling Dockerfile link is no reason to fail
   const dangling = await (async () => { const d = await fs.mkdtemp(join(tmpdir(), "guard-")); try { await fs.cp(join(REPO, ".github"), join(d, ".github"), { recursive: true }); await fs.cp(join(REPO, "tools"), join(d, "tools"), { recursive: true }); await fs.mkdir(join(d, "service")); await fs.copyFile(join(REPO, "service", "Dockerfile"), join(d, "service", "Dockerfile")); await fs.symlink(join(d, "nowhere"), join(d, "Dockerfile.old")); const r = spawnSync(process.execPath, [join(d, "tools", "check-workflow-links.mjs")], { cwd: d, encoding: "utf8" }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; } finally { await fs.rm(d, { recursive: true, force: true }); } })();
   assert.equal(dangling.code, 0, dangling.out);
+});
+
+// The guard as CI runs it, in a git checkout (the tenth review: every test above runs it in a copy without .git, so a
+// change that made it read nothing in a checkout passed them all)
+test("the guard in a git checkout: what git ignores is left out, everything else read; a known download gone fails", async () => {
+  const d = await fs.mkdtemp(join(tmpdir(), "guard-git-"));
+  try {
+    await fs.cp(join(REPO, ".github"), join(d, ".github"), { recursive: true });
+    await fs.cp(join(REPO, "tools"), join(d, "tools"), { recursive: true, filter: (src) => !src.includes("node_modules") });
+    await fs.mkdir(join(d, "service"), { recursive: true }); await fs.copyFile(join(REPO, "service", "Dockerfile"), join(d, "service", "Dockerfile"));
+    await fs.writeFile(join(d, ".gitignore"), "ignored/\n");
+    const git = (...a) => { const r = spawnSync("git", a, { cwd: d, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); };
+    git("init", "-q"); git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "x");
+    const run = () => { const r = spawnSync(process.execPath, [join(d, "tools", "check-workflow-links.mjs")], { cwd: d, encoding: "utf8" }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+    const base = run(); assert.equal(base.code, 0, base.out); assert.match(base.out, /all 9 shaka-packager downloads/);
+    const bad = "curl -sSL -o p https://mirror.example.com/packager-linux-x64\n";
+    // in a folder git ignores: never committed, left out
+    await fs.mkdir(join(d, "ignored"), { recursive: true }); await fs.writeFile(join(d, "ignored", "get.sh"), bad);
+    const skipped = run(); assert.equal(skipped.code, 0, skipped.out);
+    // the same in a new file git does not ignore (not added yet), and once committed: read, refused
+    await fs.mkdir(join(d, "scripts"), { recursive: true }); await fs.writeFile(join(d, "scripts", "get.sh"), bad);
+    const fresh = run(); assert.equal(fresh.code, 1, fresh.out); assert.match(fresh.out, /scripts\/get\.sh:1: brings in a packager other than by the pinned download/);
+    git("add", "-A"); git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "y");
+    const committed = run(); assert.equal(committed.code, 1, committed.out); assert.match(committed.out, /scripts\/get\.sh:1:/);
+    await fs.rm(join(d, "scripts"), { recursive: true });
+    // a known download gone (the workflow changed, or the guard reading less than it should): refused
+    const st = join(d, ".github", "workflows", "site-test.yml");
+    await fs.writeFile(st, (await fs.readFile(st, "utf8")).replace(/\n\s+curl -sSL -o \/usr\/local\/bin\/packager [^\n]+\n\s+echo "[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c - \|\| exit 1[^\n]*/, ""));
+    const less = run(); assert.equal(less.code, 1, less.out); assert.match(less.out, /\.github\/workflows\/site-test\.yml: expected 1 pinned download of shaka-packager, read 0/);
+  } finally { await fs.rm(d, { recursive: true, force: true }); }
 });
 
 test("the guard accepts a link only when its FIRST parameter is a safe value and it names no other levels= or clip=", async () => {

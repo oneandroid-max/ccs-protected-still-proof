@@ -157,6 +157,16 @@ test("the token check accepts only Axinom's answers about the request, never one
   assert.match(comKeyCheck(COM), /^[0-9a-f]{16}$/); assert.equal(comKeyCheck(COM), comKeyCheck({ ...COM })); assert.notEqual(comKeyCheck(COM), comKeyCheck({ ...COM, key: other }));
 });
 
+// The limit per try AS WIRED by default (the tenth review: the test above passes its own signalFor, so a default that
+// waited ten times as long passed it too): no signalFor given, a silent server is cut at the limit itself
+test("the token check's own default cuts a silent server at the limit it is given, not later", async () => {
+  let started = 0; const t0 = Date.now();
+  const r = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, (url, init) => { started++; return new Promise((_, reject) => { const hold = setTimeout(() => {}, 10000); init.signal.addEventListener("abort", () => { clearTimeout(hold); reject(init.signal.reason); }); }); }, { tries: 1, timeoutMs: 100 });
+  const took = Date.now() - t0;
+  assert.deepEqual([r.accepted, r.reached, started], [false, false, 1]);
+  assert.ok(took >= 90 && took < 600, `cut at 100 ms by the default signal: ${took} ms`);
+});
+
 test("the pages use Axinom's licence service, certificate and PUBLIC token, the same in both, and the token unlocks only the public test key", async () => {
   const route1 = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
   const apple = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
@@ -837,6 +847,113 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   const aNow = await metaOf(A), keyA = aNow.fairplay.comKeyCheck === comKeyCheck(value2) ? value2 : corrected;
   const bf = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir: fresh, tools, checkKey: refuse, com: keyA });
   assert.deepEqual([bf.already, bf.failed, bf.mosaic, bf.status], [1, 1, "ready without its Apple form", "partial"], JSON.stringify(bf));
+});
+
+// A packager that fails only Apple's form (its 'cbcs' call); every other call goes to the real one.
+async function failFairPlayPackager() {
+  const f = join(tmp, "packager-fails-fairplay");
+  await fs.writeFile(f, `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process");\nif (process.argv.includes("cbcs")) { console.error("Apple's form could not be packaged (a test)"); process.exit(1); }\nprocess.exit(spawnSync(${JSON.stringify(tools.packager)}, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);\n`);
+  await fs.chmod(f, 0o755);
+  return f;
+}
+
+// The tenth review. (1) A renewal of the combined view's form that fails for any reason but the view's own output being
+// unreadable keeps the view and its form (a rebuild used to delete the form first and, the packaging failing again,
+// make none). (2) Every answer that keeps the view is written into its record with the reason, for the page (its "Try
+// again" said "being remade" while nothing was). (3) What no test caught: a form made without Axinom's acceptance
+// counts as a form; a real left-out entry beside a stale one; a picture the view DRAWS deleted while Axinom refuses
+// or no key is set. (4) A kept view's count is the pictures it draws.
+test("the combined view: a failed renewal keeps its form; every kept answer is recorded with its reason; a deleted picture always goes (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const KEY = await deriveKey("a test password, twelve+", toBase64(new Uint8Array(16).fill(11)), 1000), KEY_HEX = await exportKeyHex(KEY);
+  const siteDir = await fs.mkdtemp(join(tmp, "keep-"));
+  const upload = async (file) => { const f = join(tmp, "up-" + Math.random().toString(16).slice(2)); await fs.writeFile(f, await seal(KEY, await fs.readFile(file))); return f; };
+  const add = async (id, color) => { process.env.WORKER_BLOB_FILE = await upload(await solid(`keep-${id[0]}.png`, 320, 240, color)); return worker({ payload: { action: "add", id, name: id[0] + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, checkKey: acceptKey, com: COM }); };
+  const answer = (accepted, reached, message) => async () => ({ accepted, reached, status: reached ? (accepted ? 400 : 403) : 0, message });
+  const accept = answer(true, true, "Invalid license request. (a test)"), refuse = answer(false, true, "Invalid DRM message. The signature is invalid.");
+  const unreachable = answer(false, false, "Axinom could not be reached (3 tries): connect ECONNREFUSED (a test)");
+  const mosaic = (checkKey, com, tl = tools) => worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools: tl, ...(checkKey ? { checkKey } : {}), com });
+  const metaPath = join(siteDir, "mosaic", "meta.json.enc");
+  const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath))));
+  const readyIds = async () => (await readGallery(siteDir, KEY)).photos.filter((x) => x.status === "ready").map((x) => x.id);
+  const damage = async (id) => { const g = await readGallery(siteDir, KEY); g.photos.find((x) => x.id === id).prKidGuid = "00000000-0000-0000-0000-000000000000"; await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g))); };
+  const formKept = async (form, what) => { assert.deepEqual((await mosaicMeta()).fairplay, form, what + ": its form kept"); await fs.access(join(siteDir, "mosaic", form.master)); };
+  const keptJustNow = async (why) => { const k = (await mosaicMeta()).kept; assert.ok(k && Date.parse(k.at) > Date.now() - 120000, "recorded just now: " + JSON.stringify(k)); assert.match(k.why, why); };
+  const A = "a".repeat(24), B = "b".repeat(24), C = "c".repeat(24), F = "f".repeat(24), G = "e".repeat(24);
+  for (const [id, color] of [[A, "0xc0392b"], [B, "0x2980b9"]]) assert.equal((await add(id, color)).status, "ready");
+  const failing = { ...tools, packager: await failFairPlayPackager() };
+
+  // (1) a form made while Axinom could not be asked (unverified), renewed now that Axinom accepts the key, the
+  // packaging failing: the view and its form kept, the failure said and recorded
+  assert.equal((await mosaic(unreachable, COM)).status, "ready");
+  const unverified = (await mosaicMeta()).fairplay;
+  assert.equal(unverified.verified, false);
+  const r1 = await mosaic(accept, COM, failing);
+  assert.deepEqual([r1.status, r1.fairplay, r1.count], ["current", "failed", 2], JSON.stringify(r1));
+  await formKept(unverified, "a failed renewal of an unverified form");
+  await keptJustNow(/its new Apple form could not be made/);
+  // ... and a verified one with ten days left (less than the renewal margin); refused, kept too
+  assert.equal((await mosaic(accept, COM)).fairplay, "renewed");
+  assert.equal((await mosaicMeta()).kept, undefined, "a renewal that worked leaves no 'kept' note behind");
+  const m = await mosaicMeta();
+  await fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...m, fairplay: { ...m.fairplay, expires: new Date(Date.now() + 10 * 86400000).toISOString() } })));
+  const tenDays = (await mosaicMeta()).fairplay;
+  assert.equal(tenDays.verified, true);
+  const r2 = await mosaic(accept, COM, failing);
+  assert.deepEqual([r2.status, r2.fairplay], ["current", "failed"], JSON.stringify(r2));
+  await formKept(tenDays, "a failed renewal of a verified form with ten days left");
+  const r2b = await mosaic(refuse, COM);
+  assert.deepEqual([r2b.status, r2b.fairplay], ["current", "kept"], JSON.stringify(r2b));
+  await formKept(tenDays, "a refused renewal");
+  await keptJustNow(/its Apple form was not renewed: Axinom did not accept our key/);
+
+  // (2) a picture REALLY left out (its key id damaged in the list), the view's new form unverified: the page's "Try
+  // again" refused, out of reach, or with no key: kept as it is, its form untouched, the reason recorded; the count
+  // is the pictures it draws
+  assert.equal((await add(F, "0x16a085")).status, "ready");
+  await damage(F);
+  const r3 = await mosaic(unreachable, COM); // F joins: a view of other pictures, rebuilt; its new form made all the same
+  assert.deepEqual([r3.status, r3.skipped], ["ready", 1], JSON.stringify(r3));
+  const leftOutForm = (await mosaicMeta()).fairplay;
+  assert.equal(leftOutForm.verified, false);
+  for (const [gate, com, why] of [[refuse, COM, /rebuilding it would remove its Apple form, and Axinom did not accept our key/], [unreachable, COM, /rebuilding it would remove its Apple form, and Axinom could not be asked about our key/], [null, null, /rebuilding it would remove its Apple form, and no Axinom key is set/]]) {
+    const r = await mosaic(gate, com);
+    assert.deepEqual([r.status, r.fairplay, r.count], ["current", "kept", 2], JSON.stringify(r));
+    await formKept(leftOutForm, "an unverified form, Try again: " + why);
+    await keptJustNow(why);
+  }
+
+  // (3) a second left-out picture G, then deleted by the owner: only G's entry goes from the record; F's stays, the
+  // form kept (Axinom refusing), the page counting the view as current; asked again, still kept
+  assert.equal((await add(G, "0x8e44ad")).status, "ready");
+  await damage(G);
+  assert.equal((await mosaic(accept, COM)).status, "ready"); // G joins: rebuilt, with a verified form
+  const twoLeft = await mosaicMeta();
+  assert.deepEqual(twoLeft.skipped.map((x) => x.id).sort(), [F, G].sort());
+  await worker({ payload: { action: "delete", id: G, key: KEY_HEX }, siteDir, tools });
+  for (let i = 0; i < 2; i++) {
+    const r = await mosaic(refuse, COM);
+    assert.deepEqual([r.status, r.fairplay], ["current", "kept"], JSON.stringify(r));
+    const now = await mosaicMeta();
+    assert.deepEqual(now.skipped.map((x) => x.id), [F], "the real left-out entry stays, the stale one goes");
+    assert.deepEqual(now.fairplay, twoLeft.fairplay, "its form kept");
+    assert.equal(mosaicCurrent(now, await readyIds()), true, "the page counts it as current");
+  }
+
+  // (4) a picture the view DRAWS deleted, with no key at all or while Axinom refuses the key: the view is rebuilt
+  // without it whatever Axinom says (a deleted picture never stays visible)
+  await worker({ payload: { action: "delete", id: B, key: KEY_HEX }, siteDir, tools });
+  const r4 = await mosaic(null, null);
+  assert.equal(r4.status, "ready", JSON.stringify(r4));
+  assert.deepEqual((await mosaicMeta()).ids, [A], "no key: rebuilt without the deleted picture");
+  assert.equal((await add(C, "0xf39c12")).status, "ready");
+  assert.equal((await mosaic(accept, COM)).status, "ready"); // C joins, with a form
+  assert.ok((await mosaicMeta()).fairplay, "the view has a form again");
+  await worker({ payload: { action: "delete", id: C, key: KEY_HEX }, siteDir, tools });
+  const r5 = await mosaic(refuse, COM);
+  assert.equal(r5.status, "ready", JSON.stringify(r5));
+  assert.deepEqual((await mosaicMeta()).ids, [A], "Axinom refusing: rebuilt without the deleted picture");
+  notice("FairPlay combined view kept", "a failed renewal (unverified; verified with 10 days left) kept its form; Try again refused / out of reach / no key kept an unverified form, each recorded with its reason; a stale left-out entry dropped beside a real one; a deleted drawn picture rebuilt out with no key and while refused");
 });
 
 // The card job's command, run as the job runs it (a child process of tools/fairplay-card.mjs with the Axinom key
