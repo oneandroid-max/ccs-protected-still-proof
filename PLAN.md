@@ -294,6 +294,8 @@ device for it; no outside service is in the chain.
   - **Minor, each fixed:** the view's unchecked forms tested (rebuilt and made while Axinom was out of reach); the 20-second default tested as wired; the claim about the check's place withdrawn (above); a dead line in a test removed.
   - **Measured here:** 39 of 39 site tests with the real packager, none skipped; 15 of 15 service tests; the drive 83 of 83; the guard 9 of 9.
   - **Next:** the new test watched failing on `75fcb09`'s code (it must, or it proves nothing), the other breaks, CI, and a tenth review before the merge.
+  - **Watched failing (20:34Z):** 15 of 15 deliberate breaks caught on `35073c2`. One of them puts back the blocker's own old logic (the view's pictures counted by those it draws, as on `75fcb09`), and the new real-state test fails on it, as it must. **CI on `35073c2`:** site test, service test and drive passed (runs 38171631475, 38171633339, 38171626392). *These cover only what the tests reach; the tenth review is there for what they do not.*
+  - **Now (20:37Z):** the tenth review, on `75fcb09..35073c2`, is running. The merge waits until it comes back clean.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
