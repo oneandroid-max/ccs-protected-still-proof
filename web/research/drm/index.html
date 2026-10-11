@@ -60,7 +60,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 17:22 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-11 18:11 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -209,20 +209,21 @@
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = fp.token; log(`${tierName}: licence request sent with this clip's token`); }
     });
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type !== shaka.net.NetworkingEngine.RequestType.LICENSE) return;
-      const refused = fp ? axinomSays(response.headers) : ""; // Axinom answers a refusal with its reason in a header
-      if (refused) { set("r-lic", `refused by Axinom: ${refused}`, "bad"); log(`${tierName} licence refused by Axinom: ${refused}`); }
-      else { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${tierName} licence response: ${response.data.byteLength} bytes`); }
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${tierName} licence response: ${response.data.byteLength} bytes`); }
     });
-    // Every error the player raises is written down, so nothing fails silently.
+    // Every error the player raises is written down, so nothing fails silently. Axinom refuses an Apple licence
+    // with HTTP 400 or 403, which reaches the player as an error (never the response filter): its reason goes in
+    // the licence cell.
     let lastError = null;
-    player.addEventListener("error", (e) => { lastError = errText(e); log(`${tierName}: player error ${lastError}`); });
+    const refused = (d) => { const why = fp ? axinomReason(d) : ""; if (why) set("r-lic", `refused by Axinom: ${why}`, "bad"); return why; };
+    player.addEventListener("error", (e) => { refused((e && e.detail) || {}); lastError = errText(e); log(`${tierName}: player error ${lastError}`); });
     log(t.system === "clearkey" ? `${tierName}: no protection — the browser decrypts the card in its own code (control) …`
       : t.system === "fairplay" ? `${tierName}: asking for Apple's FairPlay …`
       : `${tierName}: asking for ${t.word} protection only (${t.levels.join(", ")}) …`);
     try {
       await player.load(manifest);
     } catch (e) {
+      refused(e);
       log(`${tierName}: not available here (error ${errText(e)})`);
       try { await player.destroy(); } catch (x) {} current = null;
       return "unavailable";

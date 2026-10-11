@@ -112,12 +112,30 @@ async function guardWith(extra, edit) {
   const d = await fs.mkdtemp(join(tmpdir(), "guard-"));
   await fs.cp(join(REPO, ".github"), join(d, ".github"), { recursive: true });
   await fs.cp(join(REPO, "tools"), join(d, "tools"), { recursive: true, filter: (src) => !src.includes("node_modules") });
+  await fs.mkdir(join(d, "service"), { recursive: true }); await fs.copyFile(join(REPO, "service", "Dockerfile"), join(d, "service", "Dockerfile"));
   if (extra) await fs.writeFile(join(d, ".github", "workflows", "zz-extra.yml"), `name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -sS "${extra}"\n`);
   if (edit) { const f = join(d, edit[0]); const before = await fs.readFile(f, "utf8"); const after = edit[1](before); assert.notEqual(after, before, "the edit changes " + edit[0]); await fs.writeFile(f, after); }
   const r = spawnSync(process.execPath, [join(d, "tools", "check-workflow-links.mjs")], { cwd: d, encoding: "utf8" });
   await fs.rm(d, { recursive: true, force: true });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
+// THE GUARD'S THIRD RULE (the sixth review: three of nine packager downloads were unpinned while the plan said
+// all were): every shaka-packager download is the pinned release, checked by its SHA-256 on the very next line.
+test("the guard holds every shaka-packager download to the pinned release, checked by its SHA-256 on the next line", async () => {
+  const PIN = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
+  const LATEST = "https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64";
+  assert.match((await guardWith(null)).out, /all 9 shaka-packager downloads are the pinned release, checked by its SHA-256/);
+  const cases = [
+    [[".github/workflows/card-fairplay.yml", (t) => t.replace(PIN, LATEST)], /card-fairplay\.yml:\d+: shaka-packager must come from the pinned release/],
+    [[".github/workflows/site-test.yml", (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -[^\n]*/, "")], /site-test\.yml:\d+: the downloaded packager must be checked against its SHA-256 on the very next line/],
+    [[".github/workflows/drm-package.yml", (t) => t.replace("7a3cf35ad146fd78", "0000000000000000")], /drm-package\.yml:\d+: the downloaded packager must be checked against its SHA-256/],
+    [["service/Dockerfile", (t) => t.replace(/ \\\n  && echo "[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -/, "")], /service\/Dockerfile:\d+: the downloaded packager must be checked against its SHA-256/],
+  ];
+  for (const [edit, re] of cases) { const r = await guardWith(null, edit); assert.equal(r.code, 1, `${edit[0]}: ${r.out}`); assert.match(r.out, re); }
+  const r = await guardWith(LATEST); // a new workflow fetching it any other way
+  assert.equal(r.code, 1, r.out); assert.match(r.out, /zz-extra\.yml:\d+: shaka-packager must come from the pinned release/);
+});
+
 test("the guard accepts a link only when its FIRST parameter is a safe value and it names no other levels= or clip=", async () => {
   const B = "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/";
   assert.equal((await guardWith(null)).code, 0, "the repository as it is passes");

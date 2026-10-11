@@ -105,8 +105,8 @@ export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }, {
 //   normal for the near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a
 //   solid colour), never for a keyframe's slice, which a decoder can show on its own.
 // - a sample that carries a keyframe's slice (NAL type 5) counts as a keyframe, whatever its flags say;
-// - and in any one sample, the slices with no encrypted block (a decoder reads them without the key) hold at
-//   most SAMPLE_OPEN_MAX bytes in all.
+// - and in any one sample, what a decoder reads without the key (slices with no encrypted block, whole, and the
+//   clear heads of the others) is at most SAMPLE_OPEN_MAX bytes in all.
 // Sample groups of encryption settings ('seig'), which can override a sample's records, are refused: our
 // packaging never writes them.
 export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
@@ -132,9 +132,9 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
         const len = data.readUIntBE(q, nalLen), type = data[q + nalLen] & 0x1f, nalEnd = q + nalLen + len;
         const isSlice = type >= 1 && type <= 5; // H.264's slice NAL units (5: a keyframe's)
         if (!isSlice && !(type >= 6 && type <= 12)) return null;
-        if (nalEnd <= clearEnd) { if (isSlice) out.push({ prot: 0, size: nalEnd - q, idr: type === 5 }); q = nalEnd; continue; } // a slice wholly in the clear counts as one with nothing encrypted
+        if (nalEnd <= clearEnd) { if (isSlice) out.push({ prot: 0, size: nalEnd - q, head: nalEnd - q, idr: type === 5 }); q = nalEnd; continue; } // a slice wholly in the clear counts as one with nothing encrypted
         if (!isSlice || clearEnd - q > SLICE_HEADER_MAX || nalEnd !== protEnd) return null;
-        out.push({ prot, size: nalEnd - q, idr: type === 5 }); slice = true; q = protEnd;
+        out.push({ prot, size: nalEnd - q, head: clearEnd - q, idr: type === 5 }); slice = true; q = protEnd;
       }
       if (prot > 0 && !slice) return null; // protected bytes that are no slice's
       pos = protEnd;
@@ -162,7 +162,7 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
       if (slices.some((x) => x.idr)) keyframe = true; // a keyframe's slice makes a keyframe, whatever the flags say
       if (keyframe) n.keyframes++;
       if (slices.some((x) => x.prot === 0)) n.clearSlices++;
-      const open = slices.filter((x) => x.prot < 16).reduce((a, x) => a + x.size, 0); // slices a decoder reads without the key
+      const open = slices.reduce((a, x) => a + (x.prot < 16 ? x.size : x.head), 0); // what a decoder reads without the key: slices with no encrypted block whole, the clear heads of the others
       if (open > n.openBytesMax) n.openBytesMax = open;
       if (open > SAMPLE_OPEN_MAX) n.tooOpen++;
       if (keyframe && slices.length && slices.every((x) => x.prot >= 16)) n.keyframesEncrypted++;
@@ -183,18 +183,20 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   if (n.uncovered) problems.push(`${n.uncovered} of ${n.samples} samples are not covered whole by their encryption records`);
   if (n.offSlice) problems.push(`${n.offSlice} of ${n.samples} samples have encryption records that do not follow their slices (more than ${SLICE_HEADER_MAX} clear bytes of a slice, protected bytes outside a slice, a protected range not ending with its slice, or a NAL unit our encoder never writes)`);
   if (n.clearSlices) problems.push(`${n.clearSlices} of ${n.samples} samples carry a slice wholly in the clear`);
-  if (n.tooOpen) problems.push(`${n.tooOpen} of ${n.samples} samples carry more than ${SAMPLE_OPEN_MAX} bytes of slices with no encrypted block (most: ${n.openBytesMax})`);
+  if (n.tooOpen) problems.push(`${n.tooOpen} of ${n.samples} samples carry more than ${SAMPLE_OPEN_MAX} bytes a decoder reads without the key (slices with no encrypted block, and the clear heads of the others; most: ${n.openBytesMax})`);
   if (n.samples && !n.keyframes) problems.push("no sample is marked as a keyframe");
   if (n.keyframesEncrypted !== n.keyframes) problems.push(`${n.keyframes - n.keyframesEncrypted} of ${n.keyframes} keyframes have a slice with no encrypted block`);
   const { uncovered, outside, offSlice, clearSlices, tooOpen, ...counts } = n;
   return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, ...counts };
 }
 const SLICE_HEADER_MAX = 64; // clear bytes of a slice's own head before its protected range (measured: 11 to 19)
-// Bytes per sample in slices with no encrypted block. Measured 2026-10-11 on 14 real encodes through
-// packageFairPlay: 20 to 30 with renderClip's own settings (one slice per frame: a solid colour, a 2x2 drawn at
-// 64x64, strips drawn at 1280x2 and 2x1280, CBR filler, access unit delimiters), 0 on noise and test patterns;
-// 122 with four slices per frame and 203 with eight. 256 holds all of them and refuses the fifth review's layout
-// of 400 slices of 15 protected bytes (12,000 bytes a decoder reads without the key).
+// Bytes per sample that a decoder reads without the key: slices with no encrypted block, whole, plus the clear
+// heads of the others. Measured 2026-10-11 on 17 real encodes through packageFairPlay: 11 to 30 with
+// renderClip's own settings (one slice per frame: solid colours, noise, test patterns, a 2x2 drawn at 64x64,
+// strips drawn at 1280x2 and 2x1280, CBR filler, access unit delimiters, heavy B-frames); 122 with four slices
+// per frame, 203 and 219 with eight, 364 with sixteen. 256 holds every encode up to eight slices, and refuses
+// the review's layouts: 400 slices of 15 protected bytes (10,000 bytes in the test's version) and 400 slices of
+// 64 clear bytes and 16 protected (25,600).
 export const SAMPLE_OPEN_MAX = 256;
 
 // Reads a fragmented MP4 the way a player does: the track's encryption settings ('schm', 'tenc'), the size of
@@ -334,7 +336,8 @@ export function checkFairPlayBytes(enc, clear, dec) {
     if (n.decryptedWrong) problems.push(`${n.decryptedWrong} of ${n.samples} samples decrypt with the form's own key to something other than the clip`);
     if (n.blocksLeftClear) problems.push(`${n.blocksLeftClear} of ${n.encryptedBlocks} blocks recorded as encrypted are the clip's own bytes: not encrypted`);
     if (n.clearBytesChanged) problems.push(`${n.clearBytesChanged} bytes recorded as clear differ from the clip's`);
-    if (n.samples && !n.encryptedBlocks) problems.push("no block of the form is encrypted");
+    if (!n.samples) problems.push("the form carries no samples");
+    else if (!n.encryptedBlocks) problems.push("no block of the form is encrypted");
   }
   return { ok: problems.length === 0, problems, ...n };
 }

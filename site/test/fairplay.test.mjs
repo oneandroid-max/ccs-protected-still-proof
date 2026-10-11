@@ -8,9 +8,9 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
-import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
+import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, checkKeyWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
 import { checkFairPlay, checkFairPlayBytes, verifyFairPlayBytes, readTrack, packageFairPlay, renderClip, SAMPLE_OPEN_MAX } from "../../service/lib/pipeline.mjs";
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
@@ -22,6 +22,8 @@ const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACK
 const COM = { id: "0e2c58d1-7c4b-4f3e-9a51-3d1f0b7e6a42", key: nodeRandom(32) }; // a throwaway communication key
 const OWN_LICENSE = "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense"; // an account's own licence address (a made-up prefix)
 const b64url = (s) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
+// the worker asks Axinom whether it accepts our key before it makes any Apple form; the tests answer for Axinom
+const acceptKey = async () => ({ accepted: true, reached: true, status: 400, message: "Invalid license request. (answered by the test)" });
 // on GitHub, what a test measured is also written as a notice on the run (readable without the log)
 const notice = (title, msg) => { if (process.env.GITHUB_ACTIONS === "true") console.log(`::notice title=${title}::${msg}`); };
 const unwrapKey = (comKey, kidHex, encB64) => { const d = createDecipheriv("aes-256-cbc", comKey, Buffer.from(kidHex, "hex")); d.setAutoPadding(false); return Buffer.concat([d.update(Buffer.from(encB64, "base64")), d.final()]).toString("hex"); };
@@ -94,21 +96,36 @@ test("a minted token: HS256 under the communication key, the content key encrypt
   assert.equal(kidToUuid("4060A865887842679CBF91AE5BAE1E72"), "4060a865-8878-4267-9cbf-91ae5bae1e72");
 });
 
-// The card job's check that Axinom accepts our account's token (the key id and the key value as a pair), from a
-// runner: a dummy request whose answer names the request when the token is good. Axinom's three answers below
-// were measured 2026-10-11 17:15Z (site/axinom.mjs).
-test("the token check asks Axinom with a dummy request and accepts only its answer about the request, never one about the token", async () => {
+// The check that Axinom accepts our account's key (the key id and the key value as a pair), from a runner: a
+// dummy request whose answer is about the request when the token is good, about the token when not. Axinom's
+// answers below were measured 2026-10-11 17:15Z and 18:03Z (site/axinom.mjs).
+test("the token check accepts only Axinom's answers about the request, never one about the token; out of reach is said so", async () => {
   const seen = [];
-  const reply = (message) => async (url, init) => { seen.push({ url, init }); return { status: 200, headers: new Headers(message === null ? {} : { "X-AxDRM-ErrorMessage": message }) }; };
+  const reply = (message) => async (url, init) => { seen.push({ url, init }); return { status: 400, headers: new Headers(message === null ? {} : { "X-AxDRM-ErrorMessage": message }) }; };
   const good = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply("Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."));
-  assert.equal(good.accepted, true);
+  assert.deepEqual([good.accepted, good.reached], [true, true]);
   assert.deepEqual([seen[0].url, seen[0].init.method, seen[0].init.headers["X-AxDRM-Message"], seen[0].init.body.length], [OWN_LICENSE, "POST", "TOKEN-1", TOKEN_CHECK_BODY_BYTES], "the token, to the account's address, with a dummy body");
+  // a good token's answer at the other body sizes measured: still about the request
+  for (const m of ["Invalid license request. License request total size is less than the expected header size.", "Invalid license request. The request body is missing."])
+    assert.equal((await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply(m))).accepted, true, m);
+  // about the token, or nothing: refused, with Axinom's words or the HTTP status
   for (const m of ["Invalid DRM message. The signature is invalid.", "License denied. The DRM message references the ID of an unknown communication key.", "", null]) {
     const r = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply(m));
-    assert.equal(r.accepted, false, `refused: ${JSON.stringify(m)}`); assert.ok(r.message.length > 0, "with Axinom's words, or the HTTP status");
+    assert.deepEqual([r.accepted, r.reached], [false, true], `refused: ${JSON.stringify(m)}`); assert.ok(r.message.length > 0);
   }
+  // Axinom out of reach: three tries, then said so plainly (never taken as accepted)
+  let tries = 0; const pauses = [];
+  const down = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, async () => { tries++; throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED (a test)") }); }, { pause: async (ms) => { pauses.push(ms); } });
+  assert.deepEqual([down.accepted, down.reached, tries, pauses], [false, false, 3, [2000, 4000]]);
+  assert.match(down.message, /^Axinom could not be reached \(3 tries\): connect ECONNREFUSED \(a test\)$/);
+  const before = seen.length;
   await assert.rejects(checkTokenWithAxinom("TOKEN-1", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense", reply("x")), /not one of Axinom's/);
-  assert.equal(seen.length, 5, "nothing is sent to an address that is not Axinom's");
+  assert.equal(seen.length, before, "nothing is sent to an address that is not Axinom's");
+  // the key itself, asked with a token for a throwaway key: signed with this key, naming its id, to its address
+  const asked = [];
+  const k = await checkKeyWithAxinom({ ...COM, license: OWN_LICENSE }, async (url, init) => { asked.push([url, init.headers["X-AxDRM-Message"]]); return { status: 400, headers: new Headers({ "X-AxDRM-ErrorMessage": "Invalid license request. (a test)" }) }; });
+  assert.equal(k.accepted, true); assert.equal(asked.length, 1); assert.equal(asked[0][0], OWN_LICENSE);
+  assert.equal(tokenSignedWith(asked[0][1], COM.key), true, "signed with our key"); assert.equal(b64url(asked[0][1].split(".")[1]).com_key_id, COM.id, "naming our key id");
   // a token's signature read back with the key, and the key's check value: both tell a corrected key VALUE
   // (the same key id) from the one a form was made with
   const token = mintToken(COM, newFairPlayIds().kid, newFairPlayIds().key), other = nodeRandom(32);
@@ -347,8 +364,11 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 15], idr: true }), ids), /1 of 2 keyframes have a slice with no encrypted block/],
     // 400 slices of 15 protected bytes in a frame that is not a keyframe: 10,000 bytes a decoder reads without
     // the key; 11 such slices (275 bytes) are already more than SAMPLE_OPEN_MAX
-    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 400 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes of slices with no encrypted block \(most: 10000\)/],
-    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 11 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes of slices with no encrypted block \(most: 275\)/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 400 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes a decoder reads without the key \(slices with no encrypted block, and the clear heads of the others; most: 10000\)/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[10, 900]], Array.from({ length: 11 }, () => [10, 15])] }), ids), /1 of 2 samples carry more than 256 bytes a decoder reads without the key \(slices with no encrypted block, and the clear heads of the others; most: 275\)/],
+    // the sixth review's: a keyframe of 400 slices, each encrypted, each with a 64-byte clear head: 25,600 bytes
+    // of slice data a decoder reads without the key
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [Array.from({ length: 400 }, () => [64, 16, 64]), [[10, 13]]] }), ids), /1 of 2 samples carry more than 256 bytes a decoder reads without the key \(slices with no encrypted block, and the clear heads of the others; most: 25600\)/],
     // a clear run holding a NAL unit our encoder never writes (20: a coded slice extension, which is picture)
     [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[30, 900]], [[30, 700]]], clearNal: 0x14 }), ids), /do not follow their slices/],
     // sample groups of encryption settings, in a fragment or in the movie's sample table
@@ -418,6 +438,9 @@ test("a keyframe of four slices with the real packager: every slice encrypted; o
   const slices = Array.from({ length: k }, (_, j) => [data.readUInt16BE(at + 18 + 6 * j), data.readUInt32BE(at + 20 + 6 * j)]);
   assert.equal(k, 4, "four slices: " + JSON.stringify(slices));
   assert.ok(slices.every(([, p]) => p >= 16), "each with an encrypted block: " + JSON.stringify(slices));
+  // and its bytes agree with its records, slice by slice (Apple's pattern starts again with each protected range)
+  const sliceBytes = await verifyFairPlayBytes(tools.packager, dir, ids);
+  assert.deepEqual(sliceBytes.problems, [], "four slices: the byte check passes");
   // slice 2 marked clear in its record: all its bytes counted clear, none protected
   const bad = Buffer.from(data), e = at + 18 + 6;
   bad.writeUInt16BE(slices[1][0] + slices[1][1], e); bad.writeUInt32BE(0, e + 2);
@@ -477,6 +500,15 @@ import(${JSON.stringify(new URL("../../service/lib/pipeline.mjs", import.meta.ur
   return f;
 }
 
+// A packager that encrypts Apple's form under another key than the one it was given: the records are all right
+// (key id, IV, layout), so only the bytes can tell. Only for the FairPlay call.
+async function wrongKeyPackager() {
+  const f = join(tmp, "packager-wrong-key");
+  await fs.writeFile(f, `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process");\nconst cbcs = process.argv.includes("cbcs");\nconst args = process.argv.slice(2).map((a) => cbcs && /^label=:key_id=[0-9a-f]{32}:key=[0-9a-f]{32}$/.test(a) ? a.replace(/:key=[0-9a-f]{32}$/, ":key=00112233445566778899aabbccddeeff") : a);\nprocess.exit(spawnSync(${JSON.stringify(tools.packager)}, args, { stdio: "inherit" }).status ?? 1);\n`);
+  await fs.chmod(f, 0o755);
+  return f;
+}
+
 // The byte check every Apple form now passes (the fifth review): the records say which blocks are encrypted, the
 // bytes must agree. A real form passes; a block recorded as encrypted but put back to the clip's own bytes, a
 // byte of a clear run changed, or a decryption with another key is refused.
@@ -496,6 +528,7 @@ test("the byte check: a real form passes; a block recorded as encrypted but left
   await exec(tools.packager, ["in=fp/video.mp4,stream=video,output=dec.mp4", "--enable_raw_key_decryption", "--keys", `key_id=${ids.kid}:key=${ids.key}`], { cwd: dir });
   const enc = await fs.readFile(join(dir, "fp", "video.mp4")), clear = await fs.readFile(join(dir, "clear.mp4")), dec = await fs.readFile(join(dir, "dec.mp4"));
   assert.deepEqual(checkFairPlayBytes(enc, clear, dec).problems, []);
+  assert.deepEqual(checkFairPlayBytes(Buffer.alloc(0), Buffer.alloc(0), Buffer.alloc(0)).problems, ["the form carries no samples"], "three empty files are no form");
   const e = readTrack(enc), c = readTrack(clear), first = e.samples[0], [cl] = first.rec[0];
   const at = first.r.at + cl, cat = c.samples[0].r.at + cl; // the keyframe's first protected byte, in each file
   const leftClear = Buffer.from(enc); clear.copy(leftClear, at, cat, cat + 16);
@@ -514,7 +547,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   const KEY_HEX = await exportKeyHex(KEY);
   const siteDir = await fs.mkdtemp(join(tmp, "site-"));
   const upload = async (file) => { const f = join(tmp, "up-" + Math.random().toString(16).slice(2)); await fs.writeFile(f, await seal(KEY, await fs.readFile(file))); return f; };
-  const add = async (id, file, com) => { process.env.WORKER_BLOB_FILE = await upload(file); return worker({ payload: { action: "add", id, name: id + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, com }); };
+  const add = async (id, file, com) => { process.env.WORKER_BLOB_FILE = await upload(file); return worker({ payload: { action: "add", id, name: id + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, checkKey: acceptKey, com }); };
   const A = "a".repeat(24), B = "b".repeat(24);
   // B is prepared BEFORE the key exists: no Apple form
   assert.equal((await add(B, await solid("blue.png", 480, 640, "0x1f4e8c"), null)).status, "ready");
@@ -542,7 +575,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   const a1 = await verify(A, [39, 174, 96], 640, 480);
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === A).fairplay, true);
   // a combined view made WITHOUT the key has no form, and is kept while the key is absent ...
-  const mosaic = (com) => worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, com });
+  const mosaic = (com) => worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: acceptKey, com });
   const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc")))));
   assert.equal((await mosaic(null)).status, "ready"); assert.equal((await mosaicMeta()).fairplay, null);
   assert.equal((await mosaic(null)).status, "current");
@@ -553,9 +586,9 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   await fs.access(join(siteDir, "mosaic", mm.fairplay.master)); await fs.access(join(siteDir, "mosaic", mm.fairplay.master.split("/")[0], "token.enc"));
   assert.equal((await mosaic(COM)).status, "current");
   // a page's request can never start the backfill (it has its own workflow and queue)
-  await assert.rejects(worker({ payload: { key: KEY_HEX, action: "fairplay" }, siteDir, tools, com: COM }), /unknown action/);
+  await assert.rejects(worker({ payload: { key: KEY_HEX, action: "fairplay" }, siteDir, tools, checkKey: acceptKey, com: COM }), /unknown action/);
   // the backfill: B gets its form; A (already has one) is left exactly as it is
-  const r = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM });
+  const r = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: COM });
   assert.deepEqual({ added: r.added, already: r.already, failed: r.failed }, { added: 1, already: 1, failed: 0 });
   await verify(B, [31, 78, 140], 480, 640);
   const a2 = await verify(A, [39, 174, 96], 640, 480);
@@ -563,7 +596,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === B).fairplay, true, "the list records it");
   // a second backfill changes nothing
   const counts = (r) => ({ added: r.added, already: r.already, failed: r.failed });
-  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 0, already: 2, failed: 0 });
+  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: COM })), { added: 0, already: 2, failed: 0 });
   // RENEWAL: a token close to its end, or made with another Axinom key, is renewed (a new form), the old one removed
   const metaPath = join(siteDir, "photos", A, "meta.json.enc");
   const m = JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath))));
@@ -575,35 +608,32 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(m.fairplay.comKeyCheck, comKeyCheck(COM), "the meta records the key's check value, never the key");
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), { ...m.fairplay, comKeyCheck: undefined }, COM), false, "a form with no check value recorded: remade");
   await fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...m, fairplay: { ...m.fairplay, expires: new Date(Date.now() + 3 * 86400000).toISOString() } })));
-  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 1, already: 1, failed: 0 }, "the expiring one is renewed");
+  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: COM })), { added: 1, already: 1, failed: 0 }, "the expiring one is renewed");
   const a3 = await verify(A, [39, 174, 96], 640, 480);
   assert.notEqual(a3.folder, a1.folder, "a new form"); await assert.rejects(fs.access(join(siteDir, "photos", A, a1.folder)), "the old form is gone");
   const OTHER = { id: "11111111-2222-3333-4444-555555555555", key: nodeRandom(32) };
-  const r2 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: OTHER });
+  const r2 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: OTHER });
   assert.deepEqual(counts(r2), { added: 2, already: 0, failed: 0 }, "another Axinom key: every form is remade under it");
   assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc"))))).fairplay.comKeyId, OTHER.id, "the combined view too");
   // the account's own licence address set: every form is remade for it, and records it
-  const r3 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: { ...OTHER, license: OWN_LICENSE } });
+  const r3 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: { ...OTHER, license: OWN_LICENSE } });
   assert.deepEqual(counts(r3), { added: 2, already: 0, failed: 0 }, "a new licence address: every form is remade for it");
   assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath)))).fairplay.license, OWN_LICENSE, "and records it");
   assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc"))))).fairplay.license, OWN_LICENSE, "the combined view too");
   // without the key the backfill refuses plainly
-  await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: null }), /not set/);
+  await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: acceptKey, com: null }), /not set/);
   // a picture whose form fails to package is still ready for everything else
   process.env.WORKER_BLOB_FILE = await upload(await solid("grey.png", 320, 240, "0x7f8c8d"));
-  const broken = await worker({ payload: { action: "add", id: "c".repeat(24), name: "c.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: tools.packager }, com: { ...COM, key: Buffer.alloc(31) } });
+  const broken = await worker({ payload: { action: "add", id: "c".repeat(24), name: "c.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: tools.packager }, checkKey: acceptKey, com: { ...COM, key: Buffer.alloc(31) } });
   assert.equal(broken.status, "ready", "a key the token cannot be made with leaves the picture ready elsewhere");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "c".repeat(24)).fairplay, false);
   assert.ok(!(await fs.readdir(join(siteDir, "photos", "c".repeat(24)))).some((f) => /^fp/.test(f)), "and no half-made Apple form is left behind");
   // a packager that encrypts Apple's form under another key than the one it was given: the records are all
   // right (key id, IV, layout), so only the bytes can tell; the byte check refuses the form
-  const wrongKeyPackager = join(tmp, "packager-wrong-key");
-  await fs.writeFile(wrongKeyPackager, `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process");\nconst cbcs = process.argv.includes("cbcs");\nconst args = process.argv.slice(2).map((a) => cbcs && /^label=:key_id=[0-9a-f]{32}:key=[0-9a-f]{32}$/.test(a) ? a.replace(/:key=[0-9a-f]{32}$/, ":key=00112233445566778899aabbccddeeff") : a);\nprocess.exit(spawnSync(${JSON.stringify(tools.packager)}, args, { stdio: "inherit" }).status ?? 1);\n`);
-  await fs.chmod(wrongKeyPackager, 0o755);
   process.env.WORKER_BLOB_FILE = await upload(await solid("teal.png", 320, 240, "0x16a085"));
   const logged = [], consoleLog = console.log; let wrongKey;
   console.log = (...a) => { logged.push(a.join(" ")); };
-  try { wrongKey = await worker({ payload: { action: "add", id: "d".repeat(24), name: "d.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: wrongKeyPackager }, com: COM }); }
+  try { wrongKey = await worker({ payload: { action: "add", id: "d".repeat(24), name: "d.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: await wrongKeyPackager() }, checkKey: acceptKey, com: COM }); }
   finally { console.log = consoleLog; }
   assert.equal(wrongKey.status, "ready", "the picture is ready elsewhere");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "d".repeat(24)).fairplay, false, "but gets no Apple form");
@@ -613,12 +643,126 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   process.env.WORKER_BLOB_FILE = await upload(await solid("plum.png", 320, 240, "0x8e44ad"));
   logged.length = 0; console.log = (...a) => { logged.push(a.join(" ")); };
   let leftClear;
-  try { leftClear = await worker({ payload: { action: "add", id: "e".repeat(24), name: "e.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: await clearBytesPackager() }, com: COM }); }
+  try { leftClear = await worker({ payload: { action: "add", id: "e".repeat(24), name: "e.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: await clearBytesPackager() }, checkKey: acceptKey, com: COM }); }
   finally { console.log = consoleLog; }
   assert.equal(leftClear.status, "ready");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "e".repeat(24)).fairplay, false, "no Apple form for bytes left clear");
   assert.ok(logged.some((l) => /no FairPlay form for e{24}: the FairPlay form failed its byte check: .*blocks recorded as encrypted are the clip's own bytes/.test(l)), "refused by the byte check: " + logged.filter((l) => /FairPlay/.test(l)).join(" | "));
   notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour; the token inside the form's folder); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; an expiring token renewed (1/1/0), another Axinom key: 2/0/0; a page request for the backfill refused; a bad key left the picture ready without a form`);
+});
+
+// Before any Apple form is made or replaced, the worker asks Axinom whether it accepts our key (a token for a
+// throwaway key): a wrong key value, or Axinom out of reach, must never replace a picture's working token. The
+// sixth review's case: the weekly backfill (06:17) ran before the card job (06:41) could notice a bad key.
+test("the worker asks Axinom before making or replacing any Apple form: a refusal replaces nothing (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const KEY = await deriveKey("a test password, twelve+", toBase64(new Uint8Array(16).fill(5)), 1000), KEY_HEX = await exportKeyHex(KEY);
+  const siteDir = await fs.mkdtemp(join(tmp, "gate-"));
+  const upload = async (file) => { const f = join(tmp, "up-" + Math.random().toString(16).slice(2)); await fs.writeFile(f, await seal(KEY, await fs.readFile(file))); return f; };
+  const asked = [];
+  const answer = (accepted, message) => async (com) => { asked.push(com.id); return { accepted, reached: true, status: accepted ? 400 : 403, message }; };
+  const refuse = answer(false, "Invalid DRM message. The signature is invalid.");
+  const add = async (id, file, checkKey) => { process.env.WORKER_BLOB_FILE = await upload(file); return worker({ payload: { action: "add", id, name: id + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, checkKey, com: COM }); };
+  const metaOf = async (id) => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "photos", id, "meta.json.enc")))));
+  const A = "a".repeat(24), B = "b".repeat(24);
+  assert.equal((await add(A, await solid("gate-a.png", 320, 240, "0xd35400"), answer(true, "Invalid license request. (a test)"))).status, "ready");
+  const formA = (await metaOf(A)).fairplay;
+  assert.ok(formA && formA.master, "A has its Apple form");
+  // a new picture while Axinom refuses the key: ready, without an Apple form, the reason in the log
+  const logged = [], consoleLog = console.log; console.log = (...a) => { logged.push(a.join(" ")); };
+  let rB; try { rB = await add(B, await solid("gate-b.png", 320, 240, "0x2c3e50"), refuse); } finally { console.log = consoleLog; }
+  assert.equal(rB.status, "ready");
+  assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === B).fairplay, false, "no Apple form for B");
+  assert.ok(logged.some((l) => /no FairPlay form for b{24}: Axinom does not accept our key \(key id [0-9a-f-]{36}\): Invalid DRM message\. The signature is invalid\./.test(l)), logged.join(" | "));
+  // the backfill with a corrected key value (the same key id) would remake every form; Axinom refuses that key,
+  // so the run stops before replacing anything: A keeps its working form
+  const corrected = { ...COM, key: nodeRandom(32) };
+  asked.length = 0;
+  await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: refuse, com: corrected }), /Axinom does not accept our key \(key id [0-9a-f-]{36}\): Invalid DRM message\. The signature is invalid\.; no Apple form was made or replaced/);
+  assert.equal(asked.length, 1, "asked once");
+  assert.deepEqual((await metaOf(A)).fairplay, formA, "A's form is untouched");
+  assert.deepEqual((await fs.readdir(join(siteDir, "photos", A))).filter((f) => /^fp/.test(f)), [formA.master.split("/")[0]], "its folder still there, alone");
+  // accepted: one question for the whole run, however many forms it makes (A renewed for the new value, B added)
+  asked.length = 0;
+  const r = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: answer(true, "Invalid license request. (a test)"), com: corrected });
+  assert.deepEqual([r.added, r.failed], [2, 0], JSON.stringify(r)); assert.equal(asked.length, 1, "one question for the whole run");
+  // nothing to make or replace: Axinom is not asked at all
+  asked.length = 0;
+  const again = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: refuse, com: corrected });
+  assert.deepEqual([again.added, again.already, again.failed, again.mosaic], [0, 2, 0, "current"], JSON.stringify(again)); assert.equal(asked.length, 0, "not asked when every form is good");
+});
+
+// The card job's command, run as the job runs it (a child process of tools/fairplay-card.mjs with the Axinom key
+// in its environment), with Axinom's answer stood in for (a module loaded first replaces fetch): accepted, it
+// ends well; refused, or out of reach, it ends red (exit code 1) with Axinom's words, and never prints the key.
+test("the card job's command asks Axinom about its token and ends red on a refusal or when Axinom is out of reach (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const stub = join(tmp, "stub-axinom.mjs");
+  await fs.writeFile(stub, `const mode = process.env.STUB_AXINOM;
+globalThis.fetch = async (url, init) => {
+  if (mode === "down") throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED (a test)") });
+  const message = mode === "accept" ? "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0." : "Invalid DRM message. The signature is invalid.";
+  return new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": message } });
+};
+`);
+  const out = await fs.mkdtemp(join(tmp, "cli-card-")), own = await fs.mkdtemp(join(tmp, "cli-own-"));
+  const env = { ...process.env, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: tools.packager };
+  const go = (mode) => { const r = spawnSync(process.execPath, ["--import", pathToFileURL(stub).href, join(REPO, "tools", "fairplay-card.mjs"), "--out", out, "--own", own], { encoding: "utf8", env: { ...env, STUB_AXINOM: mode } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+  const noKey = (r) => { for (const v of [COM.key.toString("base64"), COM.key.toString("hex")]) assert.ok(!r.out.includes(v), "the key is never printed"); };
+  let r = go("accept");
+  assert.equal(r.code, 0, r.out); noKey(r);
+  assert.match(r.out, new RegExp(`Axinom accepts the own card's token: key id ${COM.id} and its key value are a pair it knows`));
+  assert.ok(JSON.parse(await fs.readFile(join(own, "current.json"), "utf8")).folder, "the own card was made");
+  r = go("refuse"); // the card is current now: still asked
+  assert.equal(r.code, 1, r.out); noKey(r);
+  assert.match(r.out, new RegExp(`Axinom REFUSED the own card's token \\(key id ${COM.id}\\): Invalid DRM message\\. The signature is invalid\\.`));
+  r = go("down");
+  assert.equal(r.code, 1, r.out); noKey(r);
+  assert.match(r.out, new RegExp(`Axinom could not be asked about the own card's token \\(key id ${COM.id}\\): Axinom could not be reached \\(3 tries\\): connect ECONNREFUSED \\(a test\\)`));
+});
+
+// Axinom refuses a licence with HTTP 400 or 403 and its reason in a header; Shaka hands the page that response as
+// an error (6007 wrapping 1001, the headers in data[3]), never through the response filter. Each page reads the
+// reason with its own code (read from the page, never copied) and puts it in the licence cell.
+test("the pages put Axinom's reason for a refused licence in the licence cell, read from the player's error", async () => {
+  const WHY = "License denied. The DRM message references the ID of an unknown communication key.";
+  const httpError = { category: 1, code: 1001, data: ["https://x.drm-fairplay-licensing.axprod.net/AcquireLicense", 403, "", { "x-axdrm-errormessage": WHY }, 2] };
+  const licenceError = { category: 6, code: 6007, data: [httpError] };
+  const helpersOf = (page) => page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
+  for (const f of ["web/research/apple/index.html", "web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const page = await fs.readFile(join(REPO, f), "utf8");
+    const axinomReason = new Function(`${helpersOf(page)}\nreturn axinomReason;`)();
+    assert.equal(axinomReason(licenceError), WHY, `${f}: a licence error wrapping the HTTP error`);
+    assert.equal(axinomReason(httpError), WHY, `${f}: the HTTP error itself`);
+    assert.equal(axinomReason({ code: 6007, data: [{ code: 1001, data: ["u", 500, "", {}] }] }), "", `${f}: no reason without the header`);
+    assert.equal(axinomReason({}), "", `${f}: nothing`);
+    if (f.includes("apple")) continue;
+    // the route-1 page and the views built from it: the error listener and the failed load both fill the cell
+    const line = page.match(/^ *const refused = \(d\) => \{ const why = fp \? axinomReason\(d\) : ""; if \(why\) set\("r-lic", `refused by Axinom: \$\{why\}`, "bad"\); return why; \};$/m);
+    assert.ok(line, `${f}: a refusal goes in the licence cell`);
+    const sets = [];
+    new Function("fp", "axinomReason", "set", `${line[0]}\nreturn refused;`)({}, axinomReason, (id, text) => sets.push([id, text]))(licenceError);
+    assert.deepEqual(sets, [["r-lic", "refused by Axinom: " + WHY]], f);
+    assert.match(page, /player\.addEventListener\("error", \(e\) => \{ refused\(\(e && e\.detail\) \|\| \{\}\);/, `${f}: from the player's error event`);
+    assert.match(page, /\} catch \(e\) \{\n\s+refused\(e\);\n\s+log\(`\$\{tierName\}: not available here/, `${f}: and from a failed load`);
+  }
+  // the Apple check page: its own protectedPlay, run with a stand-in player that fails the way Shaka does
+  const page = await fs.readFile(join(REPO, "web/research/apple/index.html"), "utf8");
+  const from = page.indexOf("  async function protectedPlay("), to = page.indexOf("\n  await protectedPlay(", from);
+  assert.ok(from > 0 && to > from, "protectedPlay is where this test reads it");
+  for (const how of ["the load fails", "an error event"]) {
+    const sets = [];
+    const shaka = { net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } }, Player: class {
+      constructor() { this.on = {}; } async attach() {} configure() {}
+      getNetworkingEngine() { return { registerRequestFilter() {}, registerResponseFilter() {} }; }
+      addEventListener(type, f) { this.on[type] = f; }
+      async load() { if (how === "an error event") { this.on.error({ detail: licenceError }); return; } throw licenceError; }
+      drmInfo() { return null; } } };
+    const protectedPlay = new Function("shaka", "$", "CERT", "log", "set", "watch", "TOKEN", "LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+      shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, (id, text) => sets.push([id, text]), () => {}, "T", "https://drm-fairplay-licensing.axprod.net/AcquireLicense");
+    await protectedPlay("vo", "o", "u", "our card, our account (protected)");
+    assert.ok(sets.some(([id, text]) => id === "o-lic" && text === "refused by Axinom: " + WHY), `${how}: the licence cell names Axinom's reason: ${JSON.stringify(sets)}`);
+  }
 });
 
 test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key, our IV, decrypted back two ways to exactly the card (needs shaka-packager)", async (t) => {
@@ -639,6 +783,7 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
   assert.ok(info.byteCheck.encryptedBlocks > 0 && info.byteCheck.blocksLeftClear === 0 && info.byteCheck.decryptedWrong === 0, "the card passes the byte check: " + JSON.stringify(info.byteCheck));
   await assert.rejects(buildFairPlayCard({ tools: { ...tools, packager: await clearBytesPackager() }, outDir: await fs.mkdtemp(join(tmp, "card-clear-")) }), /the card's FairPlay form failed its byte check: .*blocks recorded as encrypted are the clip's own bytes/, "a card whose bytes were left clear is refused by the byte check");
+  await assert.rejects(buildFairPlayCard({ tools: { ...tools, packager: await wrongKeyPackager() }, outDir: await fs.mkdtemp(join(tmp, "card-wrong-")) }), /the card's FairPlay form failed its byte check: .*decrypt with the form's own key to something other than the clip/, "a card encrypted under another key is refused by the byte check");
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);
   notice("FairPlay card", `${info.keyUri}; ${info.bytes} bytes; decryptCheck ${JSON.stringify(info.decryptCheck)}; ${info.packager}`);

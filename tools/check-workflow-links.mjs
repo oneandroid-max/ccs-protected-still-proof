@@ -20,6 +20,9 @@
 // no secret, nothing uploaded, no capture, running no tool but itself and this guard, and the drive file
 // pinned by content below (2026-10-11: the second review asked for the drive's checks in CI).
 //
+// THIRD RULE (2026-10-11, the sixth review): every shaka-packager download, in every workflow and in
+// service/Dockerfile, is the pinned release, checked against its SHA-256 on the very next line.
+//
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -136,10 +139,29 @@ const walker = code(read("tools/walk-site.mjs"));
 const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicEncrypt(");
 if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
 
+// THIRD RULE (2026-10-11, the sixth review: three of nine downloads were left unpinned while the plan said all
+// were pinned): shaka-packager is the one program the workflows fetch and run, on pictures among other things.
+// Every line that names its releases, in every workflow and in service/Dockerfile, must download the pinned
+// release, and the very next line must check the downloaded file against its SHA-256 before anything runs it.
+const PACKAGER_URL = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
+const PACKAGER_SHA256 = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
+let downloads = 0;
+for (const f of [...readdirSync(DIR).filter((x) => /\.ya?ml$/.test(x)).map((x) => join(DIR, x)), "service/Dockerfile"]) {
+  let text; try { text = read(f); } catch { continue; } // no Dockerfile, no download in it
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
+    if (/^\s*#/.test(line) || !/shaka-packager\/releases|packager-(linux|mac|win)/i.test(line)) return;
+    downloads++;
+    const out = (line.match(/\s-o\s+(\S+)/) || [])[1];
+    if (!line.includes(PACKAGER_URL)) bad.push(`${f}:${i + 1}: shaka-packager must come from the pinned release (${PACKAGER_URL})`);
+    if (!out || !(lines[i + 1] || "").includes(`echo "${PACKAGER_SHA256}  ${out}" | sha256sum -c -`)) bad.push(`${f}:${i + 1}: the downloaded packager must be checked against its SHA-256 on the very next line (echo "${PACKAGER_SHA256.slice(0, 12)}…  <file>" | sha256sum -c -)`);
+  });
+}
+
 if (bad.length) {
-  console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site:`);
+  console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site, ${downloads} packager downloads:`);
   for (const b of bad) console.error("  " + b);
   if (bad.some((b) => /does not ask for the test card/.test(b))) console.error(`Add one of ${SAFE_VALUES.join(", ")} as the FIRST parameter of each link's query.`);
   process.exit(1);
 }
-console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards`);
+console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards; all ${downloads} shaka-packager downloads are the pinned release, checked by its SHA-256`);

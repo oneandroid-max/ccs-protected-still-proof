@@ -39,7 +39,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
-          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - # the v3.9.3 release's binary, pinned: nothing else runs on the pictures
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
           sudo chmod +x /usr/local/bin/packager && packager --version
       - name: Prepare the picture on the current tip of main and commit; refresh and redo if the push races
         env:
@@ -80,7 +80,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
-          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - # the v3.9.3 release's binary, pinned: nothing else runs on the pictures
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
           sudo chmod +x /usr/local/bin/packager && packager --version
       - name: Make the combined view on the current tip of main and commit; refresh and redo if the push races
         env:

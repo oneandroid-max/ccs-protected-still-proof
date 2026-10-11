@@ -17,6 +17,7 @@
 // browser's cached copy can never pair an older video with a newer token (Pages caches ten minutes).
 //   node tools/fairplay-card.mjs                 writes web/research/drm/card-fairplay/ (and -own/)
 //   node tools/fairplay-card.mjs --out <dir>     writes the public form there instead (tests)
+//   ... --own <dir>                              with the Axinom key set, the own-account form there (tests)
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -123,19 +124,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const outDir = at > 0 ? process.argv[at + 1] : join(REPO, "web", "research", "drm", "card-fairplay");
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir }), null, 2));
-  if (at < 0) {
-    const ownDir = join(REPO, "web", "research", "drm", "card-fairplay-own");
+  const ownAt = process.argv.indexOf("--own");
+  if (at < 0 || ownAt > 0) {
+    const ownDir = ownAt > 0 ? process.argv[ownAt + 1] : join(REPO, "web", "research", "drm", "card-fairplay-own");
     if (!process.env.AXINOM_COM_KEY_ID && !process.env.AXINOM_COM_KEY) console.log("the Axinom key is not set: no own-account form of the card");
     else {
       const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(join(REPO, "site"))).fairplayLicense); // fails plainly when malformed
       if (await ownCardCurrent(ownDir, com)) console.log("the own-account form of the card is current: unchanged");
       else { await fs.mkdir(ownDir, { recursive: true }); console.log(JSON.stringify(await buildOwnCard({ tools, root: ownDir, com }), null, 2)); }
-      // Axinom asked, from here, whether it accepts the card's token: the key id and the key value as a pair, at
-      // the account's address. A refusal stops the job (red) with Axinom's own words; the key is never printed.
+      // Axinom asked, from here, whether it accepts the card's token: the key id and the key value as a pair (not
+      // the address: any prefix answers alike). A refusal, or Axinom out of reach after its retries, stops the job
+      // (red, nothing committed) with Axinom's own words; the key is never printed.
       const cur = JSON.parse(await fs.readFile(join(ownDir, "current.json"), "utf8"));
       const answer = await checkTokenWithAxinom((await fs.readFile(join(ownDir, cur.folder, "token.txt"), "utf8")).trim(), com.license);
-      if (!answer.accepted) { console.log(`Axinom REFUSED the own card's token (key id ${com.id}, at ${com.license}): ${answer.message}`); process.exitCode = 1; }
-      else console.log(`Axinom accepts the own card's token: key id ${com.id} and its key value match, at ${com.license} (its answer to a dummy request: "${answer.message}")`);
+      if (!answer.reached) { console.log(`Axinom could not be asked about the own card's token (key id ${com.id}): ${answer.message}`); process.exitCode = 1; }
+      else if (!answer.accepted) { console.log(`Axinom REFUSED the own card's token (key id ${com.id}): ${answer.message}`); process.exitCode = 1; }
+      else console.log(`Axinom accepts the own card's token: key id ${com.id} and its key value are a pair it knows (its answer to a dummy request: "${answer.message}"). That proves the key pair only; a device proves the rest.`);
     }
   }
 }

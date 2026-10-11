@@ -78,7 +78,7 @@
   const $ = (id) => document.getElementById(id);
   const set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 17:22 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address, Axinom's reason when it refuses + clear control)";
+  const PAGE_VERSION = "2026-10-11 18:11 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address, Axinom's reason in the licence line + clear control)";
   set("r-ver", PAGE_VERSION);
   set("r-ua", navigator.userAgent);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
@@ -154,12 +154,12 @@
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = token; log(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
     });
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type !== shaka.net.NetworkingEngine.RequestType.LICENSE) return;
-      const refused = axinomSays(response.headers); // Axinom answers a refusal with its reason in a header
-      if (refused) { set(p + "-lic", "refused by Axinom: " + refused, "bad"); log(what + ": licence refused by Axinom: " + refused); }
-      else { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
     });
-    player.addEventListener("error", (e) => { const d = e.detail || {}; const why = axinomReason(d); log(what + ": player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "") + (why ? "; Axinom: " + why : "")); });
+    // Axinom refuses with HTTP 400 or 403, which reaches the player as an error (never the response filter):
+    // its reason goes in the licence cell
+    const refused = (d) => { const why = axinomReason(d); if (why) set(p + "-lic", "refused by Axinom: " + why, "bad"); return why; };
+    player.addEventListener("error", (e) => { const d = e.detail || {}; const why = refused(d); log(what + ": player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "") + (why ? "; Axinom: " + why : "")); });
     try {
       await player.load(url);
       const info = player.drmInfo();
@@ -168,8 +168,9 @@
       v.play().catch((e) => log(what + ": play() refused: " + e.message));
       watch(v, p + "-play");
     } catch (e) {
+      const why = refused(e);
       set(p + "-play", "could not load: error " + (e.code || e.message), "bad");
-      log(what + ": load failed, error " + (e.code || e.message) + (e.data && e.data[0] && e.data[0].code ? " (inner " + e.data[0].code + ")" : ""));
+      log(what + ": load failed, error " + (e.code || e.message) + (e.data && e.data[0] && e.data[0].code ? " (inner " + e.data[0].code + ")" : "") + (why ? "; Axinom: " + why : ""));
     }
   }
   await protectedPlay("vp", "p", PROTECTED, "film (protected)");

@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { importKeyHex, open, seal, sealText, openText, fromBase64, toHex, randomBytes } from "./crypto.js";
 import { renderClip, packageClip, checkBoxes, newProtectionIds, probe, packageFairPlay, checkFairPlay, verifyFairPlayBytes } from "../service/lib/pipeline.mjs";
-import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, comKeyCheck, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
+import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, comKeyCheck, checkKeyWithAxinom, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
 import { run as execFile } from "../service/lib/util.mjs";
 import { jpegOrientation } from "../service/lib/exif.mjs";
 import { sniffImage } from "../service/lib/util.mjs";
@@ -28,6 +28,16 @@ const OUTPUTS = ["widevine.mpd", "video-widevine.mp4", "playready.mpd", "video-p
 const log = (m) => console.log(`${new Date().toISOString()} ${m}`);
 const FP_FILES = ["master.m3u8", "video.m3u8", "video.mp4", "token.enc"];
 export const TOKEN_RENEW_DAYS = 14; // a token with less than this left is renewed (the weekly backfill run does it)
+
+// Whether Axinom accepts our key, asked at most once per run and only when an Apple form is about to be made
+// (checkKeyWithAxinom: a token for a throwaway key). A wrong key value, or Axinom out of reach, must never
+// replace a picture's working token: the backfill stops before replacing anything, a new picture is readied
+// without its Apple form, and the combined view gets none in that run.
+export function keyGate(com, checkKey = checkKeyWithAxinom) {
+  let answer = null;
+  return async () => { if (!answer) answer = await checkKey(com); return answer; };
+}
+const refusal = (com, answer) => `Axinom does not accept our key (key id ${com.id}): ${answer.message}`;
 
 // Apple's FairPlay form of the clip in `work` (work/clip.mp4), checked, then written to `outDir` as ONE
 // folder, fp-<8 hex>/: the HLS files as they are (their samples are encrypted under a key that only the
@@ -144,7 +154,7 @@ async function stillFromOutput(tools, key, dir, kidHex, work, i) {
 
 // Builds site/mosaic/: the combined view of every ready picture, packaged and sealed exactly like a
 // single picture, plus its sealed layout (which picture is where, for tapping and for the list).
-export async function buildMosaic({ siteDir, key, tools, com = null }) {
+export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com ? keyGate(com) : null }) {
   const gallery = await readGallery(siteDir, key);
   const out = join(siteDir, "mosaic");
   const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
@@ -199,7 +209,9 @@ export async function buildMosaic({ siteDir, key, tools, com = null }) {
     for (const f of OUTPUTS) await fs.writeFile(join(out, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
     let fairplay = null;
     if (com) {
-      try { fairplay = await addFairPlay({ tools, work, outDir: out, key, com }); log("combined view: FairPlay form added"); }
+      const answer = await keyOk();
+      if (!answer.accepted) log(`combined view: no FairPlay form — ${refusal(com, answer)}`);
+      else try { fairplay = await addFairPlay({ tools, work, outDir: out, key, com }); log("combined view: FairPlay form added"); }
       catch (e) { log(`combined view: no FairPlay form — ${String(e.message || e).slice(0, 300)}`); }
     }
     const meta = { kind: "mosaic", version: MOSAIC_VERSION, width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
@@ -215,10 +227,12 @@ export async function buildMosaic({ siteDir, key, tools, com = null }) {
 // The combined view's Apple form renewed from the view's OWN protected output (its still read back the way
 // a picture's is), so a token running out never needs the whole view rebuilt (a rebuild needs Google's key
 // server for its Widevine form). "current" when its form is good, "renewed", or "none" without a view.
-async function refreshMosaicFairPlay({ siteDir, key, tools, com }) {
+async function refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }) {
   const out = join(siteDir, "mosaic"), metaPath = join(out, "meta.json.enc");
   let meta; try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); } catch { return "none"; }
   if (await fairPlayCurrent(out, meta.fairplay, com)) return "current";
+  const answer = await keyOk();
+  if (!answer.accepted) throw new Error(refusal(com, answer) + "; the combined view's Apple form was left as it was");
   const work = await fs.mkdtemp(join(tmpdir(), "site-fp-mosaic-"));
   try {
     const s = await stillFromOutput(tools, key, out, String(meta.prKidGuid || "").replace(/-/g, "").toLowerCase(), work, 0);
@@ -234,7 +248,7 @@ async function refreshMosaicFairPlay({ siteDir, key, tools, com }) {
 // Axinom key, or its token running out), from the picture's own protected output (its still, read back as
 // the combined view reads it, made into a clip again), then remakes the combined view when it needs the
 // same. A picture that cannot be read back is reported, not hidden.
-export async function backfillFairPlay({ siteDir, key, tools, com }) {
+export async function backfillFairPlay({ siteDir, key, tools, com, keyOk = com ? keyGate(com) : null }) {
   if (!com) throw new Error("the Axinom communication key is not set: nothing to add");
   const gallery = await readGallery(siteDir, key);
   if (gallery.fresh) return { status: "none", added: 0, failed: 0 };
@@ -247,6 +261,8 @@ export async function backfillFairPlay({ siteDir, key, tools, com }) {
     try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); }
     catch (e) { failed++; log(`FairPlay form NOT added: ${x.id} — its meta could not be read (${String(e.message || e).slice(0, 120)})`); continue; }
     if (await fairPlayCurrent(dir, meta.fairplay, com)) { already++; continue; }
+    const answer = await keyOk(); // before the first form is made or replaced: a refusal stops the whole run here
+    if (!answer.accepted) throw new Error(refusal(com, answer) + "; no Apple form was made or replaced");
     const work = await fs.mkdtemp(join(tmpdir(), "site-fp-"));
     try {
       const kidHex = String(x.prKidGuid || meta.prKidGuid || "").replace(/-/g, "").toLowerCase();
@@ -268,22 +284,23 @@ export async function backfillFairPlay({ siteDir, key, tools, com }) {
   // here is counted, and never loses the pictures' renewals above (the workflow commits them first)
   let mosaic;
   try {
-    mosaic = await refreshMosaicFairPlay({ siteDir, key, tools, com });
-    if (mosaic === "none" && ready.length) mosaic = (await buildMosaic({ siteDir, key, tools, com })).status;
+    mosaic = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk });
+    if (mosaic === "none" && ready.length) mosaic = (await buildMosaic({ siteDir, key, tools, com, keyOk })).status;
   } catch (e) { failed++; mosaic = "failed"; log(`the combined view's Apple form NOT renewed — ${String(e.message || e).slice(0, 300)}`); }
   log(`FairPlay backfill: ${added} added, ${already} already had it, ${failed} failed; combined view ${mosaic}`);
   return { status: failed ? "partial" : "done", added, already, failed, mosaic, count: ready.length };
 }
 
-export async function run({ payload, siteDir, repo, token, tools, action, com = null }) {
+export async function run({ payload, siteDir, repo, token, tools, action, com = null, checkKey = checkKeyWithAxinom }) {
   const p = payload || {};
   const act = action || p.action;
   if (act !== "add" && act !== "delete" && act !== "mosaic" && act !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
   // the backfill has its own workflow and queue: a page's request (the payload) can never start it
   if (act === "fairplay" && action !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
   if (!/^[0-9a-f]{64}$/.test(String(p.key))) throw new Error("bad key");
-  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com });
-  if (act === "fairplay") return backfillFairPlay({ siteDir, key: await importKeyHex(p.key), tools, com });
+  const keyOk = com ? keyGate(com, checkKey) : null;
+  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk });
+  if (act === "fairplay") return backfillFairPlay({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk });
   if (!/^[0-9a-f]{24}$/.test(String(p.id))) throw new Error("bad picture id");
   const key = await importKeyHex(p.key);
   const gallery = await readGallery(siteDir, key);
@@ -332,7 +349,9 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
     // Apple's FairPlay form, when the Axinom key is set; a failure here leaves the picture ready elsewhere
     let fairplay = null;
     if (com) {
-      try { fairplay = await addFairPlay({ tools, work, outDir: dir, key, com }); }
+      const answer = await keyOk();
+      if (!answer.accepted) log(`no FairPlay form for ${p.id}: ${refusal(com, answer)}`);
+      else try { fairplay = await addFairPlay({ tools, work, outDir: dir, key, com }); }
       catch (e) { log(`no FairPlay form for ${p.id}: ${String(e.message || e).slice(0, 300)}`); }
     }
     Object.assign(entry, { status: "ready", width: clip.width, height: clip.height, readyAt: new Date().toISOString(), prKidGuid: ids.prKidGuid, fairplay: !!fairplay });

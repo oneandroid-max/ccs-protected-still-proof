@@ -34,24 +34,35 @@ export async function readAxinomSettings(siteDir) {
 }
 
 // Whether Axinom's licence service accepts a token's key id and signature, asked from anywhere (a runner, no
-// Apple device): a licence request carrying the token and a dummy body of TOKEN_CHECK_BODY_BYTES zero bytes.
-// Axinom reads the token before such a body, so its answer (header X-AxDRM-ErrorMessage) names the body when
-// the key id and the signature are good, and the token when not. Measured 2026-10-11 17:15Z at the account's
-// address and at the shared one, alike, with Axinom's public token, the same token signed with another key,
-// and one naming an unknown key id:
-//   good:           "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."
-//   another key:    "Invalid DRM message. The signature is invalid."
+// Apple device): a licence request carrying the token and a dummy body. Axinom reads the token before the body,
+// so its answer (header X-AxDRM-ErrorMessage, HTTP 400 or 403) complains about the request when the key id and
+// the signature are good, and about the token when not. Measured 2026-10-11 17:15Z and 18:03Z, at the account's
+// address and the shared one alike, with Axinom's public token, the same token signed with another key, and one
+// naming an unknown key id:
+//   good:           "Invalid license request. …" (the body missing at 0 bytes, too short below 176, "Supported
+//                   versions are 1, 2 or 3, but used version is 0." at 176 and above)
+//   another key:    "Invalid DRM message. The signature is invalid." (at every size from 0 to 400 bytes)
 //   unknown key id: "License denied. The DRM message references the ID of an unknown communication key."
-// Only the first counts as accepted. It proves the key pair and the address, not the rest of the token's
-// message, which Axinom reads after the device's request: a device still has the last word.
+// Only an answer about the request counts as accepted. It proves the key pair, and nothing else: not the
+// address (a made-up prefix answers the same way), not the rest of the token's message, which Axinom reads after
+// a device's request. A device has the last word. Axinom out of reach is retried, then reported as such.
 export const TOKEN_CHECK_BODY_BYTES = 176;
-export const TOKEN_ACCEPTED = /^Invalid license request\. Supported versions are /;
-export async function checkTokenWithAxinom(token, license, fetchFn = fetch) {
+export const TOKEN_ACCEPTED = /^Invalid license request\./;
+export async function checkTokenWithAxinom(token, license, fetchFn = fetch, { tries = 3, pause = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
   if (!FAIRPLAY_LICENSE_ADDRESS.test(String(license))) throw new Error("the FairPlay licence address is not one of Axinom's");
-  const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES) });
-  const message = String(r.headers.get("x-axdrm-errormessage") || "").trim();
-  return { accepted: TOKEN_ACCEPTED.test(message), status: r.status, message: message || `no message (HTTP ${r.status})` };
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES) });
+      const message = String(r.headers.get("x-axdrm-errormessage") || "").trim();
+      return { accepted: TOKEN_ACCEPTED.test(message), reached: true, status: r.status, message: message || `no message (HTTP ${r.status})` };
+    } catch (e) { last = e; if (i + 1 < tries) await pause(2000 * 2 ** i); }
+  }
+  const why = last && last.cause && last.cause.message ? last.cause.message : String((last && last.message) || last);
+  return { accepted: false, reached: false, status: 0, message: `Axinom could not be reached (${tries} tries): ${why}` };
 }
+// Whether Axinom accepts this communication key: a token for a throwaway key, asked as above.
+export const checkKeyWithAxinom = (com, fetchFn = fetch, opts) => { const ids = newFairPlayIds(); return checkTokenWithAxinom(mintToken(com, ids.kid, ids.key), com.license || AXINOM_FAIRPLAY_LICENSE, fetchFn, opts); };
 
 // Whether a token was signed with this communication key (HS256 under the key's 32 bytes).
 export function tokenSignedWith(token, key) {

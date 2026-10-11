@@ -5,6 +5,7 @@ FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 RUN curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64 \
+  && echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - \
   && chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version
 WORKDIR /app
 COPY service/ service/
