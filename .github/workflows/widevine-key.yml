@@ -1,0 +1,34 @@
+# Fetches a Widevine test content key on a GitHub runner (the authoring sandbox cannot reach the key
+# server) and commits it to web/research/drm/widevine-key.json. The key is test-only and public by
+# nature: the matching licence proxy issues it to anyone. See tools/widevine-key.mjs.
+name: widevine test key
+
+on:
+  push:
+    branches: [main]
+    paths: ["tools/widevine-key.mjs", ".github/workflows/widevine-key.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  key:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ask the Widevine UAT key server for a key (public test signer)
+        run: |
+          node --version
+          node tools/widevine-key.mjs ccs-proof-drm-1
+
+      - name: Commit the key file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/research/drm/widevine-key.json
+          if git diff --cached --quiet; then echo "key file unchanged"; exit 0; fi
+          git commit -m "research(drm): Widevine test key for content id ccs-proof-drm-1 (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
