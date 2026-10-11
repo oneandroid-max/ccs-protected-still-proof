@@ -246,8 +246,10 @@
       : t.system === "fairplay" ? `Apple FairPlay: screenshots measured black on ${PLATFORM} (${FAIRPLAY_MEASURED[PLATFORM]}). Take one.`
       : t.word === "hardware" ? "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one."
       : `software protection: in ${BROWSER} on ${PLATFORM} screenshots were measured black (2026-10-11). Take one.`, TEST ? "bad" : "ok");
-    const tick = () => { const live = !video.paused && video.videoWidth > 0;
-      set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : live ? "playing" : "no frame"}, time ${video.currentTime.toFixed(2)} s${live ? " — take a screenshot now" : ""}`, live ? "ok" : "bad"); };
+    let lastT = null; // "playing" only while a frame shows AND the time moves between looks (the first look follows the start check)
+    const tick = () => { const moved = lastT === null || Math.abs(video.currentTime - lastT) >= 0.2; lastT = video.currentTime;
+      const live = !video.paused && video.videoWidth > 0 && moved;
+      set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : !video.videoWidth ? "no frame" : moved ? "playing" : "not moving"}, time ${video.currentTime.toFixed(2)} s${live ? " — take a screenshot now" : ""}`, live ? "ok" : "bad"); };
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
   }

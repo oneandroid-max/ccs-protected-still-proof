@@ -205,6 +205,24 @@ export async function buildMosaic({ siteDir, key, tools, com = null }) {
   }
 }
 
+// The combined view's Apple form renewed from the view's OWN protected output (its still read back the way
+// a picture's is), so a token running out never needs the whole view rebuilt (a rebuild needs Google's key
+// server for its Widevine form). "current" when its form is good, "renewed", or "none" without a view.
+async function refreshMosaicFairPlay({ siteDir, key, tools, com }) {
+  const out = join(siteDir, "mosaic"), metaPath = join(out, "meta.json.enc");
+  let meta; try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); } catch { return "none"; }
+  if (await fairPlayCurrent(out, meta.fairplay, com)) return "current";
+  const work = await fs.mkdtemp(join(tmpdir(), "site-fp-mosaic-"));
+  try {
+    const s = await stillFromOutput(tools, key, out, String(meta.prKidGuid || "").replace(/-/g, "").toLowerCase(), work, 0);
+    await renderClip(tools, s.still, join(work, "clip.mp4"), { maxSide: Math.max(MOSAIC_MAX.width, MOSAIC_MAX.height) });
+    meta.fairplay = await addFairPlay({ tools, work, outDir: out, key, com });
+    await fs.writeFile(metaPath, await sealText(key, JSON.stringify(meta)));
+    await removeOtherFairPlay(out, meta.fairplay); // only now: the meta points to the new form
+    return "renewed";
+  } finally { await fs.rm(work, { recursive: true, force: true }); }
+}
+
 // Gives Apple's FairPlay form to every ready picture that lacks a good one (none yet, made with another
 // Axinom key, or its token running out), from the picture's own protected output (its still, read back as
 // the combined view reads it, made into a clip again), then remakes the combined view when it needs the
@@ -238,9 +256,16 @@ export async function backfillFairPlay({ siteDir, key, tools, com }) {
     for (const x of gallery.photos) if (addedIds.includes(x.id)) x.fairplay = true;
     await writeGallery(siteDir, key, gallery);
   }
-  const mosaic = await buildMosaic({ siteDir, key, tools, com });
-  log(`FairPlay backfill: ${added} added, ${already} already had it, ${failed} failed; combined view ${mosaic.status}`);
-  return { status: failed ? "partial" : "done", added, already, failed, mosaic: mosaic.status, count: ready.length };
+  // the combined view: its Apple form renewed from its own output when it needs it (no weekly rebuild, so no
+  // new copies in the history while it is good); made, with its form, when there is none yet; a failure
+  // here is counted, and never loses the pictures' renewals above (the workflow commits them first)
+  let mosaic;
+  try {
+    mosaic = await refreshMosaicFairPlay({ siteDir, key, tools, com });
+    if (mosaic === "none" && ready.length) mosaic = (await buildMosaic({ siteDir, key, tools, com })).status;
+  } catch (e) { failed++; mosaic = "failed"; log(`the combined view's Apple form NOT renewed — ${String(e.message || e).slice(0, 300)}`); }
+  log(`FairPlay backfill: ${added} added, ${already} already had it, ${failed} failed; combined view ${mosaic}`);
+  return { status: failed ? "partial" : "done", added, already, failed, mosaic, count: ready.length };
 }
 
 export async function run({ payload, siteDir, repo, token, tools, action, com = null }) {

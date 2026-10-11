@@ -15,7 +15,10 @@
 // it in a browser captures them in clear. Every workflow that touches the site (a `site/` path or page,
 // SITE_PASSWORD, or the walker) must be named below with its reason. A named one that is not the walk
 // must start no browser and take no screen capture. The walk may, only while it keeps every safeguard
-// that seals its captures; and the walker itself must delete each clear capture before sealing it.
+// that seals its captures; and the walker itself must delete each clear capture before sealing it. THE
+// DRIVE (site-drive.yml) may start a browser too, only on a LOCAL copy with synthetic pictures: read-only,
+// no secret, nothing uploaded, no capture, running no tool but itself and this guard, and the drive file
+// pinned by content below (2026-10-11: the second review asked for the drive's checks in CI).
 //
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
@@ -55,7 +58,17 @@ const SITE_ALLOWED = {
   "site-test.yml": "tests the site's code; opens no page",
   "live-check.yml": "fetches pages with curl; every picture file it can fetch is encrypted",
   "site-walk.yml": "THE WALK: a real browser on the live site; every capture sealed (safeguards required below)",
+  "site-drive.yml": "THE DRIVE: a browser on a LOCAL copy with synthetic pictures and a mocked GitHub API, never the live site (safeguards required below; the drive pinned)",
 };
+const DRIVE_SAFEGUARDS = [
+  [/^permissions:\s*\n\s+contents: read\s*$/m, "read-only"],
+  [(t) => !/contents: write|id-token: write/.test(t), "no write access anywhere"],
+  [(t) => !/secrets\.|SITE_PASSWORD/.test(t), "no secret at all"],
+  [/persist-credentials: false/, "checkout leaves no token behind"],
+  [/run: node tools\/check-workflow-links\.mjs/, "this guard runs first"],
+  [(t) => !/upload-artifact|screenshot|screencapture|CopyFromScreen|import -window/i.test(t), "nothing uploaded and no screen capture"],
+  [(t) => (t.match(/node\s+tools\/[\w./-]+/g) || []).every((x) => /^node\s+tools\/(drive-site|check-workflow-links)\.mjs$/.test(x)), "it runs no tool but the drive and this guard"],
+];
 const WALK_SAFEGUARDS = [
   [/^permissions:\s*\n\s+contents: read/m, "read-only by default (only the keep job may write)"],
   [(t) => (t.match(/contents: write/g) || []).length === 1 && t.indexOf("contents: write") > t.indexOf("\n  keep:"), "write access only inside the keep job"],
@@ -76,6 +89,8 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
   if (!SITE_ALLOWED[file]) { bad.push(`${DIR}/${file}: touches the test site (the owner's own pictures) but is not in SITE_ALLOWED in tools/check-workflow-links.mjs`); continue; }
   if (file === "site-walk.yml") {
     for (const [re, what] of WALK_SAFEGUARDS) if (!(typeof re === "function" ? re(live) : re.test(live))) bad.push(`${DIR}/${file}: the walk lost a safeguard: ${what}`);
+  } else if (file === "site-drive.yml") {
+    for (const [re, what] of DRIVE_SAFEGUARDS) if (!(typeof re === "function" ? re(live) : re.test(live))) bad.push(`${DIR}/${file}: the drive lost a safeguard: ${what}`);
   } else if (BROWSER.test(live)) bad.push(`${DIR}/${file}: touches the test site and starts a browser or a screen capture (${live.match(BROWSER)[0]}); only the sealed walk may`);
 }
 // code only: comments removed, so a comment cannot stand in for the real line
@@ -102,6 +117,8 @@ for (const f of toolFiles) {
 const PINNED = {
   ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
   "tools/walk-site.mjs": "4b2222eaa660a66bd8aa75eaf46f9821063cfa20f6f374b78e0250cf0bf1e5ce",
+  ".github/workflows/site-drive.yml": "561f8bb83320ec4c3981fb399b5f09dbd4edf669fcb5826fee480f793a3dfbe7",
+  "tools/drive-site.mjs": "d6773c2d210f3d66625696bad4fab7f3e1b85ccee7b4d3c50cc6f713829685be",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");

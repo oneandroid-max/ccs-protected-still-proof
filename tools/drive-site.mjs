@@ -17,6 +17,8 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, open, sealText, openText, toBase64, fromBase64 } from "../site/crypto.js";
 
 const require = createRequire(process.env.PLAYWRIGHT_PKG || "/home/user/QUICLINKS/package.json");
@@ -85,9 +87,19 @@ const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
 
-const PORT = 8766;
+// the drive's own server on a free port, and proof that the server answering is this drive's own: a
+// server left over from an earlier run on a fixed port once answered instead, and the drive judged the
+// wrong copy of the site (2026-10-11)
+const PORT = await new Promise((resolve, reject) => { const s = createServer(); s.on("error", reject); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+const DRIVE_ID = randomBytes(16).toString("hex");
+await fs.writeFile(join(www, "drive-id.txt"), DRIVE_ID);
 const server = spawn("python3", ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", www], { stdio: "ignore" });
-await new Promise((r) => setTimeout(r, 1200));
+let ours = false;
+for (let i = 0; i < 60 && !ours; i++) {
+  try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
+  if (!ours) await new Promise((r) => setTimeout(r, 100));
+}
+if (!ours) { server.kill(); console.error(`FAIL  the drive's own test server never answered on port ${PORT}`); process.exit(1); }
 const BASE = `http://127.0.0.1:${PORT}/site/`;
 
 const STUB = `

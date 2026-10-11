@@ -9,7 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -165,9 +165,28 @@ test("the Apple backfill with pictures that failed: commits the rest, then fails
   const d = await scratch();
   const r = runJob(d, BACKFILL, { STANDIN: "backfill", BACKFILL_RESULT: join(d, "result.json"), FAILED: "2" });
   assert.notEqual(r.code, 0, "the run is red");
-  assert.match(r.out, /pushed/); assert.match(r.out, /2 picture\(s\) did not get the Apple form/);
+  assert.match(r.out, /pushed/); assert.match(r.out, /2 form\(s\) not made or renewed/);
   assert.ok(remoteFiles(d).includes("site/photos/p1/fp-token.enc"), "what succeeded was committed first");
   const d2 = await scratch();
   const q = runJob(d2, BACKFILL, { STANDIN: "backfill-none", BACKFILL_RESULT: join(d2, "result.json") });
   assert.equal(q.code, 0, q.out); assert.match(q.out, /nothing to commit/);
+});
+
+test("the Apple backfill's WEEKLY run with the REAL site/backfill.mjs and no Axinom key yet: green, nothing committed", async () => {
+  const d = await scratch(), other = join(d, "other");
+  git(other, "pull", "-q", "origin", "main");
+  // the real entry and everything it imports, committed to the scratch remote (the stand-in is replaced)
+  for (const f of ["site/backfill.mjs", "site/crypto.js", "site/worker.mjs", "site/axinom.mjs", "site/config.json", "service/lib/pipeline.mjs", "service/lib/util.mjs", "service/lib/exif.mjs", "tools/playready-test-key.mjs"]) {
+    await fs.mkdir(join(other, dirname(f)), { recursive: true });
+    await fs.copyFile(join(REPO, f), join(other, f));
+  }
+  git(other, "add", "-A"); git(other, "commit", "-qm", "the real backfill"); git(other, "push", "-q", "origin", "HEAD:main");
+  const before = git(d, "--git-dir", join(d, "remote.git"), "rev-parse", "main");
+  const r = runJob(d, BACKFILL, { GITHUB_EVENT_NAME: "schedule", AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", SITE_PASSWORD: "any password at all", BACKFILL_RESULT: join(d, "result.json") });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the Axinom key is not set yet: nothing to renew/); assert.match(r.out, /nothing to commit/);
+  assert.equal(git(d, "--git-dir", join(d, "remote.git"), "rev-parse", "main"), before, "nothing was pushed");
+  // started by hand without the key, the same run is red and says why
+  const h = runJob(d, BACKFILL, { GITHUB_EVENT_NAME: "workflow_dispatch", AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", SITE_PASSWORD: "any password at all", BACKFILL_RESULT: join(d, "result2.json") });
+  assert.notEqual(h.code, 0); assert.match(h.out, /::error title=Apple backfill::the Axinom communication key is not set/);
 });

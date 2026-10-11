@@ -55,4 +55,4 @@ jobs:
             [ "$i" = 5 ] && { echo "could not push after five tries"; exit 1; }
             echo "the push raced with another job; refreshing and running again ($i)"; sleep $((i * 5))
           done
-          node -e 'const r = require(process.env.BACKFILL_RESULT); if (r.failed) { console.log(r.failed + " picture(s) did not get the Apple form (see above)"); process.exit(1); }'
+          node -e 'const fs = require("fs"), p = process.env.BACKFILL_RESULT; if (!fs.existsSync(p)) { console.log("the backfill wrote no result"); process.exit(1); } const r = JSON.parse(fs.readFileSync(p, "utf8")); if (r.failed) { console.log(r.failed + " form(s) not made or renewed (see above)"); process.exit(1); }'

@@ -1,0 +1,36 @@
+# THE DRIVE, in CI (tools/drive-site.mjs): the test site's pages in a real Chromium against a LOCAL copy of
+# the site with synthetic pictures and a mocked GitHub API, never the live site (no file under tools/ but
+# the walker may name the Pages host, and the guard pins this drive by content). It proves in a browser
+# engine what the node tests cannot: the address and the licence token each page actually hands the
+# player, as an iPhone, an iPad, a Mac and the rest see it; the hold-back; "playing" only with a frame.
+# Read-only, no secret, nothing uploaded, no screen capture (the guard checks each of these).
+name: site drive
+
+on:
+  push:   # on any branch (it is read-only and holds no secret), whenever the site's code changes; never for a picture's own files
+    branches-ignore: [walk-evidence]
+    paths: ["site/*.html", "site/*.js", "site/*.mjs", "tools/drive-site.mjs", "tools/build-site-view.mjs", "web/research/drm/index.html", ".github/workflows/site-drive.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: The guard first (tools/check-workflow-links.mjs)
+        run: node tools/check-workflow-links.mjs
+      - name: Playwright and its Chromium, from tools/package-lock.json
+        run: |
+          cd tools && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: The drive (a local copy, synthetic pictures, a mocked GitHub API)
+        run: |
+          export CHROME="$(node -e 'console.log(require("./tools/node_modules/playwright").chromium.executablePath())')"
+          export PLAYWRIGHT_PKG="$PWD/tools/package.json"
+          set +e; node tools/drive-site.mjs 2>&1 | tee "$RUNNER_TEMP/drive.log"; rc=${PIPESTATUS[0]}; set -e
+          echo "::notice title=site drive::$(grep -c '^ok' "$RUNNER_TEMP/drive.log") checks passed, $(grep -c '^FAIL' "$RUNNER_TEMP/drive.log") failed"
+          exit $rc

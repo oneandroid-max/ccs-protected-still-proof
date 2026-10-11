@@ -94,7 +94,8 @@
   // packaged by the code that packages the site's pictures, under the same public test key as the film
   const CARD = "../drm/card-fairplay/master.m3u8";
   // the same card under a key of its own, licensed by OUR Axinom account (card-fairplay-own/, made once the
-  // account's key is in the repository's secrets; its token unlocks only this public card)
+  // account's key is in the repository's secrets; its token unlocks only this public card). current.json
+  // names its folder, fresh at each renewal, so a cached older video never pairs with a newer token.
   const OWN = "../drm/card-fairplay-own/";
   const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUwLTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIsCiAgICAidmVyc2lvbiI6IDIsCiAgICAibGljZW5zZSI6IHsKICAgICAgImFsbG93X3BlcnNpc3RlbmNlIjogdHJ1ZQogICAgfSwKICAgICJjb250ZW50X2tleXNfc291cmNlIjogewogICAgICAiaW5saW5lIjogWwogICAgICAgIHsKICAgICAgICAgICJpZCI6ICI0MDYwYTg2NS04ODc4LTQyNjctOWNiZi05MWFlNWJhZTFlNzIiLAogICAgICAgICAgImVuY3J5cHRlZF9rZXkiOiAid3QzRW51dVI1UkFybjZBRGYxNkNCQT09IiwKICAgICAgICAgICJ1c2FnZV9wb2xpY3kiOiAiUG9saWN5IEEiCiAgICAgICAgfQogICAgICBdCiAgICB9LAogICAgImNvbnRlbnRfa2V5X3VzYWdlX3BvbGljaWVzIjogWwogICAgICB7CiAgICAgICAgIm5hbWUiOiAiUG9saWN5IEEiLAogICAgICAgICJwbGF5cmVhZHkiOiB7CiAgICAgICAgICAibWluX2RldmljZV9zZWN1cml0eV9sZXZlbCI6IDE1MCwKICAgICAgICAgICJwbGF5X2VuYWJsZXJzIjogWwogICAgICAgICAgICAiNzg2NjI3RDgtQzJBNi00NEJFLThGODgtMDhBRTI1NUIwMUE3IgogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
 
@@ -161,9 +162,13 @@
   }
   await protectedPlay("vp", "p", PROTECTED, "film (protected)");
   await protectedPlay("vk", "k", CARD, "our card (protected)");
-  let ownToken = null;
-  try { const r = await fetch(OWN + "token.txt?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ownToken = (await r.text()).trim(); } catch (e) {}
-  if (ownToken) await protectedPlay("vo", "o", OWN + "master.m3u8", "our card, our account (protected)", ownToken);
+  let ownToken = null, ownBase = null;
+  try {
+    const c = await fetch(OWN + "current.json?v=" + Date.now(), { cache: "no-store" });
+    const folder = c.ok ? String((await c.json()).folder || "") : "";
+    if (/^[0-9a-f]{8}$/.test(folder)) { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); }
+  } catch (e) {}
+  if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken);
   else { set("o-ks", "—"); set("o-play", "not made yet: it needs our Axinom account", "bad"); log("our card, our account: not made yet (needs the Axinom account's key in the repository's secrets)"); }
 })();
 </script>

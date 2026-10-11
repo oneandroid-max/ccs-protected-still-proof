@@ -106,12 +106,14 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
   assert.ok(runs > 1500, `${runs} combinations run`);
 });
 
-// The guard, run in a copy of the repository's workflows and tools with one extra workflow
-async function guardWith(extra) {
+// The guard, run in a copy of the repository's workflows and tools with one extra workflow, or with one
+// file changed (edit: [relative path, function from its text to the new text])
+async function guardWith(extra, edit) {
   const d = await fs.mkdtemp(join(tmpdir(), "guard-"));
   await fs.cp(join(REPO, ".github"), join(d, ".github"), { recursive: true });
   await fs.cp(join(REPO, "tools"), join(d, "tools"), { recursive: true, filter: (src) => !src.includes("node_modules") });
   if (extra) await fs.writeFile(join(d, ".github", "workflows", "zz-extra.yml"), `name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -sS "${extra}"\n`);
+  if (edit) { const f = join(d, edit[0]); const before = await fs.readFile(f, "utf8"); const after = edit[1](before); assert.notEqual(after, before, "the edit changes " + edit[0]); await fs.writeFile(f, after); }
   const r = spawnSync(process.execPath, [join(d, "tools", "check-workflow-links.mjs")], { cwd: d, encoding: "utf8" });
   await fs.rm(d, { recursive: true, force: true });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
@@ -125,4 +127,17 @@ test("the guard accepts a link only when its FIRST parameter is a safe value and
   for (const bad of ["?levels=x&levels=fairplay", "?levels=x&amp;levels=fairplay", "?v=1&clip=card", "?clip=card&levels=x", "?levels=fairplay&clip=photo", "?levels=FAIRPLAY", "", "?clip=cards"]) {
     const r = await guardWith(B + bad); assert.equal(r.code, 1, `${bad || "(no query)"} is refused`); assert.match(r.out, /does not ask for the test card/);
   }
+});
+
+test("the guard keeps the CI drive to a local copy: no secret, no write access, no capture, no other tool, and the drive pinned", async () => {
+  const W = ".github/workflows/site-drive.yml";
+  const cases = [
+    [[W, (t) => t.replace("PLAYWRIGHT_PKG=", "SITE_PASSWORD=${{ secrets.SITE_PASSWORD }} PLAYWRIGHT_PKG=")], /the drive lost a safeguard: no secret at all/],
+    [[W, (t) => t.replace("  contents: read", "  contents: write")], /the drive lost a safeguard: (read-only|no write access anywhere)/],
+    [[W, (t) => t.replace("      - name: The drive", "      - uses: actions/upload-artifact@v4\n        with: { name: x, path: walk }\n      - name: The drive")], /the drive lost a safeguard: nothing uploaded and no screen capture/],
+    [[W, (t) => t.replace("node tools/drive-site.mjs 2>&1", "node tools/walk-site.mjs 2>&1")], /the drive lost a safeguard: it runs no tool but the drive and this guard/],
+    [[W, (t) => t.replace("        with: { persist-credentials: false }\n", "")], /the drive lost a safeguard: checkout leaves no token behind/],
+    [["tools/drive-site.mjs", (t) => t + "\n// a change\n"], /tools\/drive-site\.mjs changed .* update PINNED/],
+  ];
+  for (const [edit, re] of cases) { const r = await guardWith(null, edit); assert.equal(r.code, 1, `${edit[0]} edited: refused`); assert.match(r.out, re, r.out); }
 });

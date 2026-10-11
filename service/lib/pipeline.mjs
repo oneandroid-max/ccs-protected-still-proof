@@ -114,7 +114,7 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
           const n = data.readUInt16BE(p); p += 2; let prot = 0;
           if (p + 6 * n > end) break;
           for (let j = 0; j < n; j++) { prot += data.readUInt32BE(p + 2); p += 6; }
-          protectedBytes += prot; if (prot > 0) samplesEncrypted++;
+          protectedBytes += prot; if (prot >= 16) samplesEncrypted++; // under one 16-byte block, 'cbcs' encrypts nothing
         }
       }
       if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "moof", "traf"].includes(t)) walk(off + 8, off + s);

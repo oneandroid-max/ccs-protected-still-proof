@@ -42,9 +42,12 @@ test("a failing command's message carries no key (it can reach a public log)", a
   for (const secret of ["0123456789abcdef0123456789abcdef", "fc35340837310cc0fb53de97e22a69e0"]) assert.ok(!e.message.includes(secret), "no key in: " + e.message);
   assert.match(e.message, /key_id=00112233445566778899aabbccddeeff:key=<redacted>/, "key ids stay (they are not secret)");
   assert.equal(redactKeys("--aes_signing_key 1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9"), "--aes_signing_key <redacted>");
+  // a long message is redacted before it is cut, so no tail of a key survives the cut
+  const long = await exec(process.execPath, ["-e", "process.exit(3)", "--", "x".repeat(900), "--keys", keyArg, "y".repeat(10)]).catch((x) => x);
+  assert.ok(!/[0-9a-f]{8}/.test(long.message.replace(/key_id=[0-9a-f]{32}/g, "")), "no run of key digits survives: " + long.message.slice(-160));
 });
 
-test("a minted token: HS256 under the communication key, the content key encrypted for Axinom the way its quick start does, without its relaxations", () => {
+test("a minted token: HS256 under the communication key, the content key encrypted for Axinom the way its quick start does, its policy hardened instead of relaxed", () => {
   const ids = newFairPlayIds();
   for (const k of ["kid", "key", "iv"]) assert.match(ids[k], /^[0-9a-f]{32}$/, k);
   assert.equal(ids.keyUri, `skd://${kidToUuid(ids.kid)}:${ids.iv.toUpperCase()}`);
@@ -64,7 +67,8 @@ test("a minted token: HS256 under the communication key, the content key encrypt
   const k = p.message.content_keys_source.inline;
   assert.equal(k.length, 1); assert.equal(k[0].id, kidToUuid(ids.kid));
   assert.equal(unwrapKey(COM.key, ids.kid, k[0].encrypted_key), ids.key, "the encrypted key opens, with an independent decryptor, to the content key");
-  assert.equal(k[0].usage_policy, undefined); assert.equal(p.message.content_key_usage_policies, undefined, "no relaxed policy: Axinom's defaults apply");
+  assert.equal(k[0].usage_policy, "Policy A", "the policy reference every Axinom example carries");
+  assert.deepEqual(p.message.content_key_usage_policies, [{ name: "Policy A", playready: { min_device_security_level: 3000 } }], "the same shape, hardened: PlayReady hardware clients only");
   assert.ok(!JSON.stringify(p).includes("786627D8"), "no virtual-machine play enabler");
   assert.equal(encryptContentKey(COM.key, ids.kid, ids.key), k[0].encrypted_key);
   assert.throws(() => encryptContentKey(COM.key, "zz", ids.key), /32 hex/);
@@ -140,6 +144,7 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, fragments: 0 }), ids), /sample-encryption boxes/],
     [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 0] }), ids), /1 of 2 samples have no encrypted bytes/],
     [checkFairPlay(playlist, fakeFile({ ...ids, prot: [0, 0] }), ids), /2 of 2 samples have no encrypted bytes/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 15] }), ids), /1 of 2 samples have no encrypted bytes/],
   ];
   for (const [r, re] of cases) { assert.equal(r.ok, false, `a form that should fail with ${re} passed the check`); assert.ok(r.problems.some((p) => re.test(p)), `${re} in ${JSON.stringify(r.problems)}`); }
 });
@@ -283,10 +288,13 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.deepEqual([info.width, info.height], [720, 960]);
   notice("FairPlay card", `${info.keyUri}; ${info.bytes} bytes; decryptCheck ${JSON.stringify(info.decryptCheck)}; ${info.packager}`);
   // the own-account form: a random key of its own, and a token minted by OUR account (here a throwaway one)
-  const { ownCardCurrent } = await import("../../tools/fairplay-card.mjs");
-  const ownDir = await fs.mkdtemp(join(tmp, "card-own-"));
-  assert.equal(await ownCardCurrent(ownDir, COM), false, "nothing there yet");
-  const own = await buildFairPlayCard({ tools, outDir: ownDir, com: COM });
+  const { ownCardCurrent, buildOwnCard } = await import("../../tools/fairplay-card.mjs");
+  const root = await fs.mkdtemp(join(tmp, "card-own-"));
+  assert.equal(await ownCardCurrent(root, COM), false, "nothing there yet");
+  const own = await buildOwnCard({ tools, root, com: COM });
+  const ownDir = join(root, own.folder);
+  assert.deepEqual((await fs.readdir(root)).sort(), ["current.json", own.folder].sort(), "one folder, named by current.json");
+  assert.equal(JSON.parse(await fs.readFile(join(root, "current.json"), "utf8")).folder, own.folder);
   assert.deepEqual((await fs.readdir(ownDir)).sort(), ["info.json", "master.m3u8", "token.txt", "video.m3u8", "video.mp4"]);
   assert.ok(!own.keyUri.startsWith("skd://4060a865"), "not the public test key");
   const token = (await fs.readFile(join(ownDir, "token.txt"), "utf8")).trim();
@@ -298,9 +306,11 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   const clearCard = await frame(join(REPO, "web", "research", "drm", "card-playready.mp4"), ["-decryption_key", "a64cde52f25e07a56d7770f4d31fc1f3"]);
   assert.ok((await frame(join(ownDir, "video.mp4"), ["-decryption_key", ownKey])).equals(clearCard), "the key inside our token decrypts it to exactly the card");
   assert.equal(own.decryptCheck.ffmpeg, 0);
-  assert.equal(await ownCardCurrent(ownDir, COM), true, "current: same account, 60 days left");
-  assert.equal(await ownCardCurrent(ownDir, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "another account: remade");
-  assert.equal(await ownCardCurrent(ownDir, COM, Date.parse(own.expires) - 13 * 86400000), false, "13 days left: remade");
+  assert.equal(await ownCardCurrent(root, COM), true, "current: same account, 60 days left");
+  assert.equal(await ownCardCurrent(root, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "another account: remade");
+  assert.equal(await ownCardCurrent(root, COM, Date.parse(own.expires) - 13 * 86400000), false, "13 days left: remade");
+  const renewed = await buildOwnCard({ tools, root, com: COM });
+  assert.notEqual(renewed.folder, own.folder); assert.deepEqual((await fs.readdir(root)).sort(), ["current.json", renewed.folder].sort(), "a renewal is a fresh folder; the old one is gone");
   notice("FairPlay own card", `${own.keyUri}; token by the (test) account ${COM.id}; decryptCheck ${JSON.stringify(own.decryptCheck)}`);
 });
 

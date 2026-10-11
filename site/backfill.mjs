@@ -18,6 +18,7 @@ const siteDir = process.env.SITE_DIR || fileURLToPath(new URL("./", import.meta.
 if (!process.env.SITE_PASSWORD) stop("SITE_PASSWORD is not set");
 if (process.env.GITHUB_EVENT_NAME === "schedule" && !process.env.AXINOM_COM_KEY_ID && !process.env.AXINOM_COM_KEY) {
   console.log("::notice title=Apple backfill::the Axinom key is not set yet: nothing to renew");
+  if (process.env.BACKFILL_RESULT) await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "skipped", added: 0, already: 0, failed: 0 }));
   process.exit(0);
 }
 let com;

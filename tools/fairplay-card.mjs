@@ -12,13 +12,15 @@
 // AXINOM_COM_KEY), the card is also packaged exactly as a picture is (a fresh random key) with a licence
 // token minted by OUR account, in card-fairplay-own/ (the token in clear, token.txt: it unlocks only this
 // public card). So a real Apple device can prove the account's own tokens before any picture is shown
-// there. It is remade only when missing, made with another key, or within 14 days of its token's end.
+// there. It is remade only when missing, made with another key, or within 14 days of its token's end,
+// each time into a freshly named folder (card-fairplay-own/<8 hex>/), with current.json naming it, so a
+// browser's cached copy can never pair an older video with a newer token (Pages caches ten minutes).
 //   node tools/fairplay-card.mjs                 writes web/research/drm/card-fairplay/ (and -own/)
 //   node tools/fairplay-card.mjs --out <dir>     writes the public form there instead (tests)
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { packageFairPlay, checkFairPlay, checkBoxes, probe } from "../service/lib/pipeline.mjs";
 import { run } from "../service/lib/util.mjs";
@@ -93,12 +95,22 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
   }
 }
 
-// Whether the own-account form in `dir` is still good for this key (same account, 14+ days left).
-export async function ownCardCurrent(dir, com, now = Date.now()) {
+// The own-account form, in `root` (card-fairplay-own/): a fresh folder each time, current.json naming it,
+// older folders removed once current.json points to the new one.
+export async function buildOwnCard({ tools, root, com }) {
+  const folder = randomBytes(4).toString("hex");
+  const info = await buildFairPlayCard({ tools, outDir: join(root, folder), com });
+  await fs.writeFile(join(root, "current.json"), JSON.stringify({ folder, keyUri: info.keyUri, comKeyId: info.comKeyId, expires: info.expires }, null, 2) + "\n");
+  for (const d of await fs.readdir(root)) if (/^[0-9a-f]{8}$/.test(d) && d !== folder) await fs.rm(join(root, d), { recursive: true, force: true });
+  return { folder, ...info };
+}
+// Whether the own-account form in `root` is still good for this key (same account, 14+ days left).
+export async function ownCardCurrent(root, com, now = Date.now()) {
   try {
-    const info = JSON.parse(await fs.readFile(join(dir, "info.json"), "utf8"));
-    for (const f of [...FILES, "token.txt"]) await fs.access(join(dir, f));
-    return String(info.comKeyId || "").toLowerCase() === com.id.toLowerCase() && Date.parse(info.expires) > now + 14 * 86400000;
+    const cur = JSON.parse(await fs.readFile(join(root, "current.json"), "utf8"));
+    if (!/^[0-9a-f]{8}$/.test(String(cur.folder))) return false;
+    for (const f of [...FILES, "token.txt", "info.json"]) await fs.access(join(root, cur.folder, f));
+    return String(cur.comKeyId || "").toLowerCase() === com.id.toLowerCase() && Date.parse(cur.expires) > now + 14 * 86400000;
   } catch { return false; }
 }
 
@@ -113,7 +125,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     else {
       const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); // fails plainly when malformed
       if (await ownCardCurrent(ownDir, com)) console.log("the own-account form of the card is current: unchanged");
-      else console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir: ownDir, com }), null, 2));
+      else { await fs.mkdir(ownDir, { recursive: true }); console.log(JSON.stringify(await buildOwnCard({ tools, root: ownDir, com }), null, 2)); }
     }
   }
 }
