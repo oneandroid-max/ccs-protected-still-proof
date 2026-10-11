@@ -298,7 +298,7 @@ device for it; no outside service is in the chain.
   - **Now (20:37Z):** the tenth review, on `75fcb09..35073c2`, is running. The merge waits until it comes back clean.
 
 - 2026-10-11T21:26Z: **the reviewer's tenth pass, on `75fcb09..35073c2`: no blocker; five should-fix (two of them regressions my ninth-round fix introduced) and nine minor points. Eight minor points fixed; one put to the owner as an option.** The reviewer confirmed the ninth review's blocker fixed, with real data: the view was kept byte for byte in all six "Try again" cases (refused with the same key and with another, out of reach both ways, the check throwing, no key); on `75fcb09` the same cases lost the form.
-  - **Should-fix 1 (a regression of mine): a failed renewal deleted the combined view's working form and made none.** My 20:16Z fix rebuilt the view after ANY failed renewal, not only when its own output could not be read back. The rebuild deletes the folder first, so when Apple's packaging failed again the view came back without a form. **Now:** only an unreadable output leads to a rebuild (with a form, only on Axinom's acceptance). Any other failure keeps the view and its form as they are, says so (a warning on the job's page) and records it. Tested with a packager that fails only Apple's form: an unverified form and a verified one with ten days left are both kept (on `35073c2`, both were lost).
+  - **Should-fix 1 (a regression of mine): a failed renewal deleted the combined view's working form and made none.** My 20:16Z fix rebuilt the view after ANY failed renewal, not only when its own output could not be read back. The rebuild deletes the folder first, so when Apple's packaging failed again the view came back without a form. **Now:** only an unreadable output leads to a rebuild (with a form, only on Axinom's acceptance). Any other failure keeps the view and its form as they are, says so (a warning on the job's page) and records it. Tested with a packager that fails only Apple's form: an unverified form and a verified one with ten days left are both kept (on `35073c2`, both were lost). *(Corrected by the eleventh review: this held for a renewal only. A rebuild still deleted the view's folder first, so a rebuild whose Apple packaging failed committed the view without a form, with no warning. Fixed in the eleventh round, below.)*
   - **Should-fix 2: the page said "being remade" when the job had kept the view.**
     - **Now:** every answer that keeps the view is written into its record with the reason in plain words:
       - "rebuilding it would remove its Apple form, and Axinom did not accept our key (Axinom: …)";
@@ -307,7 +307,7 @@ device for it; no outside service is in the chain.
       - "its new Apple form could not be made …".
     - Under the left-out line the page shows "Last tried at HH:MM: kept as it is — reason", no longer says "being remade", and stops waiting.
     - The page now knows the job has answered because the view's record changed (a new build time or a new note), not by comparing its own clock with the job's. With its clock ahead, it used to say "being remade" next to a view already remade. The drive found this and it is fixed in the same lines.
-    - **The drive:** 86 of 86, 3 of them new; on `35073c2`'s page those 3 fail.
+    - **The drive:** 86 of 86, 3 of them new. On `35073c2`'s page 3 fail: two of the three new checks, and the older 4d check as strengthened; the third new check passes there. *(Corrected by the eleventh review; this line first said the 3 that fail were the 3 new ones.)*
   - **Should-fix 3 (a regression of mine): the Dockerfile rule let `&& … || true` through.** After the check, each line must start with `&&` and hold no `;`, `||` or lone `&`. `|| true`, `; true` and a trailing `&` are tested; all three passed `35073c2`.
   - **Should-fix 4: the guard still saw less than `c4cc277`.** It is rewritten around how a packager can get onto a runner.
     - **The rule:** a line that names a packager in any form and could bring one in must be the pinned download. Bringing one in means:
@@ -317,9 +317,9 @@ device for it; no outside service is in the chain.
       - in a Dockerfile, the base image, an ADD, a COPY from anything but its own stage, or a build mount from an image.
     - **What it reads:** every file of these kinds in the repository: YAML anywhere (compose files included), Dockerfiles, Makefiles, package manifests and lock files, and shell, PowerShell and batch scripts. It does NOT read JavaScript or Python; the guard says so, and review covers them.
     - What git ignores is left out. Where git cannot say, nothing is left out, so a broken file list makes the guard stricter, not blind.
-    - Every known download is counted per file (9 in all), so a guard that reads less fails.
+    - Every known download is counted per file (9 in all, in 8 files), so a guard that stops reading one of those 8 files fails. *(Corrected by the eleventh review: a guard that stops reading a KIND of file is not caught by the count. With every test green, .bat, .cmd and .psm1 files, Makefile names and lock files could go unread. Each of those kinds now has its own test; lock files are no longer read at all, and that is tested too.)*
     - **Tested:**
-      - 53 refused edits: 18 of them got through `35073c2`.
+      - 53 refused edits: 18 of them got through `35073c2`. *(With the one `fd22c0e` added: 19 of 54, as the eleventh review counted.)*
       - 9 files of other kinds: 5 got through `35073c2`.
       - 11 legitimate texts: `35073c2` wrongly refused 5.
       - The guard run in a real git checkout.
@@ -337,19 +337,57 @@ device for it; no outside service is in the chain.
     - `continue-on-error` refused with its key quoted;
     - legitimate text accepted: a trailing comment, `curl -fsSL`, the address in quotes, `echo "shaka-packager $(packager --version)"`, a Dockerfile LABEL;
     - a dead line removed from `drm-package.yml` (`/tmp/packager_or_install() { :; }`, never called; that workflow does not run on edits to itself).
-  - **Not done; put to the owner (minor 9, an option):** the keep rule also protects a form that can no longer work: its token has expired, or it is signed with the very key Axinom now refuses. "Try again" for a left-out picture then stays blocked until Axinom accepts the key again. Changing that means deleting forms on signals not yet measured: how Axinom answers an expired token from our key, and a refusal that may be an answer we did not recognise. So it waits for the owner's word.
-  - **Still open (older than this work):** if a rebuild Axinom allowed then fails (Google's key server down, say), there is no combined view until the next run. Building into a separate folder and swapping only when complete would keep the old one.
+  - **Not done; put to the owner (minor 9, an option):** the keep rule also protects a form that can no longer work: its token has expired, or it is signed with the very key Axinom now refuses. "Try again" for a left-out picture then stays blocked until Axinom accepts the key again. Changing that means deleting forms on signals not yet measured: how Axinom answers an expired token from our key, and a refusal that may be an answer we did not recognise. So it waits for the owner's word. **Decided (the owner's go, 22:34Z):** a form whose token has expired is dead. Done in the eleventh round, below. A form signed with a key Axinom now refuses is still kept: that signal is not measured.
+  - **Still open (older than this work):** if a rebuild Axinom allowed then fails (Google's key server down, say), there is no combined view until the next run. Building into a separate folder and swapping only when complete would keep the old one. *(Corrected by the eleventh review: a rebuild that throws commits nothing, so the old view stays on the site. The real loss was a rebuild that finished without an Apple form and was committed without one. Both cases are fixed in the eleventh round, below: the rebuild is built beside the view and swapped in only when complete.)*
   - **Measured here:** site 42 of 42 with the real packager, none skipped; service 15 of 15; the drive 86 of 86; the guard 9 of 9.
   - **Next:** the deliberate breaks (mine, and the reviewer's five), CI, and an eleventh review of this fix before the merge.
   - **Watched failing (21:47Z):** 30 deliberate breaks.
     - On `3e0c849`, 28 of 29 were caught at once. They include the ninth review's blocker, and four of the five breaks the tenth review's set found that no test caught: the three worker paths and the ten-times default limit.
     - The fifth, git's answer making the guard read nothing, was run on `fd22c0e`: caught.
     - The one missed: the download's output allowed to be built by a command. Its only test was refused for another reason, so it tested nothing. A test for that rule alone was added in `fd22c0e`; the break, re-run there, is caught.
-  - **CI on `3e0c849`:** site test, service test and drive passed (runs 38176722623, 38176724900, 38176717009). **On `fd22c0e`:** service test passed (run 38177756083); the site test was still running at 21:48Z.
+  - **CI on `3e0c849`:** site test, service test and drive passed (runs 38176722623, 38176724900, 38176717009). **On `fd22c0e`:** service test passed (run 38177756083); the site test was still running at 21:48Z. It then passed (run 38177754517), as the eleventh review read it.
   - **Now (21:48Z):** the eleventh review, on `35073c2..fd22c0e`, is running. The merge waits until it comes back clean.
   - **Side items from QuicLINKs (not this repository), told to the owner at 21:45Z:**
     - QuicLINKs PR #953 was merged on github.com. CCS's own repository lacks that commit, so the production mirror script will refuse its next push until CCS main takes it in. This sandbox cannot sign in to CCS's server, so that step is the owner's, or a session on his PC.
     - QuicLINKs PR #954 now conflicts with #953, and its independent review never finished. It is fixed after the Apple merge.
+- 2026-10-11T23:39Z: **the reviewer's eleventh pass, on `35073c2..fd22c0e`: no blocker; four should-fix (two of them regressions of mine) and seven minor points. All done, with the owner's go at 22:34Z on the two choices it needed: check the packager file itself by its fingerprint each time a program runs it, and treat a form whose token has expired as dead.**
+  - **Should-fix 1 (a regression of mine): the guard's rewrite saw less than the version before it.** It let through an image named on a line of its own: a continuation line, a job variable, a Dockerfile build argument, a heredoc (the reviewer's B1 to B4 and B8). It also newly refused three harmless edits. Of those, a package named "packager" in a lock file is accepted now. The other two stay refused, and the guard says so: an `install` of the downloaded file, and an artifact named `packager-version.txt`.
+    - **The real guarantee is now the run-time check, not this text rule.** `service/lib/packager-pin.mjs` hashes the packager file a program is about to run and refuses anything but shaka-packager v3.9.3's own release binary. It looks a bare name up on the PATH as the shell would, and is asked every time, never remembered. It is asked by:
+      - the site's job command (except for a deletion, which runs no packager);
+      - the backfill;
+      - the card job;
+      - the service: at start (named in its health check) and before every photo.
+    - The two jobs that run the packager from a shell check it on the line after the download, and again first in any later step that runs it. One step in `drm-package.yml` (its PlayReady step) ran it without that, relying on the step before; it now checks too.
+    - **The text guard now only catches obvious slips.**
+      - Any line that names shaka-packager itself must be the pinned download, apart from a name, a Dockerfile label or a plain print line. That catches B1 to B4 and B8.
+      - Lock files are no longer read.
+      - Makefile names are read in any case.
+      - The guard's own comment lists what it does not see, and what holds there instead.
+  - **Should-fix 2 (a regression of mine): the page counted "Try again" as answered as soon as the view's record changed.** Another tab's answer or the weekly renewal of its Apple form changed the record too. **Now:** each request carries its own id, which the job writes into the record with its answer (the last ten are kept). The page waits for its own id, or until the view holds every picture with none left out, for at most ten minutes as before.
+  - **Should-fix 3: a rebuild of the same pictures deleted the working form first.** When Apple's packaging then failed, the view was committed with no form and no warning. **Now:**
+    - A rebuild is made beside the view and swapped in only when complete.
+    - A rebuild of the same pictures that comes out without a form, while the view has a working one, is not swapped in. The view is kept and the job warns.
+    - A view of other pictures is still replaced, because its old content must go. The job warns when it ends without a form, and so does a new picture's job.
+  - **Should-fix 4: breaks that no test caught.** Each now has its own test:
+    - the time of a "kept" answer (W1);
+    - the job's warning moved or removed (W2, W6);
+    - a failed render, or a new form failing its check, taken for an unreadable view (W3, W5);
+    - another answer taken for this one (P1);
+    - the time shown in UTC (P2);
+    - the guard: a name in capitals, .bat, .cmd and .psm1 files, Makefile names, lock files, an unlisted download, committed files under an ignored path (G1 to G6).
+  - **Minor, each done:**
+    - 5: "Try again" followed by deleting the left-out picture showed "being remade" for ten minutes. The answer is now recognised by its id.
+    - 6: "unreadable" now means only the view's own output. A program that cannot be started keeps the view. A missing output file is still rebuilt.
+    - 7: a half-copied form folder is removed. After a renewal's record is written, the old form's removal can no longer throw (it is caught and logged).
+    - 8: the edits still refused, though harmless, are listed in the guard: an `install` or `cp` of the downloaded file, an action input naming a packager file, an echo of the release address, curl options beyond -f -s -S -L.
+    - 9: the drive's kept record now carries a form (a record with no form was a state the worker never writes). The drive has scenarios for the reviewer's PG1 to PG3. "Last tried at" shows the device's own time, with the day when it is not today; the drive checks that in Chicago time.
+    - 10: the plan corrected in place above.
+    - 11: decided by the owner, done: an expired form is dead. The job does not wait on Axinom to replace it, and the page does not offer it to an Apple device.
+  - **Found by my own tests while building this:** a number passed the request-id check, because the check turned it into text first; it is refused now. My first test for G1 still had a lower-case "packager" in its address, so it tested nothing. The break run found that, and it is fixed.
+  - **Measured here:** site 45 of 45 with the real packager, none skipped; service 16 of 16; the drive 91 checks, none failed; the guard and the generated-page check pass. All on `0a82b5d`, 23:34Z to 23:36Z.
+  - **Watched failing:** 59 deliberate breaks, each in a scratch copy of the committed code, 23:21Z to 23:34Z. 58 were caught at once on `9a951ff`, each by the check meant for it. The one missed was my own G1 test (above); fixed in `0a82b5d`, the break re-run there is caught.
+  - **Next:** an independent review of these local commits before any push. Then push, CI and the merge.
+  - **Side item from QuicLINKs:** PR #954's conflict with #953 is resolved. Its entry is under independent review again, and it is pushed only when a review comes back clean.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
