@@ -44,7 +44,11 @@ jobs:
         run: |
           $exe = if ("${{ matrix.browser }}" -eq "chrome") { "C:\Program Files\Google\Chrome\Application\chrome.exe" } else { "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" }
           "${{ matrix.browser }} " + (Get-Item $exe).VersionInfo.ProductVersion | Out-Host
-          Start-Process $exe -ArgumentList "--remote-debugging-port=9222", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:RUNNER_TEMP\prof-${{ matrix.browser }}", "--start-maximized", "about:blank"
+          # a fresh profile with the browser's own "save password?" offer switched off, so it never covers the page in a capture
+          $prof = "$env:RUNNER_TEMP\prof-${{ matrix.browser }}"
+          New-Item -ItemType Directory -Force "$prof\Default" | Out-Null
+          Set-Content -Path "$prof\Default\Preferences" -Value '{"credentials_enable_service":false,"profile":{"password_manager_enabled":false}}'
+          Start-Process $exe -ArgumentList "--remote-debugging-port=9222", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$prof", "--start-maximized", "about:blank"
           for ($i = 0; $i -lt 30; $i++) { try { Invoke-RestMethod http://127.0.0.1:9222/json/version | Out-Null; "debugging port up"; exit 0 } catch { Start-Sleep -Seconds 1 } }
           exit 1
       - name: Walk the live site

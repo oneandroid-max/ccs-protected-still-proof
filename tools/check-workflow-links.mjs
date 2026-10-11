@@ -92,8 +92,8 @@ for (const f of toolFiles) {
 // files are pinned by content: ANY change to them fails here until this pin is updated in the same
 // change, which forces whoever changes them to re-read the safeguards above, and a reviewer to see it.
 const PINNED = {
-  ".github/workflows/site-walk.yml": "a876fa83889a444b9024a76c238dae2e651d250528b589950cf32316323a5f60",
-  "tools/walk-site.mjs": "952b793aa8c71a65e556772b2e203b0df124b439f8ea9ddc1e03e2b7f67b7cdf",
+  ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
+  "tools/walk-site.mjs": "44e8bd27b8be2c52797bb46c4bf35909938545271e2197717f4777d1231d5514",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");

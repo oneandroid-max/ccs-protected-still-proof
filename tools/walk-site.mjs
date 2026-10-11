@@ -157,8 +157,12 @@ try {
   await page.waitForTimeout(1500);
   await capture("one-picture");
   // 6. back, the way a person goes back
-  await page.goBack({ waitUntil: "load" });
-  step(/all\.html/.test(page.url()), "back returns to the combined view");
+  // a real browser may restore the page from memory on Back, which fires no "load" event: wait for the
+  // address, then for the readout, and record which kind of return it was
+  await page.goBack({ waitUntil: "commit", timeout: 15000 });
+  await page.waitForURL(/all\.html/, { timeout: 15000 });
+  const how = await page.evaluate(() => (performance.getEntriesByType("navigation")[0] || {}).type).catch(() => "?");
+  step(/all\.html/.test(page.url()), `back returns to the combined view (navigation type: ${how})`);
   const r4 = await waitPlaying("all again");
   step(/playing/.test(r4["r-play"]), `and it plays again: ${r4["r-play"]}`);
   await page.locator("#v").scrollIntoViewIfNeeded();
