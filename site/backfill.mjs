@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveKey, derivePhotoKey, exportKeyHex, open } from "./crypto.js";
 import { run } from "./worker.mjs";
-import { readCommunicationKey } from "./axinom.mjs";
+import { readCommunicationKey, readAxinomSettings } from "./axinom.mjs";
 
 // a missing or malformed secret, or a password that opens nothing, is named on the run's page (an error
 // annotation), not only in its log; a weekly run without the Axinom key set simply has nothing to do
@@ -22,7 +22,7 @@ if (process.env.GITHUB_EVENT_NAME === "schedule" && !process.env.AXINOM_COM_KEY_
   process.exit(0);
 }
 let com;
-try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); } catch (e) { stop(e.message); }
+try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(siteDir)).fairplayLicense); } catch (e) { stop(e.message); }
 const cfg = JSON.parse(await fs.readFile(join(siteDir, "config.json"), "utf8"));
 const photoKey = await derivePhotoKey(await deriveKey(process.env.SITE_PASSWORD, cfg.salt, cfg.iterations));
 const key = await exportKeyHex(photoKey);

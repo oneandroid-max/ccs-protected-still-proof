@@ -6,11 +6,29 @@
 // EntitlementService.js): AES-256-CBC without padding under the communication key, the IV being the key
 // id's bytes, and an HS256 JWT. Node only (the job), no outside packages.
 import { createCipheriv, createHmac, randomBytes } from "node:crypto";
+import { promises as fs } from "node:fs";
+import { join } from "node:path";
 
 // Axinom's FairPlay licence service and its evaluation FairPlay certificate (issued by Apple to
 // "FairPlay Streaming: Axinom GmbH", valid to 2026-11-30, read on a runner by apple-probe.yml).
 export const AXINOM_FAIRPLAY_LICENSE = "https://drm-fairplay-licensing.axprod.net/AcquireLicense";
 export const AXINOM_FAIRPLAY_CERT = "https://tools.axinom.com/FPScert/fairplay.cer";
+// An Axinom FairPlay licence address: the shared one above, or an environment's own, which carries the
+// environment's tenant prefix (https://<prefix>.drm-fairplay-licensing.axprod.net/AcquireLicense, as its DRM
+// Service page shows it; Axinom: "use the URLs exactly as shown"). A page sends a token to no other host: the
+// route-1 page and the Apple check page carry this same pattern (the tests compare them).
+export const FAIRPLAY_LICENSE_ADDRESS = /^https:\/\/(?:[a-z0-9][a-z0-9-]{0,62}\.)?drm-fairplay-licensing\.axprod\.net\/AcquireLicense$/;
+// The account's own settings, committed in site/axinom.json (public by nature: Safari asks the licence address
+// in the open): its FairPlay licence address. Without the file, the shared address; anything that is not an
+// Axinom FairPlay licence address is refused with a plain message.
+export async function readAxinomSettings(siteDir) {
+  let raw;
+  try { raw = await fs.readFile(join(siteDir, "axinom.json"), "utf8"); } catch { return { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }; }
+  let fairplayLicense;
+  try { fairplayLicense = String(JSON.parse(raw).fairplayLicense ?? AXINOM_FAIRPLAY_LICENSE).trim(); } catch { throw new Error("site/axinom.json is not readable JSON"); }
+  if (!FAIRPLAY_LICENSE_ADDRESS.test(fairplayLicense)) throw new Error("site/axinom.json names a FairPlay licence address that is not one of Axinom's (https://<prefix>.drm-fairplay-licensing.axprod.net/AcquireLicense)");
+  return { fairplayLicense };
+}
 
 // Axinom's PUBLIC test key: the content key of its own public FairPlay test stream ("v10 HLS H264
 // single key"), published with a licence token that never expires, in github.com/Axinom/public-test-vectors
@@ -31,14 +49,17 @@ export const kidToUuid = (hex) => `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.
 
 // The communication key, from the two values the evaluation account shows: an id (GUID) and a
 // base64 key of 32 bytes. The id is kept exactly as given (Axinom compares it with its own record).
-// Throws with a plain message when either is missing or malformed; the message never carries a value.
-export function readCommunicationKey(id, keyB64) {
+// With it, the account's FairPlay licence address (readAxinomSettings), which every Apple form made with
+// this key records. Throws with a plain message when any is missing or malformed; the message never
+// carries a key's value.
+export function readCommunicationKey(id, keyB64, license = AXINOM_FAIRPLAY_LICENSE) {
   if (!id || !keyB64) throw new Error("the Axinom communication key is not set (AXINOM_COM_KEY_ID and AXINOM_COM_KEY)");
   const given = String(id).trim();
   if (!UUID.test(given.toLowerCase())) throw new Error("AXINOM_COM_KEY_ID is not a GUID");
   const key = Buffer.from(String(keyB64).trim(), "base64");
   if (key.length !== 32) throw new Error(`AXINOM_COM_KEY must be 32 bytes in base64 (got ${key.length})`);
-  return { id: given, key };
+  if (!FAIRPLAY_LICENSE_ADDRESS.test(String(license))) throw new Error("the FairPlay licence address is not one of Axinom's");
+  return { id: given, key, license: String(license) };
 }
 
 // The content key encrypted for Axinom: AES-256-CBC, no padding, the IV being the key id's 16 bytes.

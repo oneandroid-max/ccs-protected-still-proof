@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { importKeyHex, open, seal, sealText, openText, fromBase64, toHex, randomBytes } from "./crypto.js";
 import { renderClip, packageClip, checkBoxes, newProtectionIds, probe, packageFairPlay, checkFairPlay } from "../service/lib/pipeline.mjs";
-import { readCommunicationKey, mintToken, newFairPlayIds } from "./axinom.mjs";
+import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
 import { run as execFile } from "../service/lib/util.mjs";
 import { jpegOrientation } from "../service/lib/exif.mjs";
 import { sniffImage } from "../service/lib/util.mjs";
@@ -36,7 +36,8 @@ export const TOKEN_RENEW_DAYS = 14; // a token with less than this left is renew
 // the meta's pointer to it swaps files and token together. A fresh name each time means a browser holding
 // an older copy in its cache (Pages caches for ten minutes) never pairs old video with a new licence.
 // Older forms are removed by the caller, once the meta points to the new one. Throws when the packaged
-// form fails its check: nothing is written then. Returns what the meta records.
+// form fails its check: nothing is written then. Returns what the meta records, the account's licence
+// address with it (the page sends the token there and nowhere else).
 async function addFairPlay({ tools, work, outDir, key, com }) {
   const ids = newFairPlayIds();
   await fs.rm(join(work, "fp"), { recursive: true, force: true });
@@ -51,7 +52,7 @@ async function addFairPlay({ tools, work, outDir, key, com }) {
   await fs.mkdir(part, { recursive: true });
   for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
   await fs.rename(part, join(outDir, folder));
-  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, expires };
+  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
 }
 // Removes every Apple form in `dir` but the one the meta now records (and anything half-made).
 async function removeOtherFairPlay(dir, fairplay) {
@@ -60,12 +61,14 @@ async function removeOtherFairPlay(dir, fairplay) {
   for (const d of names) if (/^fp-[0-9a-f]{8}(\.part)?$/.test(d) && d !== keep) await fs.rm(join(dir, d), { recursive: true, force: true });
 }
 // Whether a recorded Apple form is there and still good: all four files, its token made with THIS Axinom
-// key (one made with another cannot be licensed), and more than TOKEN_RENEW_DAYS left on it.
+// key (one made with another cannot be licensed) for THIS licence address, and more than TOKEN_RENEW_DAYS
+// left on it.
 export async function fairPlayCurrent(dir, fairplay, com, now = Date.now()) {
   if (!fairplay || !/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(fairplay.master))) return false;
   const folder = fairplay.master.split("/")[0];
   try { for (const f of FP_FILES) await fs.access(join(dir, folder, f)); } catch { return false; }
   if (com && String(fairplay.comKeyId || "").toLowerCase() !== com.id.toLowerCase()) return false;
+  if (com && (fairplay.license || AXINOM_FAIRPLAY_LICENSE) !== (com.license || AXINOM_FAIRPLAY_LICENSE)) return false;
   return Date.parse(fairplay.expires) > now + TOKEN_RENEW_DAYS * 86400000;
 }
 
@@ -350,7 +353,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // Apple's form needs the Axinom key; without a usable one every picture is still prepared for the rest
   let com = null;
   if (process.env.AXINOM_COM_KEY_ID || process.env.AXINOM_COM_KEY) {
-    try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); }
+    try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(siteDir)).fairplayLicense); }
     catch (e) { console.log(`::warning title=Apple form::the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
   } else console.log("the Axinom key is not set: no Apple (FairPlay) form (Apple devices stay held back)");
   const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com });

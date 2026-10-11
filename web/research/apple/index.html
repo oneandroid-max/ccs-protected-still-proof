@@ -78,7 +78,7 @@
   const $ = (id) => document.getElementById(id);
   const set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 14:26 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account + clear control)";
+  const PAGE_VERSION = "2026-10-11 16:25 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address + clear control)";
   set("r-ver", PAGE_VERSION);
   set("r-ua", navigator.userAgent);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
@@ -90,6 +90,9 @@
   const CLEAR = "https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8";
   const LICENSE = "https://drm-fairplay-licensing.axprod.net/AcquireLicense";
   const CERT = "https://tools.axinom.com/FPScert/fairplay.cer";
+  // the only licence addresses a token is sent to: Axinom's shared one, or an account's own (its tenant
+  // prefix first); the same pattern as FAIRPLAY_LICENSE_ADDRESS in site/axinom.mjs
+  const LICENSE_ADDRESS = /^https:\/\/(?:[a-z0-9][a-z0-9-]{0,62}\.)?drm-fairplay-licensing\.axprod\.net\/AcquireLicense$/;
   // our test card in FairPlay form (tools/fairplay-card.mjs, card-fairplay.yml): the route-1 test card,
   // packaged by the code that packages the site's pictures, under the same public test key as the film
   const CARD = "../drm/card-fairplay/master.m3u8";
@@ -137,10 +140,10 @@
   }
 
   // one protected video: its own player, Axinom's licence service and certificate, the public token
-  async function protectedPlay(videoId, p, url, what, token = TOKEN) {
+  async function protectedPlay(videoId, p, url, what, token = TOKEN, license = LICENSE) {
     const v = $(videoId);
     const player = new shaka.Player(); await player.attach(v);
-    player.configure({ drm: { servers: { "com.apple.fps": LICENSE }, advanced: { "com.apple.fps": { serverCertificateUri: CERT } } } });
+    player.configure({ drm: { servers: { "com.apple.fps": license }, advanced: { "com.apple.fps": { serverCertificateUri: CERT } } } });
     player.getNetworkingEngine().registerRequestFilter((type, request) => {
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = token; log(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
     });
@@ -162,13 +165,15 @@
   }
   await protectedPlay("vp", "p", PROTECTED, "film (protected)");
   await protectedPlay("vk", "k", CARD, "our card (protected)");
-  let ownToken = null, ownBase = null;
+  let ownToken = null, ownBase = null, ownLicense = LICENSE;
   try {
     const c = await fetch(OWN + "current.json?v=" + Date.now(), { cache: "no-store" });
-    const folder = c.ok ? String((await c.json()).folder || "") : "";
-    if (/^[0-9a-f]{8}$/.test(folder)) { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); }
+    const cur = c.ok ? await c.json() : {};
+    const folder = String(cur.folder || "");
+    ownLicense = cur.license === undefined ? LICENSE : String(cur.license); // the account's own licence address, recorded with its card
+    if (/^[0-9a-f]{8}$/.test(folder) && LICENSE_ADDRESS.test(ownLicense)) { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); }
   } catch (e) {}
-  if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken);
+  if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken, ownLicense);
   else { set("o-ks", "—"); set("o-play", "not made yet: it needs our Axinom account", "bad"); log("our card, our account: not made yet (needs the Axinom account's key in the repository's secrets)"); }
 })();
 </script>

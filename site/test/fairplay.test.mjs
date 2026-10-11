@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
-import { readCommunicationKey, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT } from "../axinom.mjs";
+import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
 import { checkFairPlay, packageFairPlay, renderClip } from "../../service/lib/pipeline.mjs";
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
@@ -20,6 +20,7 @@ import { run as exec, redactKeys } from "../../service/lib/util.mjs";
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
 const COM = { id: "0e2c58d1-7c4b-4f3e-9a51-3d1f0b7e6a42", key: nodeRandom(32) }; // a throwaway communication key
+const OWN_LICENSE = "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense"; // an account's own licence address (a made-up prefix)
 const b64url = (s) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
 // on GitHub, what a test measured is also written as a notice on the run (readable without the log)
 const notice = (title, msg) => { if (process.env.GITHUB_ACTIONS === "true") console.log(`::notice title=${title}::${msg}`); };
@@ -33,6 +34,21 @@ test("the communication key is read strictly: both values, a GUID, 32 bytes; the
   assert.throws(() => readCommunicationKey(COM.id, short), (e) => /32 bytes/.test(e.message) && !e.message.includes(short));
   const c = readCommunicationKey(` ${COM.id.toUpperCase()} `, ` ${COM.key.toString("base64")}\n`);
   assert.equal(c.id, COM.id.toUpperCase(), "kept as given (trimmed): Axinom compares it with its own record"); assert.ok(c.key.equals(COM.key));
+  assert.equal(c.license, AXINOM_FAIRPLAY_LICENSE, "without an address of its own: Axinom's shared one");
+  assert.equal(readCommunicationKey(COM.id, COM.key.toString("base64"), OWN_LICENSE).license, OWN_LICENSE);
+  for (const bad of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-widevine-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-fairplay-licensing.axprod.net.example.com/AcquireLicense"])
+    assert.throws(() => readCommunicationKey(COM.id, COM.key.toString("base64"), bad), /not one of Axinom's/, bad);
+});
+
+test("the account's own licence address (site/axinom.json): the committed one is Axinom's FairPlay host with a prefix; none means the shared one; anything else is refused", async () => {
+  const committed = await readAxinomSettings(join(REPO, "site"));
+  assert.match(committed.fairplayLicense, FAIRPLAY_LICENSE_ADDRESS); assert.notEqual(committed.fairplayLicense, AXINOM_FAIRPLAY_LICENSE, "the account's own, not the shared one");
+  const d = await fs.mkdtemp(join(tmp, "settings-"));
+  assert.deepEqual(await readAxinomSettings(d), { fairplayLicense: AXINOM_FAIRPLAY_LICENSE }, "no file: the shared address");
+  for (const [body, re] of [["not json", /not readable JSON/], [JSON.stringify({ fairplayLicense: "https://licence.example.com/AcquireLicense" }), /not one of Axinom's/], [JSON.stringify({ fairplayLicense: "https://a.b.drm-fairplay-licensing.axprod.net/AcquireLicense" }), /not one of Axinom's/]]) {
+    await fs.writeFile(join(d, "axinom.json"), body); await assert.rejects(readAxinomSettings(d), re, body);
+  }
+  notice("FairPlay licence address", `committed: ${committed.fairplayLicense}`);
 });
 
 test("a failing command's message carries no key (it can reach a public log)", async () => {
@@ -84,6 +100,7 @@ test("the pages use Axinom's licence service, certificate and PUBLIC token, the 
   assert.equal(p.com_key_id, "69e54088-e9e0-4530-8c1a-1eb6dcd0d14e", "Axinom's own public test account");
   assert.deepEqual(p.message.content_keys_source.inline.map((x) => x.id), [kidToUuid(AXINOM_PUBLIC_TEST.kid)], "it licenses the public test key and nothing else");
   assert.equal(AXINOM_PUBLIC_TEST.key, "fc35340837310cc0fb53de97e22a69e0", "the key Axinom publishes for it (/DU0CDcxDMD7U96X4ipp4A==)");
+  for (const [page, re] of [[route1, /const AXINOM_LICENSE_ADDRESS = \/(.+)\/;/], [apple, /const LICENSE_ADDRESS = \/(.+)\/;/]]) assert.equal(page.match(re)[1], FAIRPLAY_LICENSE_ADDRESS.source, "the page sends a token only where site/axinom.mjs allows");
   for (const [page, lic, cert] of [[route1, /const AXINOM_LICENSE = "([^"]+)"/, /const AXINOM_CERT = "([^"]+)"/], [apple, /const LICENSE = "([^"]+)"/, /const CERT = "([^"]+)"/]]) {
     assert.equal(page.match(lic)[1], AXINOM_FAIRPLAY_LICENSE); assert.equal(page.match(cert)[1], AXINOM_FAIRPLAY_CERT);
   }
@@ -94,9 +111,10 @@ test("the pages use Axinom's licence service, certificate and PUBLIC token, the 
 // token; with nothing made yet, or a folder name of any other shape, or no token there, nothing is played.
 test("the Apple check page plays our account's card only from the folder current.json names, with that folder's token", async () => {
   const page = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
-  const from = page.indexOf("  let ownToken = null, ownBase = null;"), to = page.indexOf("\n})();", from);
+  const from = page.indexOf("  let ownToken = null, ownBase = null, ownLicense = LICENSE;"), to = page.indexOf("\n})();", from);
   assert.ok(from > 0 && to > from, "the page's own-card lines are where this test reads them");
-  const lines = page.slice(from, to), OWN = page.match(/const OWN = "([^"]+)";/)[1];
+  const lines = page.slice(from, to), OWN = page.match(/const OWN = "([^"]+)";/)[1], LICENSE = page.match(/const LICENSE = "([^"]+)";/)[1];
+  const LICENSE_ADDRESS = new RegExp(page.match(/const LICENSE_ADDRESS = \/(.+)\/;/)[1]);
   assert.equal(OWN, "../drm/card-fairplay-own/");
   const runWith = async (files) => {
     const seen = [], calls = [];
@@ -104,7 +122,7 @@ test("the Apple check page plays our account's card only from the folder current
       return body === undefined ? { ok: false, json: async () => { throw new Error("404"); }, text: async () => "" } : { ok: true, json: async () => JSON.parse(body), text: async () => body }; };
     const protectedPlay = async (...a) => { calls.push(a); };
     const set = (id, text) => calls.push(["set", id, text]);
-    await new Function("fetch", "OWN", "protectedPlay", "set", "log", `return (async () => {${lines}\n})();`)(fetch, OWN, protectedPlay, set, () => {});
+    await new Function("fetch", "OWN", "LICENSE", "LICENSE_ADDRESS", "protectedPlay", "set", "log", `return (async () => {${lines}\n})();`)(fetch, OWN, LICENSE, LICENSE_ADDRESS, protectedPlay, set, () => {});
     return { plays: calls.filter((c) => c[0] !== "set"), sets: calls.filter((c) => c[0] === "set"), seen };
   };
   // nothing made yet: the cell says so, nothing is played
@@ -113,7 +131,14 @@ test("the Apple check page plays our account's card only from the folder current
   assert.ok(/^\.\.\/drm\/card-fairplay-own\/current\.json\?v=\d+$/.test(r.seen[0]), "current.json is asked for fresh: " + r.seen[0]);
   // a folder and its token: the card in that folder, with that token
   r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
-  assert.deepEqual(r.plays.map((a) => [a[0], a[1], a[2], a[4]]), [["vo", "o", OWN + "1a2b3c4d/master.m3u8", "TOKEN-1"]]);
+  assert.deepEqual(r.plays.map((a) => [a[0], a[1], a[2], a[4], a[5]]), [["vo", "o", OWN + "1a2b3c4d/master.m3u8", "TOKEN-1", LICENSE]], "no address recorded: the shared one");
+  // the account's own licence address, recorded with the card: the token goes there; any other host, nowhere
+  r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", license: OWN_LICENSE }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
+  assert.deepEqual(r.plays.map((a) => a[5]), [OWN_LICENSE], "the account's own address");
+  for (const license of ["https://licence.example.com/AcquireLicense", "http://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense", ""]) {
+    r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", license }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
+    assert.deepEqual(r.plays, [], `address ${JSON.stringify(license)}: nothing played`); assert.ok(!r.seen.some((u) => /token\.txt/.test(u)), `and no token fetched for ${JSON.stringify(license)}`);
+  }
   // any other folder name is never followed; a folder without a token plays nothing
   for (const folder of ["../../site", "1a2b3c4", "1A2B3C4D", "1a2b3c4d/..", "1a2b3c4d0", "", null]) {
     r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder }), [OWN + folder + "/token.txt"]: "TOKEN-X" });
@@ -406,6 +431,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
     assert.deepEqual((await fs.readdir(dir)).filter((f) => /^fp/.test(f)), [folder], "one Apple form, nothing half-made");
     const token = await openText(KEY, new Uint8Array(await fs.readFile(join(dir, folder, "token.enc"))));
     const p = b64url(token.split(".")[1]); const k = p.message.content_keys_source.inline[0];
+    assert.equal(meta.fairplay.license, AXINOM_FAIRPLAY_LICENSE, "the meta records the licence address the token is for");
     assert.equal(p.com_key_id, COM.id); assert.equal(meta.fairplay.comKeyId, COM.id); assert.equal(meta.fairplay.expires, p.expiration_date, "the meta records which key made the token and when it ends");
     const contentKey = unwrapKey(COM.key, k.id.replace(/-/g, ""), k.encrypted_key);
     const media = await fs.readFile(join(dir, folder, "video.m3u8"), "utf8");
@@ -445,6 +471,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, COM), true);
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, COM, Date.parse(m.fairplay.expires) - (TOKEN_RENEW_DAYS - 1) * 86400000), false, "less than the renewal margin left: not current");
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "made with another key: not current");
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, license: OWN_LICENSE }), false, "made for another licence address: not current");
   await fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...m, fairplay: { ...m.fairplay, expires: new Date(Date.now() + 3 * 86400000).toISOString() } })));
   assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 1, already: 1, failed: 0 }, "the expiring one is renewed");
   const a3 = await verify(A, [39, 174, 96], 640, 480);
@@ -453,6 +480,11 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   const r2 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: OTHER });
   assert.deepEqual(counts(r2), { added: 2, already: 0, failed: 0 }, "another Axinom key: every form is remade under it");
   assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc"))))).fairplay.comKeyId, OTHER.id, "the combined view too");
+  // the account's own licence address set: every form is remade for it, and records it
+  const r3 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: { ...OTHER, license: OWN_LICENSE } });
+  assert.deepEqual(counts(r3), { added: 2, already: 0, failed: 0 }, "a new licence address: every form is remade for it");
+  assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath)))).fairplay.license, OWN_LICENSE, "and records it");
+  assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc"))))).fairplay.license, OWN_LICENSE, "the combined view too");
   // without the key the backfill refuses plainly
   await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: null }), /not set/);
   // a picture whose form fails to package is still ready for everything else
@@ -504,6 +536,8 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.equal(own.decryptCheck.ffmpeg, 0);
   assert.equal(await ownCardCurrent(root, COM), true, "current: same account, 60 days left");
   assert.equal(await ownCardCurrent(root, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "another account: remade");
+  assert.equal(JSON.parse(await fs.readFile(join(root, "current.json"), "utf8")).license, AXINOM_FAIRPLAY_LICENSE, "current.json records the licence address the token is for");
+  assert.equal(await ownCardCurrent(root, { ...COM, license: OWN_LICENSE }), false, "another licence address: remade");
   assert.equal(await ownCardCurrent(root, COM, Date.parse(own.expires) - 13 * 86400000), false, "13 days left: remade");
   const renewed = await buildOwnCard({ tools, root, com: COM });
   assert.notEqual(renewed.folder, own.folder); assert.deepEqual((await fs.readdir(root)).sort(), ["current.json", renewed.folder].sort(), "a renewal is a fresh folder; the old one is gone");

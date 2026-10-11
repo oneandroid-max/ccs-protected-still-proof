@@ -58,14 +58,14 @@
 <p><a href="index.html">Back to your pictures</a></p>
 <script>window.__ccsMode = "all"; window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>
-<script type="module" src="view-prelude.js?v=14808264b915"></script>
+<script type="module" src="view-prelude.js?v=19ecc3fb2c6d"></script>
 <script>
 (async () => {
   const CTX = await window.__ccsReady; // decrypted in memory by view-prelude.js
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 14:26 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay)";
+  const PAGE_VERSION = "2026-10-11 16:25 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -114,6 +114,9 @@
   const FAIRPLAY_OK = APPLE && !!FAIRPLAY_MEASURED[PLATFORM];
   const AXINOM_LICENSE = "https://drm-fairplay-licensing.axprod.net/AcquireLicense";
   const AXINOM_CERT = "https://tools.axinom.com/FPScert/fairplay.cer";
+  // the only licence addresses a token is sent to: Axinom's shared one, or an account's own (its tenant
+  // prefix first, as its DRM Service page shows it); the same pattern as FAIRPLAY_LICENSE_ADDRESS in site/axinom.mjs
+  const AXINOM_LICENSE_ADDRESS = /^https:\/\/(?:[a-z0-9][a-z0-9-]{0,62}\.)?drm-fairplay-licensing\.axprod\.net\/AcquireLicense$/;
   // Axinom's PUBLIC licence token for its public test key (github.com/Axinom/public-test-vectors), which
   // the test card's FairPlay form is encrypted with (tools/fairplay-card.mjs): it unlocks only that card.
   const AXINOM_PUBLIC_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUwLTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIsCiAgICAidmVyc2lvbiI6IDIsCiAgICAibGljZW5zZSI6IHsKICAgICAgImFsbG93X3BlcnNpc3RlbmNlIjogdHJ1ZQogICAgfSwKICAgICJjb250ZW50X2tleXNfc291cmNlIjogewogICAgICAiaW5saW5lIjogWwogICAgICAgIHsKICAgICAgICAgICJpZCI6ICI0MDYwYTg2NS04ODc4LTQyNjctOWNiZi05MWFlNWJhZTFlNzIiLAogICAgICAgICAgImVuY3J5cHRlZF9rZXkiOiAid3QzRW51dVI1UkFybjZBRGYxNkNCQT09IiwKICAgICAgICAgICJ1c2FnZV9wb2xpY3kiOiAiUG9saWN5IEEiCiAgICAgICAgfQogICAgICBdCiAgICB9LAogICAgImNvbnRlbnRfa2V5X3VzYWdlX3BvbGljaWVzIjogWwogICAgICB7CiAgICAgICAgIm5hbWUiOiAiUG9saWN5IEEiLAogICAgICAgICJwbGF5cmVhZHkiOiB7CiAgICAgICAgICAibWluX2RldmljZV9zZWN1cml0eV9sZXZlbCI6IDE1MCwKICAgICAgICAgICJwbGF5X2VuYWJsZXJzIjogWwogICAgICAgICAgICAiNzg2NjI3RDgtQzJBNi00NEJFLThGODgtMDhBRTI1NUIwMUE3IgogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
@@ -176,6 +179,10 @@
       log(`${tierName}: this clip has no Apple (FairPlay) form yet`); noAppleForm = true;
       return "unavailable";
     }
+    // an Apple form names the licence address its token was made for (the account's own); the test card's
+    // public token goes to Axinom's shared one. A token is sent to no other host.
+    const fpLicense = fp ? (fp.license === undefined ? AXINOM_LICENSE : String(fp.license)) : null;
+    if (fp && !AXINOM_LICENSE_ADDRESS.test(fpLicense)) { log(`${tierName}: this clip's Apple form names a licence address that is not Axinom's: refused`); return "failed-after-grant"; }
     const manifest = fp ? fp.manifest : t.system === "widevine" ? CLIP.widevine : CLIP.playready;
     if (current) { try { await current.destroy(); } catch (e) {} current = null; }
     const player = new shaka.Player(); current = player;
@@ -191,7 +198,7 @@
       cfg.drm.advanced[ks] = { videoRobustness: t.levels };
     } else if (t.system === "fairplay") {
       // Apple's own key system; the licence service reads the clip's token from this header
-      cfg.drm.servers["com.apple.fps"] = AXINOM_LICENSE;
+      cfg.drm.servers["com.apple.fps"] = fpLicense;
       cfg.drm.advanced["com.apple.fps"] = { serverCertificateUri: AXINOM_CERT };
     } else {
       cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";

@@ -50,10 +50,12 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
 }
 // its Apple form: the files as the job writes them (not sealed), and the licence token, sealed
 const FP_MASTER = "fp-0a1b2c3d/master.m3u8", PICTURE_TOKEN = "PICTURE.TOKEN.VALUE";
+const OWN_LICENSE = "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense"; // an account's own licence address (a made-up prefix)
 await fs.mkdir(join(photoDir, "fp-0a1b2c3d"), { recursive: true });
 for (const f of ["master.m3u8", "video.m3u8", "video.mp4"]) await fs.writeFile(join(photoDir, "fp-0a1b2c3d", f), "#EXTM3U\n");
 await fs.writeFile(join(photoDir, "fp-0a1b2c3d", "token.enc"), await sealText(PHOTO, PICTURE_TOKEN));
-await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { keyUri: "skd://00000000-0000-0000-0000-000000000000:00000000000000000000000000000000", master: FP_MASTER } })));
+const writePhotoMeta = async (license = OWN_LICENSE) => fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { keyUri: "skd://00000000-0000-0000-0000-000000000000:00000000000000000000000000000000", master: FP_MASTER, license } })));
+await writePhotoMeta();
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
 async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = [], fairplay = null) {
@@ -393,14 +395,22 @@ try {
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === BASE + "photos/" + ID + "/" + FP_MASTER, "measured: the picture plays through its own Apple form, by its full address: " + (await ap.evaluate(() => window.__manifests)).join());
   check((await licenceHeaders(ap))["X-AxDRM-Message"] === PICTURE_TOKEN, "with the picture's own licence token, unsealed in memory");
+  const pcfg = (await ap.evaluate(() => window.__cfgs)).at(-1);
+  check(pcfg.drm.servers["com.apple.fps"] === OWN_LICENSE, "sent to the licence address its form records (the account's own): " + pcfg.drm.servers["com.apple.fps"]);
   check(/measured black on iPhone\/iPad \(2026-10-11\)/.test(await ap.textContent("#r-expect")), "and the readout names the measurement: " + (await ap.textContent("#r-expect")));
   await ac.close();
   // (4) the combined view, measured: its own Apple form and token
-  await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8" });
+  await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
   ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
-  check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE", "the combined view plays through its own Apple form and token");
+  check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE" && (await ap.evaluate(() => window.__cfgs)).at(-1).drm.servers["com.apple.fps"] === OWN_LICENSE, "the combined view plays through its own Apple form and token, at its licence address");
   await ac.close(); await publishMosaic();
+  // (4b) a picture whose form names a licence address that is not Axinom's: its token is sent nowhere
+  await writePhotoMeta("https://licence.example.com/AcquireLicense");
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /licence address that is not Axinom's/.test(document.getElementById("log").textContent) || window.__photoShown, null, { timeout: 30000 }); // either way, the checks below name what happened
+  check(/this clip's Apple form names a licence address that is not Axinom's: refused/.test(await ap.textContent("#log")) && !(await ap.evaluate(() => window.__manifests)).length && !(await ap.evaluate(() => window.__photoShown)), "a form naming another licence address is refused, its token sent nowhere: " + (await ap.textContent("#log")).split("\n")[0]);
+  await ac.close(); await writePhotoMeta();
   // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
   api.noPictureToken = true;
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));

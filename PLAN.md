@@ -215,6 +215,11 @@ device for it; no outside service is in the chain.
     - The real-packager test of legitimate encodes passes all four (CBR filler, access unit delimiters, heavy B-frames, a 2×2 drawn at 64×64), each with 2 of 2 keyframes encrypted.
     - CI and the breakage run follow this commit.
 
+- 2026-10-11T16:28Z: **the owner's Axinom account is open** (the owner, from the account's DRM Service page). Its licence addresses carry the account's prefix `eeb795d3`, as Axinom's documentation said a new environment's would: `https://eeb795d3.drm-fairplay-licensing.axprod.net/AcquireLicense`, and the same pattern for Widevine and PlayReady.
+  - **Measured from here:** the FairPlay address answers as an Axinom FairPlay licence server (same server pool as the shared address: `fairplay-production-10`). Its CORS lets a page on the site's origin send the `X-AxDRM-Message` header (allow-origin `*`, allow-headers including `X-AxDRM-Message`), which is what Safari will do.
+  - **Done, on this branch:** the address is the account's own setting, `site/axinom.json` (public by nature: Safari asks it in the open). Each Apple form records the address its token was made for, and the job renews a form made for another address. The site's viewer and combined view send a form's token to the address it records. The Apple check page sends the own-account card's token to the address its `current.json` records. Both pages refuse any address that is not an Axinom FairPlay licence host (`https://[prefix.]drm-fairplay-licensing.axprod.net/AcquireLicense`, the same pattern in `site/axinom.mjs`, compared by a test). The test card's public token keeps Axinom's shared address.
+  - **Not yet:** the account's two keys in the repository's secrets (the owner's next step), then the merge, the card job and the Apple job, then the device screenshot.
+
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
 Route 1 means a plain link, nothing installed, the browser's own protected path. Where each format stands, and what gets it there:

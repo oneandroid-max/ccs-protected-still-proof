@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account + clear control)"
+  EXPECT_VERSION: "Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address + clear control)"
   APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/"
   ROUTE1_VERSION: "Apple FairPlay test (?levels=fairplay)"
   ROUTE1_TEST: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?levels=fairplay"

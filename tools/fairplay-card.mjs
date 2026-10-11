@@ -24,7 +24,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { packageFairPlay, checkFairPlay, checkBoxes, probe } from "../service/lib/pipeline.mjs";
 import { run } from "../service/lib/util.mjs";
-import { AXINOM_PUBLIC_TEST, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey } from "../site/axinom.mjs";
+import { AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey, readAxinomSettings } from "../site/axinom.mjs";
 import { derivePlayReadyTestKey } from "./playready-test-key.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
@@ -86,7 +86,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
         : "Axinom's PUBLIC test key (site/axinom.mjs, AXINOM_PUBLIC_TEST), unlocked by Axinom's public licence token",
       kid: kidToUuid(ids.kid), iv: ids.iv, keyUri: ids.keyUri, scheme: check.scheme, samples: check.samples, samplesEncrypted: check.samplesEncrypted,
       width: size.width, height: size.height, bytes: data.length, decryptCheck, packager: stdout.trim(),
-      ...(com ? { comKeyId: com.id, expires } : {}),
+      ...(com ? { comKeyId: com.id, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE } : {}),
     };
     await fs.writeFile(join(outDir, "info.json"), JSON.stringify(info, null, 2) + "\n");
     return info;
@@ -100,17 +100,18 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
 export async function buildOwnCard({ tools, root, com }) {
   const folder = randomBytes(4).toString("hex");
   const info = await buildFairPlayCard({ tools, outDir: join(root, folder), com });
-  await fs.writeFile(join(root, "current.json"), JSON.stringify({ folder, keyUri: info.keyUri, comKeyId: info.comKeyId, expires: info.expires }, null, 2) + "\n");
+  await fs.writeFile(join(root, "current.json"), JSON.stringify({ folder, keyUri: info.keyUri, comKeyId: info.comKeyId, expires: info.expires, license: info.license }, null, 2) + "\n");
   for (const d of await fs.readdir(root)) if (/^[0-9a-f]{8}$/.test(d) && d !== folder) await fs.rm(join(root, d), { recursive: true, force: true });
   return { folder, ...info };
 }
-// Whether the own-account form in `root` is still good for this key (same account, 14+ days left).
+// Whether the own-account form in `root` is still good for this key (same account and licence address, 14+
+// days left).
 export async function ownCardCurrent(root, com, now = Date.now()) {
   try {
     const cur = JSON.parse(await fs.readFile(join(root, "current.json"), "utf8"));
     if (!/^[0-9a-f]{8}$/.test(String(cur.folder))) return false;
     for (const f of [...FILES, "token.txt", "info.json"]) await fs.access(join(root, cur.folder, f));
-    return String(cur.comKeyId || "").toLowerCase() === com.id.toLowerCase() && Date.parse(cur.expires) > now + 14 * 86400000;
+    return String(cur.comKeyId || "").toLowerCase() === com.id.toLowerCase() && (cur.license || AXINOM_FAIRPLAY_LICENSE) === (com.license || AXINOM_FAIRPLAY_LICENSE) && Date.parse(cur.expires) > now + 14 * 86400000;
   } catch { return false; }
 }
 
@@ -123,7 +124,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const ownDir = join(REPO, "web", "research", "drm", "card-fairplay-own");
     if (!process.env.AXINOM_COM_KEY_ID && !process.env.AXINOM_COM_KEY) console.log("the Axinom key is not set: no own-account form of the card");
     else {
-      const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); // fails plainly when malformed
+      const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(join(REPO, "site"))).fairplayLicense); // fails plainly when malformed
       if (await ownCardCurrent(ownDir, com)) console.log("the own-account form of the card is current: unchanged");
       else { await fs.mkdir(ownDir, { recursive: true }); console.log(JSON.stringify(await buildOwnCard({ tools, root: ownDir, com }), null, 2)); }
     }

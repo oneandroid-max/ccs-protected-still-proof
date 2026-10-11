@@ -107,7 +107,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
         try {
           if (!/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(meta.fairplay.master))) throw new Error("its address is not one the job writes");
           const token = await openText(key, await fetchSealed(base + meta.fairplay.master.split("/")[0] + "/token.enc", "its licence token is not on the site yet"));
-          fairplay = { manifest: new URL(base + meta.fairplay.master, location.href).href, token };
+          fairplay = { manifest: new URL(base + meta.fairplay.master, location.href).href, token, ...(meta.fairplay.license !== undefined ? { license: String(meta.fairplay.license) } : {}) };
         } catch (e) { fairplay = { error: e.message }; }
       }
       if (ALL) wireAll(meta);
