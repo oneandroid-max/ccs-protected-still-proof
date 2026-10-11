@@ -55,7 +55,7 @@ jobs:
             $p | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
             if (-not $p.HasExited) { Write-Host "probe did not exit in 60 s; stopping it"; Stop-Process -Id $p.Id -Force }
             $f = $args[-1].Substring(6)
-            if (Test-Path $f) { Write-Host "== $f"; Get-Content $f } else { Write-Host "== $f: not written (no window on this runner?)" }
+            if (Test-Path $f) { Write-Host "== $f"; Get-Content $f } else { Write-Host "== ${f}: not written (no window on this runner?)" }
           }
           Write-Host "A gate run whose captures do not show the pattern means this runner cannot measure; the owner's PC is the measurement."
 
