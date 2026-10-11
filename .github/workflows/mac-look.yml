@@ -1,0 +1,114 @@
+# The Mac control. On the Mac runner, Chrome kept the software-protected card out of a screenshot (run
+# 38110515482). Before that can move Mac into the rule, the same machine must show it CAN capture this
+# browser's video: each job plays the test card first with NO protection (?levels=clearkey, the
+# control, which a screenshot should show), then with software Widevine (?levels=software), in the same
+# browser on the same virtual machine, one screenshot each. Control visible + software black = the black
+# comes from the protection. Control black too = black on this machine proves nothing. Test card only:
+# every link asks for it (tools/check-workflow-links.mjs, run again before anything is published).
+name: mac look
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/mac-look.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  EXPECT_VERSION: "04:20 UTC"
+  PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/"
+
+jobs:
+  mac-chrome:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for the live page version
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+      - name: Chrome on Mac — the unprotected control, then software protection, same machine
+        timeout-minutes: 8
+        run: |
+          APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          "$APP" --version
+          sw_vers
+          mkdir -p shots
+          date -u +"%T control: ClearKey, no protection"
+          "$APP" --no-first-run --no-default-browser-check --use-mock-keychain --user-data-dir=/tmp/prof-a \
+            --autoplay-policy=no-user-gesture-required --window-position=0,0 --window-size=1280,1000 \
+            "$PAGE?levels=clearkey&v=${{ github.run_number }}a#readout" > /tmp/chrome-a.log 2>&1 &
+          sleep 45
+          screencapture -x shots/mac-chrome-clearkey.png
+          pkill -f "user-data-dir=/tmp/prof-a" || true; sleep 5
+          date -u +"%T test: software Widevine"
+          "$APP" --no-first-run --no-default-browser-check --use-mock-keychain --user-data-dir=/tmp/prof-b \
+            --autoplay-policy=no-user-gesture-required --window-position=0,0 --window-size=1280,1000 \
+            "$PAGE?levels=software&v=${{ github.run_number }}b#readout" > /tmp/chrome-b.log 2>&1 &
+          sleep 45
+          screencapture -x shots/mac-chrome-software.png
+          pkill -f "user-data-dir=/tmp/prof-b" || true
+          date -u +"%T done"
+          ls -l shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-chrome, path: shots/, if-no-files-found: ignore }
+
+  mac-edge:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait for the live page version
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+      - name: Edge on Mac — the unprotected control, then software protection, same machine
+        timeout-minutes: 8
+        run: |
+          APP="/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+          "$APP" --version
+          sw_vers
+          mkdir -p shots
+          date -u +"%T control: ClearKey, no protection"
+          "$APP" --no-first-run --no-default-browser-check --use-mock-keychain --user-data-dir=/tmp/prof-a \
+            --autoplay-policy=no-user-gesture-required --window-position=0,0 --window-size=1280,1000 \
+            "$PAGE?levels=clearkey&v=${{ github.run_number }}c#readout" > /tmp/edge-a.log 2>&1 &
+          sleep 45
+          screencapture -x shots/mac-edge-clearkey.png
+          pkill -f "user-data-dir=/tmp/prof-a" || true; sleep 5
+          date -u +"%T test: software Widevine"
+          "$APP" --no-first-run --no-default-browser-check --use-mock-keychain --user-data-dir=/tmp/prof-b \
+            --autoplay-policy=no-user-gesture-required --window-position=0,0 --window-size=1280,1000 \
+            "$PAGE?levels=software&v=${{ github.run_number }}d#readout" > /tmp/edge-b.log 2>&1 &
+          sleep 45
+          screencapture -x shots/mac-edge-software.png
+          pkill -f "user-data-dir=/tmp/prof-b" || true
+          date -u +"%T done"
+          ls -l shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-edge, path: shots/, if-no-files-found: ignore }
+
+  save:
+    needs: [mac-chrome, mac-edge]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Refuse to publish unless every link asked for the test card
+        run: node tools/check-workflow-links.mjs
+      - name: Commit the screenshots
+        run: |
+          mkdir -p web/research/drm/results
+          find dl -name '*.png' -exec cp {} web/research/drm/results/ \;
+          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s","content":"test card"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/mac-look.json
+          ls -l web/research/drm/results/
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/research/drm/results/
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -m "research(drm): mac look, test card — Chrome and Edge on Mac, unprotected control and software protection (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
