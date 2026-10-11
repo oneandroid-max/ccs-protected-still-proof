@@ -10,6 +10,8 @@
 # them at once through one protected decoder. Those jobs run one at a time (a concurrency group keeps
 # at most one running and one waiting, the newest), and each one builds from the current tip of main,
 # so the last one always sees every picture.
+# APPLE: with the Axinom key in the repository's secrets (AXINOM_COM_KEY_ID, AXINOM_COM_KEY), both jobs
+# also give each output Apple's FairPlay form (site/worker.mjs); without it they prepare everything else.
 name: site photos
 
 on:
@@ -42,6 +44,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGER_BIN: /usr/local/bin/packager
+          AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}
+          AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}
           ACTION: ${{ github.event.client_payload.action }}
           ID: ${{ github.event.client_payload.id }}
         run: |
@@ -79,6 +83,8 @@ jobs:
       - name: Make the combined view on the current tip of main and commit; refresh and redo if the push races
         env:
           PACKAGER_BIN: /usr/local/bin/packager
+          AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}
+          AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}
           WORKER_ACTION: mosaic
         run: |
           git config user.name "github-actions[bot]"

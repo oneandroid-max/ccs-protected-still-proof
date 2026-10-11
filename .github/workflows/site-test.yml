@@ -7,7 +7,7 @@ name: site test
 on:
   push:
     branches: [main]
-    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "web/research/drm/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml"]
+    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "tools/fairplay-card.mjs", "tools/check-workflow-links.mjs", "web/research/drm/index.html", "web/research/drm/card-playready.mp4", "web/research/apple/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml", ".github/workflows/site-fairplay.yml"]
   workflow_dispatch:
 
 jobs:

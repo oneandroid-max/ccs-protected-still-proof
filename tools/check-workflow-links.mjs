@@ -1,6 +1,7 @@
 // Every workflow that opens the route-1 page must ask for the TEST CARD, never the owner's photo:
-// the link has to carry ?clip=card (normal mode, card), ?levels=software (test mode) or ?levels=clearkey
-// (the unprotected control); both test values always play the card.
+// the link has to carry ?clip=card (normal mode, card), ?levels=software (test mode), ?levels=fairplay
+// (Apple test mode) or ?levels=clearkey (the unprotected control); every test value always plays the card
+// (site.test.mjs checks the page for each value named in SAFE).
 // Born 2026-10-11: a runner screenshot of the page in test mode showed the photo in clear (software
 // protection does not hide it on Linux), and the workflow committed it to the public repository.
 // Checks every https URL ending in /research/drm/ and every use of $PAGE / ${PAGE} / $env:PAGE, in
@@ -24,7 +25,8 @@ import { createHash } from "node:crypto";
 const read = (f) => readFileSync(f, "utf8").replace(/\r\n/g, "\n");
 
 const DIR = ".github/workflows";
-const SAFE = /(^|[?&])(clip=card|levels=software|levels=clearkey)(&|$)/;
+const SAFE_VALUES = ["clip=card", "levels=software", "levels=fairplay", "levels=clearkey"];
+const SAFE = new RegExp(`(^|[?&])(${SAFE_VALUES.join("|")})(&|$)`);
 const LINK = /(https:\/\/[^\s"'`]*\/research\/drm\/|\$\{PAGE\}|\$env:PAGE|\$PAGE\b)/g;
 let checked = 0;
 const bad = [];
@@ -44,6 +46,7 @@ const SITE = /(^|[^\w-])site\/|SITE_PASSWORD|walk-site/;
 const BROWSER = /chrome|msedge|firefox|safari|screencapture|CopyFromScreen|import -window|playwright|puppeteer|simctl io/i;
 const SITE_ALLOWED = {
   "site-photos.yml": "prepares pictures on the runner; opens no page",
+  "site-fairplay.yml": "gives prepared pictures Apple's form on the runner; opens no page",
   "site-test.yml": "tests the site's code; opens no page",
   "live-check.yml": "fetches pages with curl; every picture file it can fetch is encrypted",
   "site-walk.yml": "THE WALK: a real browser on the live site; every capture sealed (safeguards required below)",
@@ -106,7 +109,7 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 if (bad.length) {
   console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site:`);
   for (const b of bad) console.error("  " + b);
-  if (bad.some((b) => /does not ask for the test card/.test(b))) console.error("Add clip=card, levels=software or levels=clearkey as the FIRST parameter of each link's query.");
+  if (bad.some((b) => /does not ask for the test card/.test(b))) console.error(`Add one of ${SAFE_VALUES.join(", ")} as the FIRST parameter of each link's query.`);
   process.exit(1);
 }
 console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards`);

@@ -76,8 +76,10 @@ test("site/view.html and site/all.html are generated from the route-1 page and a
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
   assert.equal(all, await fs.readFile(join(REPO, "site", "all.html"), "utf8"), "run node tools/build-site-view.mjs");
   for (const page of [out, all]) {
-    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-']) assert.ok(page.includes(s), s);
+    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-',
+      "fairplay: CTX.fairplay", 'manifest: "../web/research/drm/card-fairplay/master.m3u8"']) assert.ok(page.includes(s), s);
     assert.ok(!page.includes('"widevine.mpd"'), "no plain manifest name remains");
+    assert.ok(!page.includes('manifest: "card-fairplay/master.m3u8"') && !page.includes("fairplay: null"), "no route-1 Apple setting remains (the card's path, the photo's empty form)");
   }
   assert.ok(all.includes('window.__ccsMode = "all";') && !out.includes("__ccsMode"), "only the combined view runs the prelude in its 'all' mode");
   assert.throws(() => buildView(index.replace("<h1>Route 1", "<h1>Changed")), /heading/);

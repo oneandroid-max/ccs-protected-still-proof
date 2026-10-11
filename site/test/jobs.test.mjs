@@ -1,4 +1,5 @@
-// Runs the two job scripts of site-photos.yml exactly as written (extracted from the workflow file) in
+// Runs the two job scripts of site-photos.yml, and the Apple backfill's of site-fairplay.yml, exactly as
+// written (extracted from the workflow files) in
 // a scratch repository with a bare remote, with a stand-in site/worker.mjs, so the commit-and-push loop
 // is proven before GitHub runs it: a combined-view job with nothing to combine must end quietly (it
 // once failed on `git add` of a folder that never existed), a job's output must reach the remote, and a
@@ -14,6 +15,7 @@ import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const WF = await fs.readFile(join(REPO, ".github", "workflows", "site-photos.yml"), "utf8");
+const FP_WF = await fs.readFile(join(REPO, ".github", "workflows", "site-fairplay.yml"), "utf8");
 
 // The `run: |` block of the step with this name, de-indented.
 export function runBlock(yaml, stepName) {
@@ -34,6 +36,8 @@ export function runBlock(yaml, stepName) {
 }
 const PHOTO = runBlock(WF, "Prepare the picture on the current tip of main and commit; refresh and redo if the push races");
 const MOSAIC = runBlock(WF, "Make the combined view on the current tip of main and commit; refresh and redo if the push races");
+const FP_STEP = "Give every picture and the combined view Apple's form, on the current tip of main; refresh and redo if the push races";
+const BACKFILL = runBlock(FP_WF, FP_STEP);
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
@@ -54,6 +58,14 @@ if (process.env.RACE_ONCE && n === 1) {
 const mode = process.env.STANDIN;
 if (mode === "mosaic") { await fs.mkdir("site/mosaic", { recursive: true }); await fs.writeFile("site/mosaic/meta.json.enc", "sealed " + n); }
 if (mode === "photo") { await fs.mkdir("site/photos/" + process.env.ID, { recursive: true }); await fs.writeFile("site/photos/" + process.env.ID + "/x.enc", "sealed " + n); }
+if (mode === "backfill") { // what the Apple backfill writes, and its counts
+  await fs.mkdir("site/photos/p1/fp-0a1b2c3d", { recursive: true }); await fs.writeFile("site/photos/p1/fp-token.enc", "sealed token " + n);
+  await fs.writeFile("site/gallery.json.enc", "sealed gallery " + n);
+  await fs.mkdir("site/mosaic", { recursive: true }); await fs.writeFile("site/mosaic/fp-token.enc", "sealed " + n);
+  await fs.writeFile("site/stray.txt", "never committed by the backfill");
+  await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "done", added: 1, already: 0, failed: Number(process.env.FAILED || 0) }));
+}
+if (mode === "backfill-none") await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "done", added: 0, already: 3, failed: 0 }));
 console.log("stand-in worker run " + n + " (" + mode + ")");
 `;
 
@@ -65,6 +77,7 @@ async function scratch() {
   for (const c of [["user.name", "t"], ["user.email", "t@example.com"]]) git(seed, "config", ...c);
   await fs.mkdir(join(seed, "site"), { recursive: true });
   await fs.writeFile(join(seed, "site", "worker.mjs"), STANDIN);
+  await fs.writeFile(join(seed, "site", "backfill.mjs"), STANDIN);
   await fs.writeFile(join(seed, "site", "gallery.json.enc"), "sealed gallery");
   git(seed, "add", "-A"); git(seed, "commit", "-qm", "seed"); git(seed, "push", "-q", "origin", "HEAD:main");
   git(d, "clone", "-q", join(d, "remote.git"), "job");
@@ -128,4 +141,32 @@ test("when the last picture goes, the combined view's committed folder is remove
   const r = runJob(d, script, { STANDIN: "none" });
   assert.equal(r.code, 0, r.out); assert.match(r.out, /pushed/);
   assert.ok(!remoteFiles(d).some((f) => f.startsWith("site/mosaic/")), "the folder is gone from the remote");
+});
+
+test("the Apple backfill commits what it wrote (the pictures' folders, the list, the combined view) and nothing else; a race is redone", async () => {
+  const lines = FP_WF.split("\n");
+  const at = lines.findIndex((l) => l.trim() === `- name: ${FP_STEP}`);
+  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
+  const env = lines.slice(at, runAt).map((l) => l.trim());
+  for (const e of ["SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}", "AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}", "AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}"]) assert.ok(env.includes(e), e);
+  assert.match(FP_WF, /^on:\s*\n\s+workflow_dispatch:\s*\n\s*\npermissions:/m, "started by hand only");
+  assert.match(FP_WF, /concurrency: \{ group: site-mosaic, cancel-in-progress: false \}/, "never beside a combined-view job (both write site/mosaic)");
+  const d = await scratch();
+  const r = runJob(d, BACKFILL, { STANDIN: "backfill", BACKFILL_RESULT: join(d, "result.json"), RACE_ONCE: join(d, "other") });
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /the push raced with another job; refreshing and running again \(1\)/); assert.match(r.out, /stand-in worker run 2/); assert.match(r.out, /pushed/);
+  const files = remoteFiles(d);
+  for (const f of ["site/photos/p1/fp-token.enc", "site/gallery.json.enc", "site/mosaic/fp-token.enc", "site/other.txt"]) assert.ok(files.includes(f), f + " in " + files.join(" "));
+  assert.ok(!files.includes("site/stray.txt"), "nothing outside what the backfill writes is committed");
+});
+
+test("the Apple backfill with pictures that failed: commits the rest, then fails visibly; with nothing to do it ends quietly", async () => {
+  const d = await scratch();
+  const r = runJob(d, BACKFILL, { STANDIN: "backfill", BACKFILL_RESULT: join(d, "result.json"), FAILED: "2" });
+  assert.notEqual(r.code, 0, "the run is red");
+  assert.match(r.out, /pushed/); assert.match(r.out, /2 picture\(s\) did not get the Apple form/);
+  assert.ok(remoteFiles(d).includes("site/photos/p1/fp-token.enc"), "what succeeded was committed first");
+  const d2 = await scratch();
+  const q = runJob(d2, BACKFILL, { STANDIN: "backfill-none", BACKFILL_RESULT: join(d2, "result.json") });
+  assert.equal(q.code, 0, q.out); assert.match(q.out, /nothing to commit/);
 });

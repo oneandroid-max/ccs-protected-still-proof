@@ -67,6 +67,55 @@ export async function packageClip(packager, dir, { wvContentId, prKid, prKey, pr
     "--playready_extra_header_data", `<LA_URL>${la}</LA_URL>`, "--mpd_output", "playready.mpd"], { cwd: dir });
 }
 
+// Apple's FairPlay: the same clip as HLS, encrypted 'cbcs' under the given key with a constant IV, its
+// playlist carrying the key address Axinom's licence service reads (skd://<key id>:<IV>). Writes
+// fp/master.m3u8, fp/video.m3u8 and fp/video.mp4 in `dir`. The key comes from the caller (never a key
+// server): the licence is issued later, against a token that carries the key encrypted for Axinom.
+export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }) {
+  await fs.mkdir(join(dir, "fp"), { recursive: true });
+  await run(packager, ["in=clip.mp4,stream=video,output=fp/video.mp4,playlist_name=video.m3u8",
+    "--enable_raw_key_encryption", "--keys", `label=:key_id=${kid}:key=${key}`, "--iv", iv,
+    "--protection_systems", "FairPlay", "--protection_scheme", "cbcs", "--clear_lead", "0",
+    "--hls_key_uri", keyUri, "--segment_duration", "2", "--fragment_duration", "2",
+    "--hls_master_playlist_output", "fp/master.m3u8"], { cwd: dir });
+}
+
+// What a FairPlay output must carry before it is published: the playlist's key line with this key
+// address and Apple's key format, and in the file the 'cbcs' scheme with this key id and this constant
+// IV (so the licence's IV matches the encryption), and its samples encrypted.
+export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
+  const problems = [];
+  const keyLine = playlist.split("\n").find((l) => l.startsWith("#EXT-X-KEY:")) || "";
+  if (!/METHOD=SAMPLE-AES/.test(keyLine)) problems.push("the playlist's key line is not SAMPLE-AES");
+  if (!keyLine.includes(`URI="${keyUri}"`)) problems.push("the playlist does not carry the key address");
+  if (!/KEYFORMAT="com\.apple\.streamingkeydelivery"/.test(keyLine)) problems.push("the playlist does not name Apple's key format");
+  let scheme = null, tencKid = null, constIv = null;
+  const walk = (off, end) => {
+    while (off + 8 <= end) {
+      let s = data.readUInt32BE(off); const t = data.toString("latin1", off + 4, off + 8);
+      if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off;
+      if (s < 8) return;
+      if (t === "schm") scheme = data.toString("latin1", off + 12, off + 16);
+      if (t === "tenc") {
+        tencKid = data.toString("hex", off + 16, off + 32);
+        const perSampleIvSize = data[off + 15];
+        if (perSampleIvSize === 0) { const n = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + n); }
+      }
+      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi"].includes(t)) walk(off + 8, off + s);
+      if (t === "stsd") walk(off + 16, off + s);
+      if (t === "encv") walk(off + 8 + 78, off + s);
+      off += s;
+    }
+  };
+  walk(0, data.length);
+  if (scheme !== "cbcs") problems.push(`the file's scheme is ${scheme}, not cbcs`);
+  if (tencKid !== kid) problems.push("the file's key id is not this key id");
+  if (constIv !== iv) problems.push("the file's constant IV is not this IV");
+  const boxes = checkBoxes(data);
+  if (!boxes.ok) problems.push("the file is missing its sample-encryption boxes");
+  return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv };
+}
+
 // Counts the boxes that matter in a packaged file and collects its key ids and protection systems.
 export function checkBoxes(data) {
   const count = {}; const kids = new Set(); const pssh = [];

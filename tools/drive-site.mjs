@@ -5,7 +5,10 @@
 // rewritten with the repository's own salt and a sealed access key), and the protected view (files
 // decrypted in memory and served to a stand-in player through the mem:// scheme, byte ranges included),
 // and the combined view (asked for when none exists, offered once it is published, opened from its own
-// files, a tap on a picture opening that picture alone, and the password first when signed out).
+// files, a tap on a picture opening that picture alone, and the password first when signed out), and
+// the Apple path as an iPhone and an iPad see it: the picture held back while Apple is unmeasured, the
+// Apple test playing only the test card with Axinom's public token, and (with the switch flipped as it
+// would be after a measurement) the picture's own Apple form by its address with its own sealed token.
 // The sandbox's Chromium has no DRM module, so real playback is not exercised here.
 //   node tools/drive-site.mjs   (Playwright from PLAYWRIGHT_PKG's package, Chromium at CHROME)
 import { promises as fs } from "node:fs";
@@ -43,10 +46,15 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
   const b = new Uint8Array(size); for (let i = 0; i < size; i++) b[i] = (i * 7 + size) & 255; fileBytes[f] = b;
   await fs.writeFile(join(photoDir, f + ".enc"), await seal(PHOTO, b));
 }
-await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
+// its Apple form: the files as the job writes them (not sealed), and the licence token, sealed
+const FP_MASTER = "fp-0a1b2c3d/master.m3u8", PICTURE_TOKEN = "PICTURE.TOKEN.VALUE";
+await fs.mkdir(join(photoDir, "fp-0a1b2c3d"), { recursive: true });
+for (const f of ["master.m3u8", "video.m3u8", "video.mp4"]) await fs.writeFile(join(photoDir, "fp-0a1b2c3d", f), "#EXTM3U\n");
+await fs.writeFile(join(photoDir, "fp-token.enc"), await sealText(PHOTO, PICTURE_TOKEN));
+await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { keyUri: "skd://00000000-0000-0000-0000-000000000000:00000000000000000000000000000000", master: FP_MASTER } })));
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = []) {
+async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = [], fairplay = null) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
@@ -54,7 +62,8 @@ async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], ski
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
-    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped })));
+    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped, fairplay })));
+  if (fairplay) await fs.writeFile(join(dir, "fp-token.enc"), await sealText(PHOTO, "MOSAIC.TOKEN.VALUE"));
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
@@ -88,8 +97,8 @@ window.shaka = { polyfill: { installAll(){} },
   util: { AbortableOperation: { completed: (v) => ({ promise: Promise.resolve(v) }), failed: (e) => ({ promise: Promise.reject(e) }) },
           Error: class { constructor(...a) { this.args = a; } static get Severity() { return { CRITICAL: 2 }; } static get Category() { return { NETWORK: 1 }; } static get Code() { return { BAD_HTTP_STATUS: 1001 }; } } },
   Player: class extends EventTarget { static isBrowserSupported(){ return true; } async attach(v){ this.v = v; }
-    configure(c){ this.cfg = c; } getNetworkingEngine(){ return { registerResponseFilter(){} }; }
-    async load(m){ window.__manifests.push(m);
+    configure(c){ this.cfg = c; } getNetworkingEngine(){ return { registerResponseFilter(){}, registerRequestFilter(f){ (window.__reqFilters = window.__reqFilters || []).push(f); } }; }
+    async load(m){ window.__manifests.push(m); (window.__cfgs = window.__cfgs || []).push(JSON.parse(JSON.stringify(this.cfg)));
       if (m.startsWith("mem://")) { const r = await window.__scheme.fn(m, { headers: {} }).promise; window.__got.push([m, r.data.byteLength]);
         const seg = await window.__scheme.fn("mem://photo/video-widevine.mp4", { headers: { Range: "bytes=100-199" } }).promise; window.__got.push(["range", seg.data.byteLength, new Uint8Array(seg.data)[0]]);
         const nope = await window.__scheme.fn("mem://photo/missing.mp4", { headers: {} }).promise.then(() => "resolved", () => "rejected"); window.__got.push(["missing", nope]); }
@@ -99,8 +108,8 @@ window.shaka = { polyfill: { installAll(){} },
 const api = { blobs: [], dispatches: [], puts: [], galleryMode: "normal" };
 const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", args: ["--no-sandbox"] });
 const errors = [];
-async function mockedContext() {
-  const ctx = await b.newContext();
+async function mockedContext(opts = {}) {
+  const ctx = await b.newContext(opts);
   ctx.on("page", (p) => p.on("pageerror", (e) => errors.push(e.message)));
   await ctx.route("https://api.github.com/**", async (route) => {
     const req = route.request(); const u = new URL(req.url()); const auth = req.headers()["authorization"];
@@ -117,7 +126,11 @@ async function mockedContext() {
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
-  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
+  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); let body = (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "");
+    // the Apple switch as it would be after a measurement on an iPhone (only when the drive asks for it)
+    if (api.appleMeasured) { const before = body; body = body.replace('const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };', 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-11", "Mac": "" };'); if (body === before) throw new Error("the Apple switch was not found in the page"); }
+    r.fulfill({ response: res, body }); });
+  if (api.noPictureToken) await ctx.route(/fp-token\.enc/, (r) => r.fulfill({ status: 404, body: "" }));
   return ctx;
 }
 
@@ -324,6 +337,66 @@ try {
   await settle(pc, "03:30");
   check(asks() === n0 + 1, "three minutes after the page saw the set change, it asks");
   await cc.close(); api.galleryMode = "normal";
+  // 4e. APPLE, as an iPhone sees it (Safari's own engine; every iPhone browser is one)
+  const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+  const MAC_SAFARI = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+  async function applePage(ua, path, init) {
+    const c = await mockedContext({ userAgent: ua }); const pg = await c.newPage();
+    if (init) await pg.addInitScript(init);
+    await pg.goto(BASE + "index.html");
+    await pg.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
+    await pg.goto(BASE + path);
+    return { c, pg };
+  }
+  const licenceHeaders = (pg) => pg.evaluate(() => { const r = { headers: {} }; for (const f of window.__reqFilters || []) f(2, r); return r.headers; });
+  const jwtKid = (t) => { try { return JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).message.content_keys_source.inline[0].id; } catch { return null; } };
+  // (1) unmeasured: the picture is held back, and never reaches the player
+  let { c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID);
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  check(/held back — Apple FairPlay is not yet measured on iPhone\/iPad/.test(await ap.textContent("#r-ks")) && /Apple FairPlay is not yet measured here/.test(await ap.textContent("#r-rule")), "an iPhone, Apple unmeasured: the picture is held back, and the readout says why: " + (await ap.textContent("#r-ks")));
+  check((await ap.evaluate(() => window.__manifests.length)) === 0 && !(await ap.evaluate(() => window.__photoShown)), "and nothing was given to the player");
+  check(/Apple devices aren't confirmed yet/.test(await ap.textContent("#msg")), "the picture's box says so");
+  await ac.close();
+  // (2) the Apple test: only the test card, through FairPlay, with Axinom's licence service, certificate and PUBLIC token
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay"));
+  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  const tc = (await ap.evaluate(() => window.__cfgs)).at(-1);
+  check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === "../web/research/drm/card-fairplay/master.m3u8", "the Apple test plays the test card's Apple form, and only that: " + (await ap.evaluate(() => window.__manifests)).join());
+  check(tc.drm.servers["com.apple.fps"] === "https://drm-fairplay-licensing.axprod.net/AcquireLicense" && tc.drm.advanced["com.apple.fps"].serverCertificateUri === "https://tools.axinom.com/FPScert/fairplay.cer", "with Axinom's licence service and evaluation certificate");
+  check(jwtKid((await licenceHeaders(ap))["X-AxDRM-Message"]) === "4060a865-8878-4267-9cbf-91ae5bae1e72", "and Axinom's public token for its public test key (the card's), never the picture's");
+  check((await ap.textContent("#r-content")) === "the test card (not the photo)" && /APPLE TEST MODE/.test(await ap.textContent("body")), "the readout and the banner say it is the test card");
+  await ac.close();
+  // (3) the switch flipped (as after a measurement on an iPhone): the picture's own Apple form, by its address, with its own token
+  api.appleMeasured = true;
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === BASE + "photos/" + ID + "/" + FP_MASTER, "measured: the picture plays through its own Apple form, by its full address: " + (await ap.evaluate(() => window.__manifests)).join());
+  check((await licenceHeaders(ap))["X-AxDRM-Message"] === PICTURE_TOKEN, "with the picture's own licence token, unsealed in memory");
+  check(/measured black on iPhone\/iPad \(2026-10-11\)/.test(await ap.textContent("#r-expect")), "and the readout names the measurement: " + (await ap.textContent("#r-expect")));
+  await ac.close();
+  // (4) the combined view, measured: its own Apple form and token
+  await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8" });
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
+  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE", "the combined view plays through its own Apple form and token");
+  await ac.close(); await publishMosaic();
+  // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
+  api.noPictureToken = true;
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /Apple form could not be opened/.test(document.getElementById("log").textContent), null, { timeout: 20000 });
+  check(/this clip's Apple form could not be opened: its licence token is not on the site yet/.test(await ap.textContent("#log")), "a missing token is named in the attempts: " + (await ap.textContent("#log")).split("\n")[0]);
+  await ac.close(); api.noPictureToken = false; api.appleMeasured = false;
+  // (6) an iPad asks for desktop sites (it reports itself as a Mac); its touch screen gives it away
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID, () => Object.defineProperty(Navigator.prototype, "maxTouchPoints", { get: () => 5 })));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  check(/on iPhone\/iPad/.test(await ap.textContent("#r-rule")), "an iPad reporting itself as a Mac is treated as an iPad: " + (await ap.textContent("#r-rule")));
+  await ac.close();
+  // (7) a Mac in Safari: Apple's path too (held back while unmeasured); Chrome on a Mac keeps its old rule
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  check(/held back — Apple FairPlay is not yet measured on Mac/.test(await ap.textContent("#r-ks")), "a Mac in Safari: held back until Apple is measured on a Mac: " + (await ap.textContent("#r-ks")));
+  await ac.close();
+
   // 5. the view without a session goes to the password; an expired session too
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);
