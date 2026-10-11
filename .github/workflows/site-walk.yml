@@ -1,0 +1,84 @@
+# Walks the LIVE test site as a person would, before any link to it is handed over: real Chrome and
+# real Edge on a Windows runner, signed in with the site's password (the repository secret
+# SITE_PASSWORD, set by the owner; GitHub masks it in every log), through the gallery, the combined
+# view of all pictures, one picture, and back (tools/walk-site.mjs). A runner has no protected video
+# path, so its screen captures SHOW the owner's pictures: every capture is sealed on the runner to the
+# public key given when the walk is started, the clear file is deleted at once, and only the sealed
+# files are kept (on the branch walk-evidence, which Pages never publishes). The log carries statuses
+# and counts only.
+name: site walk
+
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey:
+        description: "Public key (base64 DER SPKI, RSA) the screen captures are sealed to"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  walk:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1   # one browser at a time: both sign in to the same site and may ask for the same job
+      matrix:
+        browser: [chrome, edge]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Playwright's driver only (no browser download; the walk drives the installed browser)
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw" && npm init -y > /dev/null && npm i --no-audit --no-fund playwright-core@1.59.1 > /dev/null && node -e 'console.log("playwright-core", require("playwright-core/package.json").version)'
+      - name: Start the browser the way a person would, with a debugging port for the walker
+        shell: pwsh
+        run: |
+          $exe = if ("${{ matrix.browser }}" -eq "chrome") { "C:\Program Files\Google\Chrome\Application\chrome.exe" } else { "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" }
+          "${{ matrix.browser }} " + (Get-Item $exe).VersionInfo.ProductVersion | Out-Host
+          Start-Process $exe -ArgumentList "--remote-debugging-port=9222", "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:RUNNER_TEMP\prof-${{ matrix.browser }}", "--start-maximized", "about:blank"
+          for ($i = 0; $i -lt 30; $i++) { try { Invoke-RestMethod http://127.0.0.1:9222/json/version | Out-Null; "debugging port up"; exit 0 } catch { Start-Sleep -Seconds 1 } }
+          exit 1
+      - name: Walk the live site
+        shell: bash
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          WALK_PUBKEY: ${{ github.event.inputs.pubkey }}
+          WALK_NAME: ${{ matrix.browser }}
+          WALK_OUT: walk
+          WALK_CDP: http://127.0.0.1:9222
+        run: |
+          [ -n "$SITE_PASSWORD" ] || { echo "the repository secret SITE_PASSWORD is not set"; exit 1; }
+          PLAYWRIGHT_DIR="$RUNNER_TEMP/pw" node tools/walk-site.mjs
+      - name: Nothing in the clear leaves the runner
+        if: always()
+        shell: bash
+        run: |
+          ls -l walk || true
+          if ls walk/clear-* > /dev/null 2>&1; then echo "a clear capture was left behind: refusing to keep anything"; rm -rf walk; exit 1; fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: "walk-${{ matrix.browser }}", path: walk/, if-no-files-found: ignore }
+
+  keep:
+    needs: walk
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Keep the sealed captures and the step records on the branch walk-evidence
+        env: { GH_REPO: "${{ github.repository }}" }
+        run: |
+          find dl -type f | sort
+          if find dl -type f ! -name '*.sealed.json' ! -name '*-steps.json' | grep -q .; then echo "an unexpected file: refusing to keep anything"; exit 1; fi
+          git init -q keep && cd keep
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GH_REPO.git"
+          if git fetch -q origin walk-evidence; then git checkout -q -b walk-evidence FETCH_HEAD; else git checkout -q --orphan walk-evidence; fi
+          mkdir -p "runs/${{ github.run_number }}" && find ../dl -type f -exec cp {} "runs/${{ github.run_number }}/" \;
+          git add runs && git commit -q -m "walk ${{ github.run_number }}: sealed captures and step records" && git push -q origin HEAD:walk-evidence
+          echo "kept under runs/${{ github.run_number }} on walk-evidence"

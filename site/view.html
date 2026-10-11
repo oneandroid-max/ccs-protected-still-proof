@@ -60,8 +60,8 @@
 <script type="module" src="view-prelude.js"></script>
 <script>
 (async () => {
-  const CTX = await window.__ccsReady; // the picture, decrypted in memory by view-prelude.js
-  document.getElementById("title").textContent = "Protected view: " + CTX.name;
+  const CTX = await window.__ccsReady; // decrypted in memory by view-prelude.js
+  document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
   const PAGE_VERSION = "2026-10-11 04:20 UTC — test card; ClearKey control (?levels=clearkey)";
@@ -104,7 +104,7 @@
   const CARD_CLEARKEY = { "5cfcb567f2f19d08a30b20483d92e930": "a64cde52f25e07a56d7770f4d31fc1f3" };
   const CLIP = CARD
     ? { name: "the test card (not the photo)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }
-    : { name: "your picture: " + CTX.name, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid };
+    : { name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid };
   set("r-content", CLIP.name);
   const TIERS = {
     "widevine-hardware":  { system: "widevine",  word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },

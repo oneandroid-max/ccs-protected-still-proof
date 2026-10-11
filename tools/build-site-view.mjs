@@ -1,13 +1,16 @@
-// Generates site/view.html (the test site's protected view) from the proof's route-1 page, so the two
-// never drift: the same rule, readout and player, with the picture's files served from memory after
-// decryption (site/view-prelude.js). Every substitution must match exactly once or this fails.
-//   node tools/build-site-view.mjs            writes site/view.html
-//   node tools/build-site-view.mjs --check    exits 1 if site/view.html is stale
+// Generates the test site's two protected pages from the proof's route-1 page, so they never drift
+// from it: the same rule, readout and player, with the files served from memory after decryption
+// (site/view-prelude.js). site/view.html shows one picture; site/all.html shows the combined view of
+// every ready picture (one protected video, built by the site's job). Every substitution must match
+// exactly once or this fails.
+//   node tools/build-site-view.mjs            writes site/view.html and site/all.html
+//   node tools/build-site-view.mjs --check    exits 1 if either is stale
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
-const SRC = REPO + "web/research/drm/index.html", OUT = REPO + "site/view.html";
+const SRC = REPO + "web/research/drm/index.html";
+const OUTS = { one: REPO + "site/view.html", all: REPO + "site/all.html" };
 
 function once(html, from, to, label) {
   const i = html.indexOf(from);
@@ -15,17 +18,19 @@ function once(html, from, to, label) {
   return html.slice(0, i) + to + html.slice(i + from.length);
 }
 
-export function buildView(indexHtml) {
+export function buildView(indexHtml, mode = "one") {
+  if (mode !== "one" && mode !== "all") throw new Error(`unknown view mode ${mode}`);
+  const ALL = mode === "all";
   let t = indexHtml;
-  t = once(t, "<title>Route 1: the browser's protected video path</title>", "<title>Protected view — CCS proof test site</title>", "title");
+  t = once(t, "<title>Route 1: the browser's protected video path</title>", ALL ? "<title>All pictures, protected — CCS proof test site</title>" : "<title>Protected view — CCS proof test site</title>", "title");
   t = once(t, "<h1>Route 1: the browser's own protected video path</h1>", '<h1 id="title">Protected view</h1>', "heading");
   // the player library's tag carries its integrity hash (read from the CDN on a runner, live-check.yml)
   const PLAYER = '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>';
   t = once(t, PLAYER,
-    '<script>window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js"></script>', "player script");
-  t = once(t, "<script>\n(async () => {", '<script>\n(async () => {\n  const CTX = await window.__ccsReady; // the picture, decrypted in memory by view-prelude.js\n  document.getElementById("title").textContent = "Protected view: " + CTX.name;', "page script");
+    '<script>' + (ALL ? 'window.__ccsMode = "all"; ' : "") + 'window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js"></script>', "player script");
+  t = once(t, "<script>\n(async () => {", '<script>\n(async () => {\n  const CTX = await window.__ccsReady; // decrypted in memory by view-prelude.js\n  document.getElementById("title").textContent = CTX.title;', "page script");
   t = once(t, 'name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"',
-    'name: "your picture: " + CTX.name, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid', "photo clip");
+    'name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid', "photo clip");
   t = once(t, 'widevine: "card-widevine.mpd", playready: "card-playready.mpd"',
     'widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd"', "card clip");
   t = once(t, '<p><a href="../">Back to the list of candidates</a> · <a href="../../../widevine/">the first Widevine proof (2026-10-09)</a></p>',
@@ -34,10 +39,15 @@ export function buildView(indexHtml) {
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  const out = buildView(readFileSync(SRC, "utf8"));
-  if (process.argv.includes("--check")) {
-    let cur = ""; try { cur = readFileSync(OUT, "utf8"); } catch {}
-    if (cur !== out) { console.error("site/view.html is stale: run node tools/build-site-view.mjs"); process.exit(1); }
-    console.log("site/view.html is up to date");
-  } else { writeFileSync(OUT, out); console.log(`wrote ${OUT} (${out.length} bytes)`); }
+  const src = readFileSync(SRC, "utf8");
+  let stale = 0;
+  for (const [mode, file] of Object.entries(OUTS)) {
+    const out = buildView(src, mode);
+    if (process.argv.includes("--check")) {
+      let cur = ""; try { cur = readFileSync(file, "utf8"); } catch {}
+      if (cur !== out) { console.error(`${file} is stale: run node tools/build-site-view.mjs`); stale++; }
+      else console.log(`${file} is up to date`);
+    } else { writeFileSync(file, out); console.log(`wrote ${file} (${out.length} bytes)`); }
+  }
+  if (stale) process.exit(1);
 }

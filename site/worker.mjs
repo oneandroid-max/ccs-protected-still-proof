@@ -1,6 +1,7 @@
 // The GitHub Action's half of the test site. Runs on a repository_dispatch "photo" event whose payload
-// carries the action (add | delete), the picture id, and the password-derived key (hex; masked in the
-// run's log by the workflow before this runs). For "add": fetch the encrypted blob the browser uploaded,
+// carries the action (add | delete | mosaic), the picture id, and the picture key (hex; masked in the
+// run's log by the workflow before this runs). WORKER_ACTION=mosaic (the workflow's second job) builds
+// the combined view of every ready picture instead. For "add": fetch the encrypted blob the browser uploaded,
 // decrypt it in memory, render and package it with the proof's pipeline (ffmpeg + shaka-packager,
 // Widevine and PlayReady under fresh key ids), encrypt every output under the same key, and write them
 // to site/photos/<id>/ with the gallery list (also encrypted). The workflow commits what this writes.
@@ -9,8 +10,9 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { importKeyHex, open, seal, sealText, openText, fromBase64 } from "./crypto.js";
-import { renderClip, packageClip, checkBoxes, newProtectionIds } from "../service/lib/pipeline.mjs";
+import { importKeyHex, open, seal, sealText, openText, fromBase64, toHex, randomBytes } from "./crypto.js";
+import { renderClip, packageClip, checkBoxes, newProtectionIds, probe } from "../service/lib/pipeline.mjs";
+import { run as execFile } from "../service/lib/util.mjs";
 import { jpegOrientation } from "../service/lib/exif.mjs";
 import { sniffImage } from "../service/lib/util.mjs";
 import { derivePlayReadyTestKey } from "../tools/playready-test-key.mjs";
@@ -38,11 +40,113 @@ async function fetchBlob(repo, sha, token) {
   return fromBase64(j.content.replace(/\n/g, ""));
 }
 
-export async function run({ payload, siteDir, repo, token, tools }) {
+// THE COMBINED VIEW's layout: every ready picture in ONE video frame, so a device plays all of them
+// through a single protected decoder and licence (phones limit how many protected videos can play at
+// once). Equal cells in the majority orientation (3:4 or 4:3); each picture scaled to fit its cell
+// with its own proportions (never stretched). The frame stays within 1080×1920, the portrait form of
+// 1080p, which a device that plays one picture plays too. Of the grids that fit, the one whose cells
+// come out largest on a phone screen held upright (about 400×700 points) wins; then the sharper one.
+export const MOSAIC_MAX = { width: 1080, height: 1920 };
+export function mosaicLayout(sizes, pad = 6) {
+  const n = sizes.length;
+  if (!n) throw new Error("no pictures to combine");
+  const portrait = sizes.filter((s) => s.height >= s.width).length * 2 >= n;
+  const [aw, ah] = portrait ? [3, 4] : [4, 3];
+  const down2 = (x) => Math.floor(x / 2) * 2;
+  let best = null;
+  for (let cols = 1; cols <= n; cols++) {
+    const rows = Math.ceil(n / cols);
+    if (cols * rows - n >= cols) continue; // never a whole empty row
+    const cw = down2(Math.min(MOSAIC_MAX.width / cols, (MOSAIC_MAX.height / rows) * aw / ah));
+    const ch = down2(cw * ah / aw);
+    if (cw < 2 * pad + 16 || ch < 2 * pad + 16) continue;
+    const W = cols * cw, H = rows * ch;
+    const onPhone = cw * Math.min(400 / W, 700 / H);
+    if (!best || onPhone > best.onPhone + 1e-9 || (Math.abs(onPhone - best.onPhone) <= 1e-9 && cw > best.cw)) best = { cols, rows, cw, ch, W, H, onPhone };
+  }
+  const tiles = sizes.map((s, i) => {
+    const col = i % best.cols, row = Math.floor(i / best.cols);
+    const f = Math.min((best.cw - 2 * pad) / s.width, (best.ch - 2 * pad) / s.height);
+    const w = Math.max(2, down2(s.width * f)), h = Math.max(2, down2(s.height * f));
+    return { x: col * best.cw + down2((best.cw - w) / 2), y: row * best.ch + down2((best.ch - h) / 2), w, h };
+  });
+  return { width: best.W, height: best.H, cols: best.cols, rows: best.rows, cell: { width: best.cw, height: best.ch }, tiles };
+}
+
+// One picture's still, read back from its own PROTECTED output: the sealed PlayReady file is opened
+// with the picture key and its Common Encryption is removed with the PlayReady test key for its key
+// id (public test keys, see playready-test-key.mjs). Decode errors stop ffmpeg, so a wrong key fails
+// here instead of producing noise.
+async function stillFromOutput(tools, key, dir, kidHex, work, i) {
+  const enc = join(work, `in-${i}.mp4`), still = join(work, `still-${i}.png`);
+  await fs.writeFile(enc, await open(key, new Uint8Array(await fs.readFile(join(dir, "video-playready.mp4.enc")))));
+  await execFile(tools.ffmpeg, ["-hide_banner", "-loglevel", "error", "-xerror", "-err_detect", "explode", "-y", "-decryption_key", derivePlayReadyTestKey(kidHex), "-i", enc, "-frames:v", "1", "-update", "1", still]);
+  await fs.rm(enc, { force: true });
+  return { still, ...(await probe(tools.ffprobe, still)) };
+}
+
+// Builds site/mosaic/: the combined view of every ready picture, packaged and sealed exactly like a
+// single picture, plus its sealed layout (which picture is where, for tapping and for the list).
+export async function buildMosaic({ siteDir, key, tools }) {
+  const gallery = await readGallery(siteDir, key);
+  const out = join(siteDir, "mosaic");
+  await fs.rm(out, { recursive: true, force: true }); // never a combined view from an older set left beside a new one
+  if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }
+  const ready = gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
+  if (!ready.length) { log("no ready pictures: no combined view"); return { status: "none", count: 0 }; }
+  const work = await fs.mkdtemp(join(tmpdir(), "site-mosaic-"));
+  try {
+    const used = [], skipped = [];
+    for (const [i, x] of ready.entries()) {
+      try {
+        let guid = x.prKidGuid;
+        if (!guid) guid = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(siteDir, "photos", x.id, "meta.json.enc"))))).prKidGuid;
+        const kidHex = String(guid || "").replace(/-/g, "").toLowerCase();
+        used.push({ id: x.id, name: x.name, ...(await stillFromOutput(tools, key, join(siteDir, "photos", x.id), kidHex, work, i)) });
+      } catch (e) {
+        skipped.push({ id: x.id, name: x.name, reason: String(e.message || e).slice(0, 200) });
+        log(`left out of the combined view: ${x.id} — ${String(e.message || e).slice(0, 200)}`);
+      }
+    }
+    if (!used.length) throw new Error("no picture could be read back for the combined view");
+    const layout = mosaicLayout(used);
+    // a black frame, then each still scaled to its rectangle and laid on it
+    const args = ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=black:s=${layout.width}x${layout.height}:d=1`];
+    for (const u of used) args.push("-i", u.still);
+    const chain = []; let prev = "0:v";
+    used.forEach((u, i) => {
+      const t = layout.tiles[i];
+      chain.push(`[${i + 1}:v]scale=${t.w}:${t.h}:flags=lanczos,setsar=1[s${i}]`, `[${prev}][s${i}]overlay=${t.x}:${t.y}[o${i}]`);
+      prev = `o${i}`;
+    });
+    args.push("-filter_complex", chain.join(";"), "-map", `[${prev}]`, "-frames:v", "1", "-update", "1", join(work, "mosaic.png"));
+    await execFile(tools.ffmpeg, args);
+    const clip = await renderClip(tools, join(work, "mosaic.png"), join(work, "clip.mp4"), { maxSide: Math.max(MOSAIC_MAX.width, MOSAIC_MAX.height) });
+    if (clip.width !== layout.width || clip.height !== layout.height) throw new Error(`the combined clip came out ${clip.width}x${clip.height}, expected ${layout.width}x${layout.height}`);
+    const ids = newProtectionIds("mosaic-" + toHex(randomBytes(8)));
+    await packageClip(tools.packager, work, { ...ids, prKey: derivePlayReadyTestKey(ids.prKid) });
+    const wv = checkBoxes(await fs.readFile(join(work, "video-widevine.mp4")));
+    const pr = checkBoxes(await fs.readFile(join(work, "video-playready.mp4")));
+    if (!wv.ok || !pr.ok || !pr.kids.includes(ids.prKid)) throw new Error("a packaged file of the combined view is missing its sample-encryption boxes");
+    await fs.mkdir(out, { recursive: true });
+    for (const f of OUTPUTS) await fs.writeFile(join(out, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
+    const meta = { kind: "mosaic", width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
+      ids: used.map((u) => u.id), tiles: used.map((u, i) => ({ id: u.id, name: u.name, ...layout.tiles[i] })), skipped };
+    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(meta)));
+    log(`combined view ready: ${used.length} picture(s) in ${layout.cols}x${layout.rows}, ${layout.width}x${layout.height}${skipped.length ? `, ${skipped.length} left out` : ""}`);
+    return { status: "ready", count: used.length, skipped: skipped.length };
+  } finally {
+    await fs.rm(work, { recursive: true, force: true }); // the clear stills are gone with the runner
+  }
+}
+
+export async function run({ payload, siteDir, repo, token, tools, action }) {
   const p = payload || {};
-  if (p.action !== "add" && p.action !== "delete") throw new Error(`unknown action ${JSON.stringify(p.action)}`);
-  if (!/^[0-9a-f]{24}$/.test(String(p.id))) throw new Error("bad picture id");
+  const act = action || p.action;
+  if (act !== "add" && act !== "delete" && act !== "mosaic") throw new Error(`unknown action ${JSON.stringify(act)}`);
   if (!/^[0-9a-f]{64}$/.test(String(p.key))) throw new Error("bad key");
+  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools });
+  if (!/^[0-9a-f]{24}$/.test(String(p.id))) throw new Error("bad picture id");
   const key = await importKeyHex(p.key);
   const gallery = await readGallery(siteDir, key);
   const photosDir = join(siteDir, "photos");
@@ -55,7 +159,7 @@ export async function run({ payload, siteDir, repo, token, tools }) {
     log(`cleared ${old.length} picture folder(s) written under another key`);
   }
 
-  if (p.action === "delete") {
+  if (act === "delete") {
     gallery.photos = gallery.photos.filter((x) => x.id !== p.id);
     await fs.rm(dir, { recursive: true, force: true });
     await writeGallery(siteDir, key, gallery);
@@ -104,6 +208,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const event = JSON.parse(await fs.readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
   const siteDir = process.env.SITE_DIR || fileURLToPath(new URL("./", import.meta.url));
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
-  const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools });
-  console.log(`result: ${r.status}${r.error ? " — " + r.error : ""}`);
+  const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined });
+  console.log(`result: ${r.status}${r.error ? " — " + r.error : ""}${r.count !== undefined ? ` (${r.count} picture(s))` : ""}`);
 }

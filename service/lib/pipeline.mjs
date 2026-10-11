@@ -32,17 +32,17 @@ export async function probe(ffprobe, file) {
 
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
 
-// The clip's size: the picture as the viewer sees it (rotated upright), longest side at most MAX_SIDE.
-export function targetSize({ width, height }, orientation) {
+// The clip's size: the picture as the viewer sees it (rotated upright), longest side at most maxSide.
+export function targetSize({ width, height }, orientation, maxSide = MAX_SIDE) {
   const swap = orientation >= 5;
   const w = swap ? height : width, h = swap ? width : height;
-  const f = Math.min(1, MAX_SIDE / Math.max(w, h));
+  const f = Math.min(1, maxSide / Math.max(w, h));
   return { width: even(w * f), height: even(h * f) };
 }
 
-export async function renderClip(tools, input, outClip, { orientation = 1 } = {}) {
+export async function renderClip(tools, input, outClip, { orientation = 1, maxSide = MAX_SIDE } = {}) {
   const dims = await probe(tools.ffprobe, input);
-  const size = targetSize(dims, orientation);
+  const size = targetSize(dims, orientation, maxSide);
   const rot = ORIENTATION_FILTER[orientation] || "";
   const vf = `${rot ? rot + "," : ""}loop=loop=29:size=1:start=0,setpts=N/(15*TB),scale=${size.width}:${size.height},format=yuv420p`;
   await run(tools.ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-noautorotate", "-i", input,

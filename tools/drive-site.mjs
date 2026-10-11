@@ -3,7 +3,9 @@
 // upload (the mock receives an encrypted blob that decrypts to the chosen file), a delete and its
 // "being removed" state, a gallery written under another password, the set-up page (config.json
 // rewritten with the repository's own salt and a sealed access key), and the protected view (files
-// decrypted in memory and served to a stand-in player through the mem:// scheme, byte ranges included).
+// decrypted in memory and served to a stand-in player through the mem:// scheme, byte ranges included),
+// and the combined view (asked for when none exists, offered once it is published, opened from its own
+// files, a tap on a picture opening that picture alone, and the password first when signed out).
 // The sandbox's Chromium has no DRM module, so real playback is not exercised here.
 //   node tools/drive-site.mjs   (Playwright from PLAYWRIGHT_PKG's package, Chromium at CHROME)
 import { promises as fs } from "node:fs";
@@ -42,6 +44,18 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
   await fs.writeFile(join(photoDir, f + ".enc"), await seal(PHOTO, b));
 }
 await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
+// the combined view's files, written into the served copy only once the drive has seen the page ask for it
+const mosaicBytes = {};
+async function publishMosaic() {
+  const dir = join(www, "site", "mosaic");
+  await fs.mkdir(dir, { recursive: true });
+  for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
+    const b = new Uint8Array(size); for (let i = 0; i < size; i++) b[i] = (i * 11 + size) & 255; mosaicBytes[f] = b;
+    await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
+  }
+  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt: "2026-10-11T06:00:00.000Z",
+    ids: [ID], tiles: [{ id: ID, name: "Cotton <Bowl>.jpg", x: 6, y: 8, w: 1068, h: 1424 }], skipped: [] })));
+}
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const galleryJson = JSON.stringify({ photos: [{ id: ID, name: "Cotton <Bowl>.jpg", bytes: 288000, width: 720, height: 862, status: "ready", prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }] });
 const gallerySealed = await sealText(PHOTO, galleryJson);
@@ -89,7 +103,7 @@ async function mockedContext() {
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
-  await ctx.route("**/site/view.html*", async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
+  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
   return ctx;
 }
 
@@ -112,6 +126,15 @@ try {
   check(status === "ready" && (await page.$('a[href="view.html?id=' + ID + '"]')) !== null, "a published picture reads ready and shows its protected-view link (status: " + status + ")");
   const st = await page.evaluate(() => JSON.parse(sessionStorage.getItem("ccs-site")));
   check(st && st.keyHex === KEY_HEX && st.photoKeyHex === PHOTO_HEX && st.token === TOKEN && typeof st.at === "number", "the session holds the password key, the picture key and the unsealed access key");
+  // 1b. no combined view yet: the page asks the job for one, once, and says what is happening
+  await page.waitForFunction(() => /Combining your 1 picture/.test(document.getElementById("all").textContent), null, { timeout: 15000 });
+  const askedFor = api.dispatches.filter((x) => x.client_payload.action === "mosaic");
+  check(askedFor.length === 1 && askedFor[0].client_payload.key === PHOTO_HEX && Object.keys(askedFor[0].client_payload).sort().join() === "action,key", "with no combined view the page asks the job for one (action and picture key only)");
+  check((await page.$("#open-all")) === null, "nothing to open until it is published");
+  await publishMosaic();
+  await page.waitForSelector("#open-all", { timeout: 20000 });
+  check((await page.textContent("#open-all")) === "Open all 1 at once" && /All 1 in one protected view/.test(await page.textContent("#all")), "once published, the gallery offers it: " + (await page.textContent("#all")));
+  check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "it does not ask again while the view is current");
   // 2. upload
   await page.setInputFiles("#files", join(www, "pic.png"));
   await page.waitForFunction(() => /uploaded|refused/.test(document.getElementById("uploads").textContent), null, { timeout: 20000 });
@@ -121,8 +144,9 @@ try {
   const sealed = fromBase64(uploads[0].content);
   check((await open(PHOTO, sealed).catch(() => null)) && Buffer.from(await open(PHOTO, sealed)).equals(png), "the blob decrypts with the PICTURE key to the chosen file exactly");
   check((await open(KEY, sealed).catch(() => null)) === null, "the password key does not open it");
-  const d = api.dispatches[0] && api.dispatches[0].client_payload;
-  check(api.dispatches.length === 1 && d.action === "add" && /^[0-9a-f]{24}$/.test(d.id) && d.key === PHOTO_HEX && d.blobSha === "b".repeat(40) && d.name === "pic.png" && d.type === "image/png", "the job was asked for with the id, the PICTURE key and the blob; the password key never leaves");
+  const jobs = () => api.dispatches.filter((x) => x.client_payload.action !== "mosaic");
+  const d = jobs()[0] && jobs()[0].client_payload;
+  check(jobs().length === 1 && d.action === "add" && /^[0-9a-f]{24}$/.test(d.id) && d.key === PHOTO_HEX && d.blobSha === "b".repeat(40) && d.name === "pic.png" && d.type === "image/png", "the job was asked for with the id, the PICTURE key and the blob; the password key never leaves");
   await page.waitForFunction(() => /being prepared by GitHub/.test(document.getElementById("list").textContent));
   check(/being prepared by GitHub/.test(await page.textContent("#list")), "the new picture shows as being prepared");
   const pend = await page.evaluate(() => JSON.parse(sessionStorage.getItem("ccs-pending")));
@@ -131,7 +155,7 @@ try {
   page.once("dialog", (dlg) => dlg.accept());
   await page.click('button[data-del="' + ID + '"]');
   await page.waitForFunction(() => /being removed/.test(document.getElementById("list").textContent), null, { timeout: 10000 });
-  const del = api.dispatches[1] && api.dispatches[1].client_payload;
+  const del = jobs()[1] && jobs()[1].client_payload;
   check(del && del.action === "delete" && del.id === ID && del.key === PHOTO_HEX, "delete asks the job to remove the picture");
   check((await page.$('button[data-del="' + ID + '"]')) === null && (await page.$('a[href="view.html?id=' + ID + '"]')) === null, "while the delete is pending the picture shows no Delete button and no view link");
   await page.evaluate(() => sessionStorage.removeItem("ccs-pending")); // forget the pending delete for the view test
@@ -145,10 +169,29 @@ try {
   check(got[1] && got[1][0] === "range" && got[1][1] === 100 && got[1][2] === fileBytes["video-widevine.mp4"][100], "a byte-range request is sliced from the decrypted file");
   check(got[2] && got[2][1] === "rejected", "a file that is not there is refused");
   check((await page.textContent("#r-content")) === "your picture: Cotton <Bowl>.jpg", "the readout's Content line");
+  // 4b. the combined view: its own files from memory, the list of pictures, and a tap opens one alone
+  await page.goto(BASE + "all.html");
+  await page.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  const gotAll = await page.evaluate(() => window.__got);
+  check((await page.textContent("#title")) === "All your pictures, protected (1)", "the combined view says what it is: " + (await page.textContent("#title")));
+  check((await page.textContent("#r-content")) === "your pictures: all 1, combined into one protected video", "its readout's Content line");
+  check(gotAll[0] && gotAll[0][0] === "mem://photo/widevine.mpd" && gotAll[0][1] === 640 && gotAll[1] && gotAll[1][2] === mosaicBytes["video-widevine.mp4"][100], "its files are the combined view's own, decrypted in memory (640-byte manifest, its own bytes)");
+  check((await page.textContent("#tiles")) === "Cotton <Bowl>.jpg" && (await page.$('#tiles a[href="view.html?id=' + ID + '"]')) !== null, "the list names each picture, escaped, with its own link");
+  check(await page.evaluate(() => { const h = document.getElementById("title"), st = document.getElementById("stage"); return h.nextElementSibling === st && st.getBoundingClientRect().top < document.getElementById("readout").getBoundingClientRect().top; }), "the pictures come first, right under the title, above the readout");
+  await page.locator("#v").scrollIntoViewIfNeeded();
+  check(await page.evaluate(() => window.__ccsMosaic && window.__ccsMosaic.width === 1080 && window.__ccsMosaic.tiles.length === 1 && !("name" in window.__ccsMosaic.tiles[0])), "the layout a walker taps by is on the page (sizes and ids only)");
+  const spot = await page.evaluate(() => { const r = document.getElementById("v").getBoundingClientRect(); const s = Math.min(r.width / 1080, r.height / 1440); return { x: r.left + (r.width - 1080 * s) / 2 + 540 * s, y: r.top + (r.height - 1440 * s) / 2 + 720 * s }; });
+  await page.mouse.click(spot.x, spot.y);
+  await page.waitForURL(/view\.html\?id=/, { timeout: 10000 });
+  check(page.url().endsWith("view.html?id=" + ID), "a tap on the picture opens it on its own: " + page.url());
   // 5. the view without a session goes to the password; an expired session too
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);
   check(/index\.html\?then=/.test(p2.url()), "the view without a session sends you to the password first");
+  await p2.goto(BASE + "all.html"); await p2.waitForURL(/index\.html\?then=all/);
+  await p2.fill("#pw", PASSWORD); await p2.click("#go");
+  await p2.waitForURL(/all\.html/, { timeout: 20000 });
+  check(/\/all\.html$/.test(p2.url()), "the combined view without a session asks for the password, then opens: " + p2.url());
   await p2.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() - 5 * 3600 * 1000 })), st);
   await p2.goto(BASE + "index.html");
   check(await p2.isVisible("#lock"), "a session older than four hours asks for the password again");
