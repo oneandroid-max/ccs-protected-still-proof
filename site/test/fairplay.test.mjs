@@ -1286,6 +1286,17 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   assert.deepEqual([rg.status, rg.fairplay], ["ready", false], JSON.stringify(rg));
   assert.deepEqual((await fs.readdir(join(siteDir, "photos", G))).filter((f) => /^fp/.test(f)), [], "no Apple form, and nothing half-made left behind");
   assert.ok(resultLines(rg, { com: COM, action: "add" }).some((l) => /^::warning title=Apple form::the picture was made without its Apple form/.test(l)));
+  // (7) the site's job command as the workflow runs it (the real packager; Axinom's answer stood in for, refusing):
+  // G's arrival makes a view of other pictures, made without a form, and the command's last lines say so
+  const refuseStub = join(tmp, "stub-ask-refuse.mjs"), evt = join(tmp, "ask-event.json");
+  await fs.writeFile(refuseStub, `globalThis.fetch = async () => new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid DRM message. The signature is invalid." } });\n`);
+  await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "mosaic", key: KEY_HEX, ask: ask(40) } }));
+  const cli = spawnSync(process.execPath, ["--import", pathToFileURL(refuseStub).href, join(REPO, "site", "worker.mjs")], { encoding: "utf8", env: { ...process.env, GITHUB_EVENT_PATH: evt, SITE_DIR: siteDir, PACKAGER_BIN: tools.packager, WORKER_ACTION: "mosaic", AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64") } });
+  const cliOut = (cli.stdout || "") + (cli.stderr || "");
+  assert.equal(cli.status, 0, cliOut);
+  assert.match(cliOut, /^result: ready \(4 picture\(s\)\); Apple form: false$/m);
+  assert.match(cliOut, /^::warning title=Apple form::the combined view was made without its Apple form \(see the log above\); Apple devices are held back until it has one$/m);
+  assert.equal((await mosaicMeta()).answered[0], ask(40), "the command passes the request's id on");
   notice("FairPlay eleventh review", "request ids on every answer (last ten); a failed same-pictures rebuild kept the view whole; render / check / missing-program failures kept the view; a missing output rebuilt; an expired form renewed while Axinom was out of reach and rebuilt while it refused; a failed copy left nothing");
 });
 
@@ -1335,7 +1346,8 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   await fs.mkdir(join(site, "photos", P), { recursive: true });
   await fs.writeFile(join(site, "photos", P, "meta.json.enc"), await sealText(photoKey, JSON.stringify({ id: P, fairplay: null })));
   const snapshot = async (d) => { const out = {}; const walk = async (x) => { for (const e of await fs.readdir(x, { withFileTypes: true })) { const p = join(x, e.name); if (e.isDirectory()) await walk(p); else out[p.slice(d.length)] = createHash("sha256").update(await fs.readFile(p)).digest("hex"); } }; await walk(d); return out; };
-  const before = await snapshot(site), evt = join(tmp, "pin-event.json");
+  const before = await snapshot(site), evt = join(tmp, "pin-event.json"), refuseStub = join(tmp, "stub-pin-refuse.mjs");
+  await fs.writeFile(refuseStub, `globalThis.fetch = async () => new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid DRM message. The signature is invalid." } });\n`);
   const go = (args, env) => { const r = spawnSync(process.execPath, args, { encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", ...env } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
   for (const [bin, re] of [[wrong, REFUSED], ["/nonexistent/packager", /the packager "\/nonexistent\/packager" was not found/]]) {
     for (const [action, env] of [["add", {}], ["mosaic", {}], ["delete", { WORKER_ACTION: "mosaic" }]]) {
@@ -1343,7 +1355,7 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
       const r = go([join(REPO, "site", "worker.mjs")], { GITHUB_EVENT_PATH: evt, SITE_DIR: site, PACKAGER_BIN: bin, ...env });
       assert.equal(r.code, 1, r.out); assert.match(r.out, /::error title=Packager::/); assert.match(r.out, re); assert.ok(!/^result:/m.test(r.out), "nothing was run");
     }
-    const b = go([join(REPO, "site", "backfill.mjs")], { SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: bin, GITHUB_EVENT_NAME: "workflow_dispatch", BACKFILL_RESULT: "" });
+    const b = go(["--import", pathToFileURL(refuseStub).href, join(REPO, "site", "backfill.mjs")], { SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: bin, GITHUB_EVENT_NAME: "workflow_dispatch", BACKFILL_RESULT: "" });
     assert.equal(b.code, 1, b.out); assert.match(b.out, /::error title=Apple backfill::/); assert.match(b.out, re);
     const out = await fs.mkdtemp(join(tmp, "pin-card-"));
     const c = go([join(REPO, "tools", "fairplay-card.mjs"), "--out", out, "--own", join(out, "own")], { PACKAGER_BIN: bin });

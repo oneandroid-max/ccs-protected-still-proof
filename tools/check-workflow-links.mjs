@@ -205,9 +205,8 @@ const BRINGS = new RegExp([
   "\\b(uses|image|container|with)\\s*:",
 ].join("|"), "i");
 // a line that names shaka-packager itself is judged as bringing one in, unless it only prints or labels (a name line
-// is passed before this is asked)
-const namesIt = (code, docker) => /shaka-packager/i.test(code) && !(docker && /^\s*LABEL\b/i.test(code))
-  && !(/^\s*(?:-\s+)?(?:run\s*:\s*)?(?:echo|printf)\b/i.test(code) && !BRINGS.test(code));
+// is passed before this is asked; a print line that could fetch is still judged by bringsIn)
+const namesIt = (code, docker) => /shaka-packager/i.test(code) && !(docker && /^\s*LABEL\b/i.test(code)) && !/^\s*(?:-\s+)?(?:run\s*:\s*)?(?:echo|printf)\b/i.test(code);
 function bringsIn(code, docker, stages) {
   if (docker) {
     const from = code.match(/^\s*FROM\s+(?:--\S+\s+)*(\S+)/i);
