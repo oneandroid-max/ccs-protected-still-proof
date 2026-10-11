@@ -63,7 +63,7 @@ const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some 
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
 
-const PORT = 8766;
+const PORT = 8767;
 const server = spawn("python3", ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", www], { stdio: "ignore" });
 await new Promise((r) => setTimeout(r, 1200));
 const BASE = `http://127.0.0.1:${PORT}/site/`;
