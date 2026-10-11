@@ -57,7 +57,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 03:05 UTC — hardware only; held back elsewhere";
+  const PAGE_VERSION = "2026-10-11 03:25 UTC — hardware only; errors shown";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -72,9 +72,11 @@
   //   because plain com.microsoft.playready ignores the requested level and stays at SL2000.
   const HW_WIDEVINE = ["HW_SECURE_ALL", "HW_SECURE_DECODE"];
   const HW_PLAYREADY = ["3000"];
-  const isHardware = (ks, robust) =>
-    ks === "com.widevine.alpha" ? HW_WIDEVINE.includes(robust) :
-    /^com\.microsoft\.playready/.test(ks) ? robust === "3000" || /\.3000$/.test(ks) : false;
+  // How "hardware" is known: the browser can only grant a level that was asked for, and this page
+  // asks for hardware levels only, so any grant at all is a hardware grant. (The player library's
+  // own drmInfo().videoRobustness is NOT the grant — it echoes the first level requested — so this
+  // page no longer prints it.)
+  const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; return `${d.code || "?"}${inner}`; };
 
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) {
@@ -107,28 +109,40 @@
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${which} licence response: ${response.data.byteLength} bytes`); }
     });
-    log(`${which}: asking for hardware protection only (${(which === "playready" ? HW_PLAYREADY : HW_WIDEVINE).join(", ")}) …`);
+    // Every error the player raises is written down, so nothing fails silently.
+    let lastError = null;
+    player.addEventListener("error", (e) => { lastError = errText(e); log(`${which}: player error ${lastError}`); });
+    const levels = which === "playready" ? HW_PLAYREADY : HW_WIDEVINE;
+    log(`${which}: asking for hardware protection only (${levels.join(", ")}) …`);
     try {
       await player.load(manifest);
     } catch (e) {
-      const code = (e && e.code) || e;
-      log(`${which}: not available at a hardware level here (error ${code})`);
+      log(`${which}: not available at a hardware level here (error ${errText(e)})`);
       try { await player.destroy(); } catch (x) {} current = null;
-      return "fail";
+      return "unavailable";
     }
     const info = player.drmInfo();
-    const ks = info ? info.keySystem : "none", robust = (info && info.videoRobustness) || "";
-    if (!isHardware(ks, robust)) {
-      // Safety net. Only hardware levels were requested, so this should not happen; if a browser
-      // grants less anyway, stop before the photo is shown.
-      log(`${which}: granted "${robust || "no level"}" — not hardware; stopped before showing`);
+    const ks = info ? info.keySystem : "none";
+    set("r-ks", ks);
+    set("r-granted", `hardware — the browser accepted a hardware-only request (${levels.join(" or ")})`, "ok");
+    log(`${which}: the browser accepted the hardware-only request; waiting for the licence and the first frame …`);
+    // Count it as shown only when the video is really playing (licence arrived, frames decoded).
+    video.style.visibility = "visible";
+    const started = await new Promise((resolve) => {
+      let done = false; const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      video.addEventListener("playing", () => finish(true), { once: true });
+      player.addEventListener("error", () => finish(false), { once: true });
+      setTimeout(() => finish(false), 15000);
+      video.play().catch(() => {});
+    });
+    if (!started) {
+      log(`${which}: no playback within 15 s${lastError ? " — last error " + lastError : " — no licence or no decoded frame"}`);
+      hidePhoto();
       try { await player.destroy(); } catch (x) {} current = null;
-      return "fail";
+      return "failed-after-grant";
     }
-    set("r-ks", ks); set("r-granted", robust || "(3000 by key system)", "ok");
+    msg.hidden = true; window.__photoShown = true;
     set("r-expect", "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one.", "ok");
-    msg.hidden = true; video.style.visibility = "visible"; window.__photoShown = true;
-    await video.play().catch(() => {});
     const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
@@ -137,11 +151,21 @@
   async function play(order) {
     $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
+    let hardwareButNoLicence = false;
     for (let i = 0; i < order.length; i++) {
-      if ((await tryOne(order[i])) === "ok") return;
+      const r = await tryOne(order[i]);
+      if (r === "ok") return;
+      if (r === "failed-after-grant") hardwareButNoLicence = true;
       if (i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
     hidePhoto();
+    if (hardwareButNoLicence) {
+      set("r-ks", "held back — hardware protection was available, but no licence or frame arrived (see Attempts)", "bad");
+      set("r-granted", "hardware was accepted; playback did not start", "bad");
+      set("r-expect", "the photo is not shown, so there is nothing to capture", "bad");
+      showMsg("The protected photo could not load right now, so it isn't shown.");
+      return;
+    }
     set("r-ks", "held back — no hardware protection in this browser", "bad");
     set("r-granted", "nothing at a hardware level", "bad");
     set("r-expect", "the photo is not shown on this browser, so there is nothing to capture", "bad");
