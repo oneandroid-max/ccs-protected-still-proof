@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Decoy frame</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 920px; margin: 0 auto; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  @media (prefers-color-scheme: dark) { body { color: #ecece6; background: #15171a; } }
+  h1 { font-size: 1.2rem; } p { max-width: 65ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  input { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 6px 10px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #8a857a; background: transparent; color: inherit; cursor: pointer; }
+  #stage { background: #000; border-radius: 10px; min-height: 160px; position: relative; overflow: hidden; }
+  canvas { display: block; max-width: 100%; -webkit-touch-callout: none; user-select: none; }
+  #msg { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; text-align: center; padding: 16px; pointer-events: none; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  dt { opacity: 0.7; } dd { margin: 0; word-break: break-word; }
+  .warn { color: #a83a2b; }
+</style>
+</head>
+<body>
+<h1>Decoy frame: each frame a disruption, the pair the photo</h1>
+<p>Two frames alternate. Each carries the photo plus a strong structured pattern, and the second carries the same pattern inverted, so the eye's blend is the clean photo while a single frame is dominated by the pattern. The pattern is built at several sizes so that blurring a screenshot does not wash it away, and it is balanced within every small block so no area changes brightness between frames. Amplitude and block size are adjustable in the link: <code>?a=110&amp;s=32</code>. The physics sets the ceiling before you test: where the photo is very dark or very bright the pattern has no room, and a recording, which keeps every frame, averages back to the photo.</p>
+<div class="row">
+  <input id="pin" type="text" inputmode="numeric" maxlength="6" placeholder="PIN" aria-label="PIN">
+  <button id="show">Show</button>
+  <button id="stop" disabled>Stop</button>
+</div>
+<div id="stage"><canvas id="proof" width="0" height="0"></canvas><div id="msg">Type the PIN, then Show.</div></div>
+<p class="note" style="font-size:0.85rem;opacity:0.8">Touch guard: a three-finger or palm touch on the photo blanks it at once, to measure whether a gesture screenshot can be beaten; button screenshots cannot be seen by a page.</p>
+<dl>
+  <dt>PIN</dt><dd id="r-pin">waiting</dd>
+  <dt>Mode</dt><dd id="r-mode">idle</dd>
+  <dt>Frame rate</dt><dd id="r-fps">not measured yet</dd>
+  <dt>Pattern</dt><dd id="r-pat">—</dd>
+  <dt>Single frame vs photo</dt><dd id="r-psnr">—</dd>
+  <dt>Touch guard</dt><dd id="r-guard">no gesture seen</dd>
+  <dt>Viewer mark</dt><dd id="r-mark">—</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+<p style="font-size:0.85rem;opacity:0.8"><a href="../">Back to the candidates</a></p>
+<script type="module" src="decoy.js"></script>
+</body>
+</html>
