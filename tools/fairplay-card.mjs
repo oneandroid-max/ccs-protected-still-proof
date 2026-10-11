@@ -27,6 +27,7 @@ import { packageFairPlay, checkFairPlay, verifyFairPlayBytes, checkBoxes, probe 
 import { run } from "../service/lib/util.mjs";
 import { AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey, readAxinomSettings, checkTokenWithAxinom, tokenSignedWith } from "../site/axinom.mjs";
 import { derivePlayReadyTestKey } from "./playready-test-key.mjs";
+import { checkPackager } from "../service/lib/packager-pin.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 export const CARD_KID = "5cfcb567f2f19d08a30b20483d92e930"; // the card's own key id (drm-card.yml, CARD_KID)
@@ -123,6 +124,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const at = process.argv.indexOf("--out");
   const outDir = at > 0 ? process.argv[at + 1] : join(REPO, "web", "research", "drm", "card-fairplay");
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+  // only the pinned build packages the card: any other file ends the job red, named on the run's page, before anything is written
+  try { await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
   console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir }), null, 2));
   const ownAt = process.argv.indexOf("--own");
   if (at < 0 || ownAt > 0) {

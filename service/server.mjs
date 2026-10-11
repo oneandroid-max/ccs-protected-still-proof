@@ -12,6 +12,7 @@ import { Store } from "./lib/store.mjs";
 import { makeQueue, newProtectionIds, PLAYREADY_TEST_SERVER } from "./lib/pipeline.mjs";
 import { loginPage, galleryPage, preparingPage, buildViewTemplate, CARD } from "./lib/pages.mjs";
 import { readBody, sniffImage, parseCookies, safeEqual, newId, nowIso, run } from "./lib/util.mjs";
+import { checkPackager } from "./lib/packager-pin.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MEDIA_FILES = { "widevine.mpd": "application/dash+xml", "playready.mpd": "application/dash+xml", "video-widevine.mp4": "video/mp4", "video-playready.mp4": "video/mp4" };
@@ -51,6 +52,7 @@ export async function createApp(cfg, log = (m) => console.log(`${nowIso()} ${m}`
   (async () => {
     try { tools.ffmpeg = (await run(cfg.tools.ffmpeg, ["-version"])).stdout.split("\n")[0]; } catch (e) { tools.problem = `ffmpeg: ${e.message}`; }
     try { tools.packager = (await run(cfg.tools.packager, ["--version"])).stdout.trim(); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; }
+    try { await checkPackager(cfg.tools.packager); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; } // each photo is refused too (pipeline)
     log(`tools: ffmpeg "${tools.ffmpeg}" packager "${tools.packager}"${tools.problem ? " PROBLEM " + tools.problem : ""}`);
   })();
 

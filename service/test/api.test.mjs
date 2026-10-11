@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 after(() => { console.error("still alive after the tests:", process.getActiveResourcesInfo().join(", ") || "nothing", "| handles:", process._getActiveHandles().map((h) => h.constructor.name).join(", ") || "none"); });
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { startApp, login, tinyPng, upload, readyRecord, REPO } from "./helpers.mjs";
 import { buildViewTemplate } from "../lib/pages.mjs";
 import { Sessions, LoginLimiter } from "../lib/sessions.mjs";
@@ -189,4 +190,26 @@ test("the view template refuses a proof page that no longer matches", async () =
   assert.doesNotThrow(() => buildViewTemplate(html));
   assert.throws(() => buildViewTemplate(html.replace('cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";', "// gone")), /widevine licence address/);
   assert.throws(() => buildViewTemplate(html + html), /title/);
+});
+
+// Only the pinned shaka-packager runs on a photo (service/lib/packager-pin.mjs, checked by the file's SHA-256 each
+// time): a file that is there and answers like a packager, but is not that build, is named in health and every photo
+// fails with the reason, never processed.
+test("a packager that is not the pinned build: named in health, and every photo refused with the reason", async () => {
+  const wrong = join(await fs.mkdtemp(join(tmpdir(), "proof-wrong-")), "packager");
+  await fs.writeFile(wrong, "#!/bin/sh\necho 'packager version v3.9.3'\n"); await fs.chmod(wrong, 0o755);
+  const t = await startApp({ tools: { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: wrong } });
+  const REFUSED = /the packager at .*\/packager is not the pinned shaka-packager v3\.9\.3 \(sha256 [0-9a-f]{16}…, pinned 7a3cf35ad146fd78…\): refused/;
+  try {
+    let h; const until = Date.now() + 20000;
+    do { h = await (await fetch(t.base + "/api/health")).json(); if (h.tools.problem) break; await new Promise((r) => setTimeout(r, 100)); } while (Date.now() < until);
+    assert.match(h.tools.problem, new RegExp("packager: " + REFUSED.source), JSON.stringify(h.tools));
+    assert.match(h.tools.packager, /v3\.9\.3/, "it answered like a packager, and is refused all the same");
+    const { cookie } = await login(t.base);
+    const r = await upload(t.base, cookie, tinyPng(), "a.png"); assert.equal(r.status, 201);
+    const id = (await r.json()).photo.id;
+    let p; const end = Date.now() + 30000;
+    do { p = (await (await fetch(t.base + "/api/photos", { headers: { cookie } })).json()).photos.find((x) => x.id === id); if (p.status === "failed") break; await new Promise((r) => setTimeout(r, 200)); } while (Date.now() < end);
+    assert.equal(p.status, "failed"); assert.match(p.error, REFUSED);
+  } finally { await t.close(); await fs.rm(join(wrong, ".."), { recursive: true, force: true }); }
 });

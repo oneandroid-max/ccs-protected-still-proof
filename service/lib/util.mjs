@@ -61,7 +61,7 @@ export function run(bin, args, { cwd, timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     import("node:child_process").then(({ execFile }) => {
       execFile(bin, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err) reject(Object.assign(new Error(`${bin} failed: ${redactKeys((stderr || err.message).toString().trim()).slice(-800)}`), { stdout, stderr })); // redacted before it is cut, so a cut can never leave part of a key
+        if (err) reject(Object.assign(new Error(`${bin} failed: ${redactKeys((stderr || err.message).toString().trim()).slice(-800)}`), { stdout, stderr, notRun: /^spawn /.test(String(err.syscall || "")) })); // redacted before it is cut, so a cut can never leave part of a key; notRun: the program could not be started at all (not there, not executable)
         else resolve({ stdout: String(stdout), stderr: String(stderr) });
       });
     });

@@ -176,7 +176,7 @@ test("the Apple backfill's WEEKLY run with the REAL site/backfill.mjs and no Axi
   const d = await scratch(), other = join(d, "other");
   git(other, "pull", "-q", "origin", "main");
   // the real entry and everything it imports, committed to the scratch remote (the stand-in is replaced)
-  for (const f of ["site/backfill.mjs", "site/crypto.js", "site/worker.mjs", "site/axinom.mjs", "site/config.json", "service/lib/pipeline.mjs", "service/lib/util.mjs", "service/lib/exif.mjs", "tools/playready-test-key.mjs"]) {
+  for (const f of ["site/backfill.mjs", "site/crypto.js", "site/worker.mjs", "site/axinom.mjs", "site/config.json", "service/lib/pipeline.mjs", "service/lib/util.mjs", "service/lib/exif.mjs", "service/lib/packager-pin.mjs", "tools/playready-test-key.mjs"]) {
     await fs.mkdir(join(other, dirname(f)), { recursive: true });
     await fs.copyFile(join(REPO, f), join(other, f));
   }

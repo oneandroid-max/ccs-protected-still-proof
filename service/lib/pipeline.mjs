@@ -11,6 +11,7 @@ import { randomBytes } from "node:crypto";
 import { run, nowIso } from "./util.mjs";
 import { jpegOrientation, ORIENTATION_FILTER } from "./exif.mjs";
 import { derivePlayReadyTestKey } from "../../tools/playready-test-key.mjs";
+import { checkPackager } from "./packager-pin.mjs";
 
 export const MAX_SIDE = 1280;
 export const WIDEVINE_TEST = {
@@ -391,6 +392,7 @@ export async function processPhoto(tools, store, id) {
   const dir = store.dir(id);
   await store.update(id, { status: "processing", error: null });
   try {
+    await checkPackager(tools.packager); // only the pinned build runs on a photo
     const original = join(dir, `original.${rec.ext}`);
     const orientation = rec.type === "image/jpeg" ? jpegOrientation(await fs.readFile(original)) : 1;
     const clip = await renderClip(tools, original, join(dir, "clip.mp4"), { orientation });

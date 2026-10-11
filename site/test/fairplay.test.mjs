@@ -7,14 +7,15 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, delimiter } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
+import { createDecipheriv, createHash, createHmac, randomBytes as nodeRandom } from "node:crypto";
 import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, checkKeyWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, TOKEN_CHECK_TIMEOUT_MS, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
 import { checkFairPlay, checkFairPlayBytes, verifyFairPlayBytes, readTrack, packageFairPlay, renderClip, SAMPLE_OPEN_MAX } from "../../service/lib/pipeline.mjs";
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
-import { run as worker, readGallery, fairPlayCurrent, TOKEN_RENEW_DAYS } from "../worker.mjs";
+import { run as worker, readGallery, fairPlayCurrent, TOKEN_RENEW_DAYS, resultLines } from "../worker.mjs";
+import { checkPackager, PACKAGER_SHA256 } from "../../service/lib/packager-pin.mjs";
 import { mosaicCurrent } from "../app.js";
 import { run as exec, redactKeys } from "../../service/lib/util.mjs";
 
@@ -1104,13 +1105,15 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
 // THE BACKFILL'S ENTRY, run as the workflow runs it (a child process, the real site/backfill.mjs) on a
 // scratch site: the picture key is masked before anything else is printed and appears nowhere else; a
 // password that does not open the gallery is a named error, not a quiet green run; a missing Axinom key is
-// an error when started by hand and nothing to do on the weekly run.
-test("the backfill's entry: the picture key masked first and nowhere else; a wrong password or a missing key named; the weekly run without a key does nothing", async () => {
+// an error when started by hand and nothing to do on the weekly run. It runs with the real packager: the entry checks
+// the packager it would run before anything else touches the site (the next test).
+test("the backfill's entry: the picture key masked first and nowhere else; a wrong password or a missing key named; the weekly run without a key does nothing (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
   const PW = "a test password, twelve+", SALT = toBase64(new Uint8Array(16).fill(9));
   const site = await fs.mkdtemp(join(tmp, "bf-"));
   await fs.writeFile(join(site, "config.json"), JSON.stringify({ salt: SALT, iterations: 1000 }));
   const want = await exportKeyHex(await derivePhotoKey(await deriveKey(PW, SALT, 1000)));
-  const env = { ...process.env, SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), BACKFILL_RESULT: join(site, "result.json"), PACKAGER_BIN: "/nonexistent/packager", GITHUB_EVENT_NAME: "workflow_dispatch" };
+  const env = { ...process.env, SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), BACKFILL_RESULT: join(site, "result.json"), PACKAGER_BIN: tools.packager, GITHUB_EVENT_NAME: "workflow_dispatch" };
   const go = (over = {}) => { const r = spawnSync(process.execPath, [join(REPO, "site", "backfill.mjs")], { encoding: "utf8", env: { ...env, ...over } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
   const masked = (out) => { const lines = out.split("\n"); assert.equal(lines[0], `::add-mask::${want}`, "the first thing printed is the mask"); assert.equal(lines.filter((l) => l.includes(want)).length, 1, "and the key appears nowhere else"); };
   // an empty site: nothing to do, a green run that says so
@@ -1145,6 +1148,213 @@ test("the backfill's entry: the picture key masked first and nowhere else; a wro
   assert.match(out2, /::error title=Apple backfill::Axinom does not accept our key \(key id [0-9a-f-]{36}\): Invalid DRM message\. The signature is invalid\.; no Apple form was made or replaced/);
   assert.equal(JSON.parse(await fs.readFile(join(site, "result.json"), "utf8")).status, "stopped");
   assert.ok(!out2.includes(COM.key.toString("base64")), "the Axinom key never printed");
+});
+
+// The eleventh review. (1) Every answer to a page's request carries the request's id (meta.answered, the last ten,
+// newest first), whatever the answer; the job's own runs add none; an id that is not 16 hex is refused. (2) A rebuild of
+// the SAME pictures is made beside the view and swapped in only whole: one that came out without an Apple form, while
+// the view has a working one, leaves the view as it was (its form used to be deleted first and the view committed with
+// none, unwarned); a view of OTHER pictures is replaced all the same, and the job warns. (3) Only the view's own output
+// being unreadable sends a renewal to a rebuild: a failed render, a new form that fails its check, or a program that
+// cannot be started keep the view as it is. (4) A form whose token has expired is not a working form: nothing waits on
+// Axinom to replace it. (5) "Last tried at" is the keep's own time. (6) A form whose copy fails leaves no half-made
+// folder to be published.
+test("the combined view answers each request by its id; a rebuild of the same pictures is swapped in only whole; only an unreadable output is rebuilt; an expired form is not kept for (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const KEY = await deriveKey("a test password, twelve+", toBase64(new Uint8Array(16).fill(12)), 1000), KEY_HEX = await exportKeyHex(KEY);
+  const siteDir = await fs.mkdtemp(join(tmp, "ask-"));
+  const upload = async (file) => { const f = join(tmp, "up-" + Math.random().toString(16).slice(2)); await fs.writeFile(f, await seal(KEY, await fs.readFile(file))); return f; };
+  const add = async (id, color, tl = tools) => { process.env.WORKER_BLOB_FILE = await upload(await solid(`ask-${id[0]}.png`, 320, 240, color)); return worker({ payload: { action: "add", id, name: id[0] + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: tl, checkKey: acceptKey, com: COM }); };
+  const answer = (accepted, reached, message) => async () => ({ accepted, reached, status: reached ? (accepted ? 400 : 403) : 0, message });
+  const accept = answer(true, true, "Invalid license request. (a test)"), refuse = answer(false, true, "Invalid DRM message. The signature is invalid.");
+  const unreachable = answer(false, false, "Axinom could not be reached (3 tries): connect ECONNREFUSED (a test)");
+  const mosaic = (checkKey, ask, tl = tools) => worker({ payload: { key: KEY_HEX, ...(ask !== undefined ? { ask } : {}) }, action: "mosaic", siteDir, tools: tl, checkKey, com: COM });
+  const metaPath = join(siteDir, "mosaic", "meta.json.enc");
+  const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath))));
+  const setMeta = async (over) => fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...(await mosaicMeta()), ...over })));
+  const formExpires = async (ms) => setMeta({ fairplay: { ...(await mosaicMeta()).fairplay, expires: new Date(Date.now() + ms).toISOString() } });
+  const damage = async (id) => { const g = await readGallery(siteDir, KEY); g.photos.find((x) => x.id === id).prKidGuid = "00000000-0000-0000-0000-000000000000"; await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g))); };
+  const noSideBuild = async () => assert.ok(!(await fs.readdir(siteDir)).includes(".mosaic-next"), "nothing half-built is left beside the view");
+  const ask = (n) => n.toString(16).padStart(16, "0");
+  const A = "a".repeat(24), B = "b".repeat(24), C = "c".repeat(24), D = "d".repeat(24), E = "e".repeat(24), G = "9".repeat(24);
+  for (const [id, color] of [[A, "0xc0392b"], [B, "0x2980b9"]]) assert.equal((await add(id, color)).status, "ready");
+  const failing = { ...tools, packager: await failFairPlayPackager() };
+
+  // (1) the request id: refused unless 16 hex; written with every kind of answer, newest first; the job's own runs add none
+  for (const bad of ["XYZ", "0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", 1234567890123456]) await assert.rejects(mosaic(accept, bad), /bad request id/, String(bad));
+  assert.equal((await mosaic(accept, ask(1))).status, "ready");
+  assert.deepEqual((await mosaicMeta()).answered, [ask(1)], "a rebuild carries the id");
+  assert.equal((await mosaic(accept, ask(2))).status, "current");
+  assert.deepEqual((await mosaicMeta()).answered, [ask(2), ask(1)], "unchanged: the answer is still written");
+  assert.equal((await mosaic(accept)).status, "current");
+  assert.deepEqual((await mosaicMeta()).answered, [ask(2), ask(1)], "the job's own run adds none");
+  await formExpires(10 * 86400000);
+  assert.equal((await mosaic(accept, ask(3))).fairplay, "renewed");
+  assert.deepEqual((await mosaicMeta()).answered.slice(0, 2), [ask(3), ask(2)], "a renewal carries the id");
+  await formExpires(10 * 86400000);
+  const f1 = await mosaic(accept, ask(4), failing);
+  assert.deepEqual([f1.status, f1.fairplay], ["current", "failed"], JSON.stringify(f1));
+  assert.equal((await mosaicMeta()).answered[0], ask(4), "a failed renewal carries the id");
+  // (5) "Last tried at" is the time of the keep, never the view's build time (the build time set far back first)
+  await setMeta({ builtAt: "2020-01-02T03:04:05.000Z" });
+  const r1 = await mosaic(refuse, ask(5));
+  assert.deepEqual([r1.status, r1.fairplay], ["current", "kept"], JSON.stringify(r1));
+  const kept = await mosaicMeta();
+  assert.equal(kept.answered[0], ask(5), "a kept answer carries the id");
+  assert.ok(Math.abs(Date.parse(kept.kept.at) - Date.now()) < 120000 && kept.kept.at !== kept.builtAt, "kept at the time of the keep: " + JSON.stringify([kept.kept, kept.builtAt]));
+  // the list keeps the last ten; an id answered twice is listed once
+  for (let i = 6; i <= 17; i++) await mosaic(refuse, ask(i));
+  await mosaic(refuse, ask(16));
+  assert.deepEqual((await mosaicMeta()).answered, [16, 17, 15, 14, 13, 12, 11, 10, 9, 8].map(ask));
+
+  // (2) a picture REALLY left out, the view with a verified form; "Try again" with Axinom accepting rebuilds the same
+  // pictures, and Apple's packaging fails in the rebuild: the view is kept whole, its form with it, the failure said
+  assert.equal((await add(C, "0x16a085")).status, "ready");
+  await damage(C);
+  assert.equal((await mosaic(accept, ask(20))).status, "ready");
+  const whole = await mosaicMeta();
+  assert.deepEqual([whole.skipped.map((x) => x.id), whole.fairplay.verified], [[C], true]);
+  const r2 = await mosaic(accept, ask(21), failing);
+  assert.deepEqual([r2.status, r2.fairplay, r2.count], ["current", "failed", 2], JSON.stringify(r2));
+  const after2 = await mosaicMeta();
+  assert.deepEqual([after2.builtAt, after2.ids, after2.fairplay], [whole.builtAt, whole.ids, whole.fairplay], "the view kept whole, with its form");
+  await fs.access(join(siteDir, "mosaic", whole.fairplay.master));
+  assert.match(after2.kept.why, /its rebuild made no Apple form \(.*Apple's form could not be packaged \(a test\).*\); the current view and its form stay/);
+  assert.equal(after2.answered[0], ask(21)); await noSideBuild();
+  assert.ok(resultLines(r2, { com: COM, action: "mosaic" }).some((l) => /^::warning title=Apple form::/.test(l)), "and the job warns");
+  // the same rebuild without the failure: swapped in whole, a new verified form, C still left out, the old form gone with the old view
+  const r3 = await mosaic(accept, ask(22));
+  assert.deepEqual([r3.status, r3.skipped], ["ready", 1], JSON.stringify(r3));
+  const rebuilt = await mosaicMeta();
+  assert.ok(rebuilt.fairplay.verified && rebuilt.fairplay.master !== whole.fairplay.master && rebuilt.answered[0] === ask(22), JSON.stringify(rebuilt.fairplay));
+  assert.deepEqual((await fs.readdir(join(siteDir, "mosaic"))).filter((f) => /^fp-/.test(f)), [rebuilt.fairplay.master.split("/")[0]]);
+  await noSideBuild();
+  // a view of OTHER pictures (D added) whose Apple packaging fails: swapped in without a form (its old content must go), warned
+  assert.equal((await add(D, "0x8e44ad")).status, "ready");
+  const r4 = await mosaic(accept, undefined, failing);
+  assert.deepEqual([r4.status, r4.fairplay], ["ready", false], JSON.stringify(r4));
+  const other = await mosaicMeta();
+  assert.ok(other.ids.includes(D) && other.fairplay === null, JSON.stringify(other.ids));
+  assert.ok(resultLines(r4, { com: COM, action: "mosaic" }).some((l) => /^::warning title=Apple form::the combined view was made without its Apple form/.test(l)));
+  await noSideBuild();
+
+  // (3) only the view's own output unreadable sends a renewal to a rebuild. C deleted, so nothing is left out and only
+  // the form is renewed from here on
+  await worker({ payload: { action: "delete", id: C, key: KEY_HEX }, siteDir, tools });
+  assert.equal((await mosaic(accept)).fairplay, "renewed");
+  const keepsView = async (tl, re, what) => {
+    await formExpires(10 * 86400000);
+    const before = await mosaicMeta();
+    const r = await mosaic(accept, undefined, tl);
+    assert.deepEqual([r.status, r.fairplay], ["current", "failed"], what + ": " + JSON.stringify(r));
+    const now = await mosaicMeta();
+    assert.deepEqual([now.builtAt, now.fairplay], [before.builtAt, before.fairplay], what + ": not rebuilt, its form kept");
+    assert.match(now.kept.why, re, what);
+  };
+  const script = async (name, body) => { const f = join(tmp, name); await fs.writeFile(f, `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process"); const fs = require("node:fs"); const path = require("node:path");\n${body}\n`); await fs.chmod(f, 0o755); return f; };
+  // a failed render of the new form's clip (ffmpeg fails only when it encodes)
+  const ffFails = await script("ffmpeg-fails-encode", `if (process.argv.includes("libx264")) { console.error("the clip could not be rendered (a test)"); process.exit(1); }\nprocess.exit(spawnSync("ffmpeg", process.argv.slice(2), { stdio: "inherit" }).status ?? 1);`);
+  await keepsView({ ...tools, ffmpeg: ffFails }, /its new Apple form could not be made \(.*the clip could not be rendered \(a test\)/, "a failed render");
+  // a new form that fails its check (the key line taken out of its playlist after packaging)
+  const afterApple = (then) => `const s = spawnSync(${JSON.stringify(tools.packager)}, process.argv.slice(2), { stdio: "inherit" }).status ?? 1;\nconst i = process.argv.indexOf("--hls_master_playlist_output");\nif (!s && i > 0) { const master = path.resolve(process.argv[i + 1]); ${then} }\nprocess.exit(s);`;
+  const noKeyLine = await script("packager-drops-key-line", afterApple(`const p = path.join(path.dirname(master), "video.m3u8"); fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("\\n").filter((l) => !l.startsWith("#EXT-X-KEY")).join("\\n"));`));
+  await keepsView({ ...tools, packager: noKeyLine }, /its new Apple form could not be made \(the FairPlay form failed its check: /, "a form that fails its check");
+  // a program that cannot be started at all (the view's own output is fine)
+  await keepsView({ ...tools, ffmpeg: "/nonexistent/ffmpeg" }, /its new Apple form could not be made \(.*ENOENT/, "ffmpeg not there");
+  // the view's own output missing (a file, not a program): unreadable, so rebuilt (Axinom accepting), swapped in whole
+  await formExpires(10 * 86400000);
+  await fs.rm(join(siteDir, "mosaic", "video-playready.mp4.enc"));
+  const r5 = await mosaic(accept, ask(30));
+  assert.equal(r5.status, "ready", JSON.stringify(r5)); assert.ok((await mosaicMeta()).fairplay.verified); await noSideBuild();
+
+  // (4) a form whose token has expired is not a working form: Axinom out of reach, a new one is made (unverified)
+  await formExpires(-86400000);
+  const r6 = await mosaic(unreachable, ask(31));
+  assert.deepEqual([r6.status, r6.fairplay], ["current", "renewed"], JSON.stringify(r6));
+  assert.equal((await mosaicMeta()).fairplay.verified, false);
+  // ... and with a picture left out, "Try again" is rebuilt while Axinom refuses (the dead form goes; no new one)
+  assert.equal((await add(E, "0xf39c12")).status, "ready"); await damage(E);
+  assert.equal((await mosaic(accept)).status, "ready");
+  await formExpires(-86400000);
+  const r7 = await mosaic(refuse, ask(32));
+  assert.deepEqual([r7.status, r7.fairplay], ["ready", false], JSON.stringify(r7));
+  assert.equal((await mosaicMeta()).fairplay, null, "the dead form went with the old view");
+
+  // (6) a form whose copy fails (its master playlist gone after packaging): no half-made folder is left to publish
+  const noMaster = await script("packager-drops-master", afterApple("fs.rmSync(master);"));
+  const rg = await add(G, "0x7f8c8d", { ...tools, packager: noMaster });
+  assert.deepEqual([rg.status, rg.fairplay], ["ready", false], JSON.stringify(rg));
+  assert.deepEqual((await fs.readdir(join(siteDir, "photos", G))).filter((f) => /^fp/.test(f)), [], "no Apple form, and nothing half-made left behind");
+  assert.ok(resultLines(rg, { com: COM, action: "add" }).some((l) => /^::warning title=Apple form::the picture was made without its Apple form/.test(l)));
+  notice("FairPlay eleventh review", "request ids on every answer (last ten); a failed same-pictures rebuild kept the view whole; render / check / missing-program failures kept the view; a missing output rebuilt; an expired form renewed while Axinom was out of reach and rebuilt while it refused; a failed copy left nothing");
+});
+
+// The job's last lines (site/worker.mjs, resultLines): a warning on the run's page whenever the combined view or a
+// picture ends without the Apple form it should have; none for a view kept as it is (said in the result line and on the page)
+test("the job's last lines: a warning whenever the combined view or a picture ends without its Apple form; none for a view kept as it is", () => {
+  assert.deepEqual(resultLines({ status: "current", count: 2, fairplay: "failed" }, { com: COM, action: "mosaic" }), ["result: current (2 picture(s)); Apple form: failed", "::warning title=Apple form::the combined view's new Apple form could not be made; its current one is kept (see the log above)"]);
+  assert.deepEqual(resultLines({ status: "current", count: 2, fairplay: "kept" }, { com: COM, action: "mosaic" }), ["result: current (2 picture(s)); Apple form: kept"], "kept as it is: said, not warned");
+  assert.deepEqual(resultLines({ status: "ready", count: 3, skipped: 0, fairplay: false }, { com: COM, action: "mosaic" }), ["result: ready (3 picture(s)); Apple form: false", "::warning title=Apple form::the combined view was made without its Apple form (see the log above); Apple devices are held back until it has one"]);
+  assert.deepEqual(resultLines({ status: "ready", error: null, fairplay: false }, { com: COM, action: "add" }), ["result: ready; Apple form: false", "::warning title=Apple form::the picture was made without its Apple form (see the log above); Apple devices are held back until it has one"]);
+  for (const [r, o] of [[{ status: "ready", count: 3, fairplay: false }, { com: null, action: "mosaic" }], [{ status: "ready", count: 3, fairplay: true }, { com: COM, action: "mosaic" }], [{ status: "current", count: 3 }, { com: COM, action: "mosaic" }], [{ status: "current", count: 3, fairplay: "renewed" }, { com: COM, action: "mosaic" }], [{ status: "deleted" }, { com: COM, action: "delete" }], [{ status: "failed", error: "x" }, { com: COM, action: "add" }]])
+    assert.ok(!resultLines(r, o).some((l) => /^::warning/.test(l)), JSON.stringify(r));
+});
+
+// THE RUN-TIME CHECK (the eleventh review's answer to a text guard stepped around five times): every program of ours that
+// runs the packager on a picture or the card asks checkPackager first, by the file's SHA-256, however the file got
+// there. One pin everywhere: the module, the guard, every download's check line.
+test("only the pinned shaka-packager runs: checked by its SHA-256 each time; another file, or none, refused and named before anything is touched", async () => {
+  const guard = await fs.readFile(join(REPO, "tools", "check-workflow-links.mjs"), "utf8");
+  assert.equal(guard.match(/const PACKAGER_SHA256 = "([0-9a-f]{64})"/)[1], PACKAGER_SHA256, "the guard pins the same build");
+  const wf = join(REPO, ".github", "workflows"); let lines = 0;
+  for (const f of [...(await fs.readdir(wf)).map((x) => join(wf, x)), join(REPO, "service", "Dockerfile")])
+    for (const m of (await fs.readFile(f, "utf8")).matchAll(/echo "([0-9a-f]{64})  [^"]*packager" \| sha256sum -c -/g)) { assert.equal(m[1], PACKAGER_SHA256, f); lines++; }
+  assert.equal(lines, 9, "every download's check line names the same build");
+  const wrong = join(tmp, "not-the-packager"); await fs.writeFile(wrong, "#!/bin/sh\necho 'packager version v3.9.3'\n"); await fs.chmod(wrong, 0o755);
+  const REFUSED = /is not the pinned shaka-packager v3\.9\.3 \(sha256 [0-9a-f]{16}…, pinned 7a3cf35ad146fd78…\): refused/;
+  await assert.rejects(checkPackager(wrong), REFUSED);
+  await assert.rejects(checkPackager("/nonexistent/packager"), /the packager "\/nonexistent\/packager" was not found/);
+  // a bare name is looked up on the PATH, as the shell would run it
+  const onPath = await fs.mkdtemp(join(tmp, "path-")); await fs.copyFile(wrong, join(onPath, "packager")); await fs.chmod(join(onPath, "packager"), 0o755);
+  const savedPath = process.env.PATH; process.env.PATH = onPath + delimiter + savedPath;
+  try { await assert.rejects(checkPackager("packager"), (e) => e.message.includes(`the packager at ${join(onPath, "packager")} is not the pinned`)); } finally { process.env.PATH = savedPath; }
+  // asked every time, never remembered: the real build passes, and the same path changed afterwards is refused
+  let real = null; try { await exec(tools.packager, ["--version"]); real = tools.packager; } catch {}
+  if (real) {
+    const copy = join(tmp, "packager-copy"); await fs.copyFile(await checkPackager(real), copy); await fs.chmod(copy, 0o755);
+    assert.equal(await checkPackager(copy), copy);
+    await fs.appendFile(copy, "x");
+    await assert.rejects(checkPackager(copy), REFUSED);
+  } else if (process.env.REQUIRE_PACKAGER === "1") assert.fail("shaka-packager is required here");
+  // each program, run as its job runs it, refuses another file (or none) before it touches anything
+  const PW = "a test password, twelve+", SALT = toBase64(new Uint8Array(16).fill(13));
+  const photoKey = await derivePhotoKey(await deriveKey(PW, SALT, 1000)), keyHex = await exportKeyHex(photoKey);
+  const site = await fs.mkdtemp(join(tmp, "pin-")), P = "7".repeat(24);
+  await fs.writeFile(join(site, "config.json"), JSON.stringify({ salt: SALT, iterations: 1000 }));
+  await fs.writeFile(join(site, "gallery.json.enc"), await sealText(photoKey, JSON.stringify({ photos: [{ id: P, name: "p.png", status: "ready", prKidGuid: "00000000-0000-0000-0000-000000000001", fairplay: false }] })));
+  await fs.mkdir(join(site, "photos", P), { recursive: true });
+  await fs.writeFile(join(site, "photos", P, "meta.json.enc"), await sealText(photoKey, JSON.stringify({ id: P, fairplay: null })));
+  const snapshot = async (d) => { const out = {}; const walk = async (x) => { for (const e of await fs.readdir(x, { withFileTypes: true })) { const p = join(x, e.name); if (e.isDirectory()) await walk(p); else out[p.slice(d.length)] = createHash("sha256").update(await fs.readFile(p)).digest("hex"); } }; await walk(d); return out; };
+  const before = await snapshot(site), evt = join(tmp, "pin-event.json");
+  const go = (args, env) => { const r = spawnSync(process.execPath, args, { encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", ...env } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+  for (const [bin, re] of [[wrong, REFUSED], ["/nonexistent/packager", /the packager "\/nonexistent\/packager" was not found/]]) {
+    for (const [action, env] of [["add", {}], ["mosaic", {}], ["delete", { WORKER_ACTION: "mosaic" }]]) {
+      await fs.writeFile(evt, JSON.stringify({ client_payload: { action, id: P, key: keyHex, blobSha: "a".repeat(40), name: "p.png" } }));
+      const r = go([join(REPO, "site", "worker.mjs")], { GITHUB_EVENT_PATH: evt, SITE_DIR: site, PACKAGER_BIN: bin, ...env });
+      assert.equal(r.code, 1, r.out); assert.match(r.out, /::error title=Packager::/); assert.match(r.out, re); assert.ok(!/^result:/m.test(r.out), "nothing was run");
+    }
+    const b = go([join(REPO, "site", "backfill.mjs")], { SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: bin, GITHUB_EVENT_NAME: "workflow_dispatch", BACKFILL_RESULT: "" });
+    assert.equal(b.code, 1, b.out); assert.match(b.out, /::error title=Apple backfill::/); assert.match(b.out, re);
+    const out = await fs.mkdtemp(join(tmp, "pin-card-"));
+    const c = go([join(REPO, "tools", "fairplay-card.mjs"), "--out", out, "--own", join(out, "own")], { PACKAGER_BIN: bin });
+    assert.equal(c.code, 1, c.out); assert.match(c.out, /::error title=Packager::/); assert.match(c.out, re);
+    assert.deepEqual(await fs.readdir(out), [], "the card job wrote nothing");
+  }
+  assert.deepEqual(await snapshot(site), before, "nothing on the site was touched");
+  // a deletion runs no packager and is never held up by one
+  await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "delete", id: P, key: keyHex } }));
+  const d = go([join(REPO, "site", "worker.mjs")], { GITHUB_EVENT_PATH: evt, SITE_DIR: site, PACKAGER_BIN: wrong });
+  assert.equal(d.code, 0, d.out); assert.match(d.out, /^result: deleted$/m); await assert.rejects(fs.access(join(site, "photos", P)));
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

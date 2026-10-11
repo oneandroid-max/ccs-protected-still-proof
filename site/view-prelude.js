@@ -106,6 +106,8 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (meta.fairplay) {
         try {
           if (!/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(meta.fairplay.master))) throw new Error("its address is not one the job writes");
+          // a token past the expiry date the job recorded for it can license nothing: the form is not offered (the job treats it as dead too)
+          if (Date.parse(meta.fairplay.expires) <= Date.now()) throw new Error(`its licence token expired on ${String(meta.fairplay.expires).slice(0, 10)}`);
           const token = await openText(key, await fetchSealed(base + meta.fairplay.master.split("/")[0] + "/token.enc", "its licence token is not on the site yet"));
           fairplay = { manifest: new URL(base + meta.fairplay.master, location.href).href, token, ...(meta.fairplay.license !== undefined ? { license: String(meta.fairplay.license) } : {}) };
         } catch (e) { fairplay = { error: e.message }; }

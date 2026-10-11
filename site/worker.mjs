@@ -19,6 +19,7 @@ import { importKeyHex, open, seal, sealText, openText, fromBase64, toHex, random
 import { renderClip, packageClip, checkBoxes, newProtectionIds, probe, packageFairPlay, checkFairPlay, verifyFairPlayBytes } from "../service/lib/pipeline.mjs";
 import { readCommunicationKey, readAxinomSettings, mintToken, newFairPlayIds, comKeyCheck, checkKeyWithAxinom, AXINOM_FAIRPLAY_LICENSE } from "./axinom.mjs";
 import { run as execFile } from "../service/lib/util.mjs";
+import { checkPackager } from "../service/lib/packager-pin.mjs";
 import { jpegOrientation } from "../service/lib/exif.mjs";
 import { sniffImage } from "../service/lib/util.mjs";
 import { derivePlayReadyTestKey } from "../tools/playready-test-key.mjs";
@@ -76,9 +77,11 @@ async function addFairPlay({ tools, work, outDir, key, com, verified }) {
   await fs.writeFile(join(work, "fp", "token.enc"), await sealText(key, token));
   const folder = "fp-" + toHex(randomBytes(4)), part = join(outDir, folder + ".part");
   await fs.rm(part, { recursive: true, force: true });
-  await fs.mkdir(part, { recursive: true });
-  for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
-  await fs.rename(part, join(outDir, folder));
+  try {
+    await fs.mkdir(part, { recursive: true });
+    for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
+    await fs.rename(part, join(outDir, folder));
+  } catch (e) { await fs.rm(part, { recursive: true, force: true }).catch(() => {}); throw e; } // a half-copied form is never left to be published
   return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, comKeyCheck: comKeyCheck(com), verified: !!verified, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
 }
 // Removes every Apple form in `dir` but the one the meta now records (and anything half-made).
@@ -168,11 +171,17 @@ async function stillFromOutput(tools, key, dir, kidHex, work, i) {
   return { still, ...(await probe(tools.ffprobe, still)) };
 }
 
+// Every answer to a page's request carries the request's id into the view's record (the last ten kept), so the page
+// that asked knows its own answer has come, whatever the answer was, and no other change to the record is taken for it.
+const withAnswer = (prev, ask) => (ask ? [ask] : []).concat(Array.isArray(prev) ? prev.filter((x) => x !== ask) : []).slice(0, 10);
+// A form whose token is past its own expiry date (our own record of it) can license nothing: it is not a working form.
+const formAlive = (fp) => !!(fp && fp.master) && !(Date.parse(fp.expires) <= Date.now());
+
 // Builds site/mosaic/: the combined view of every ready picture, packaged and sealed exactly like a
 // single picture, plus its sealed layout (which picture is where, for tapping and for the list).
-export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com ? keyGate(com) : null }) {
+export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com ? keyGate(com) : null, ask = null }) {
   const gallery = await readGallery(siteDir, key);
-  const out = join(siteDir, "mosaic");
+  const out = join(siteDir, "mosaic"), next = join(siteDir, ".mosaic-next");
   const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
   let cur = null;
   try { cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc"))))); } catch {}
@@ -184,33 +193,36 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   const readyIds = ready.map((x) => x.id);
   const drawn = cur && Array.isArray(cur.ids) ? cur.ids : [], leftOut = cur ? (cur.skipped || []).map((x) => x.id) : [];
   const samePictures = !!cur && !!ready.length && drawn.every((id) => readyIds.includes(id)) && readyIds.every((id) => drawn.includes(id) || leftOut.includes(id));
+  const writeCur = async () => { cur.answered = withAnswer(cur.answered, ask); await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur))); };
+  let written = false;
   if (samePictures && leftOut.some((id) => !readyIds.includes(id))) {
     cur.skipped = (cur.skipped || []).filter((x) => readyIds.includes(x.id));
-    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur)));
+    await writeCur(); written = true;
     log("the combined view's record no longer names left-out pictures that were since deleted");
   }
-  const hasForm = !!(cur && cur.fairplay && cur.fairplay.master);
+  const hasForm = !!(cur && cur.fairplay && cur.fairplay.master), alive = !!cur && formAlive(cur.fairplay);
   const upToDate = samePictures && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length && JSON.stringify(drawn) === JSON.stringify(readyIds); // in the list's order
   // a request answered by keeping the view as it is: the answer and its reason written into its record, so the page
-  // can say so (its "Try again" would otherwise wait for a rebuild that is not coming); a rebuild writes a new record
+  // can say so; a rebuild writes a new record
   const keep = async (why, fairplay) => {
     cur.kept = { at: new Date().toISOString(), why: why.slice(0, 400) };
-    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur)));
+    await writeCur();
     log(`the combined view kept as it is${hasForm ? ", with its current Apple form" : " (it has no Apple form)"}: ${why}`);
     return { status: "current", count: drawn.length, fairplay };
   };
   // a repeated request (the page asking while the job's own run is on its way) changes nothing: when the
   // combined view already holds exactly these pictures, none left out, and a good form, keep it
   if (upToDate && (!com || await fairPlayCurrent(out, cur.fairplay, com))) {
+    if (ask && !written) await writeCur(); // the answer to the page that asked
     log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
     return { status: "current", count: drawn.length };
   }
   // the same pictures, only the Apple form to make or renew: that form alone, from the view's own output, the old
   // one kept unless the new one is made: a renewal that fails keeps the view and its form as they are. Only when the
-  // view's own output cannot be read back is it rebuilt, below (where a view with a form is rebuilt only once Axinom
-  // accepts the key).
+  // view's own output cannot be read back is it rebuilt, below (where a view with a working form is rebuilt only once
+  // Axinom accepts the key).
   if (upToDate) {
-    try { const r = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }); log(`the combined view's Apple form: ${r}`); return { status: "current", count: drawn.length, fairplay: r }; }
+    try { const r = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk, ask }); log(`the combined view's Apple form: ${r}`); return { status: "current", count: drawn.length, fairplay: r }; }
     catch (e) {
       if (e.gate) return keep(`${e.replacing ? "its Apple form was not renewed" : "no Apple form was made for it"}: ${cause(e.answer)}`, "kept");
       if (!e.unreadable) return keep(`its new Apple form could not be made (${String(e.message || e).slice(0, 200)}); the current one stays`, "failed");
@@ -218,15 +230,20 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
     }
   }
   // THE RULE on the view: a rebuild of the SAME pictures (a left-out one tried again, a new layout version, its
-  // own output unreadable) would delete its form, so a view with a form (made with Axinom's acceptance or not) is
-  // rebuilt only once Axinom accepts the key (without a usable key, never); otherwise it is kept as it is. A view of
-  // OTHER pictures (one added, or one it draws deleted) is rebuilt whatever Axinom says: its old content, and its form,
-  // must go.
-  if (samePictures && hasForm) {
+  // own output unreadable) would delete its form, so a view with a working form (made with Axinom's acceptance or not;
+  // one whose token has expired is not working) is rebuilt only once Axinom accepts the key (without a usable key,
+  // never); otherwise it is kept as it is. A view of OTHER pictures (one added, or one it draws deleted) is rebuilt
+  // whatever Axinom says: its old content, and its form, must go.
+  if (samePictures && alive) {
     const answer = com ? await keyOk() : null;
     if (!answer || !mayReplace(answer)) return keep(`rebuilding it would remove its Apple form, and ${cause(answer)}`, "kept");
   }
-  await fs.rm(out, { recursive: true, force: true }); // never a combined view from an older set left beside a new one
+  // A rebuild is made beside the old view (.mosaic-next) and swapped in only once complete. A view of OTHER pictures
+  // goes first, whatever happens next (its content must not stay on the site). For the SAME pictures the old view
+  // stays until the swap, and a new view that came out without an Apple form while the old one has a working form is
+  // not swapped in at all: the old view is kept whole and the failure said.
+  await fs.rm(next, { recursive: true, force: true });
+  if (!samePictures) await fs.rm(out, { recursive: true, force: true });
   if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }
   if (!ready.length) { log("no ready pictures: no combined view"); return { status: "none", count: 0 }; }
   const work = await fs.mkdtemp(join(tmpdir(), "site-mosaic-"));
@@ -263,21 +280,30 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
     const wv = checkBoxes(await fs.readFile(join(work, "video-widevine.mp4")));
     const pr = checkBoxes(await fs.readFile(join(work, "video-playready.mp4")));
     if (!wv.ok || !pr.ok || !pr.kids.includes(ids.prKid)) throw new Error("a packaged file of the combined view is missing its sample-encryption boxes");
-    await fs.mkdir(out, { recursive: true });
-    for (const f of OUTPUTS) await fs.writeFile(join(out, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
-    let fairplay = null;
-    if (com) { // a view of other pictures: a new form, replacing nothing
+    await fs.mkdir(next, { recursive: true });
+    for (const f of OUTPUTS) await fs.writeFile(join(next, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
+    let fairplay = null, noForm = "";
+    if (com) { // the new view's own form (its old one, if any, goes with the old view)
       try {
         const answer = await keyOk();
-        if (!mayMake(answer)) log(`combined view: no FairPlay form — ${refusal(com, answer)}`);
-        else { if (!answer.accepted) log(`combined view: ${refusal(com, answer)}; its form is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: out, key, com, verified: answer.accepted }); log("combined view: FairPlay form added"); }
-      } catch (e) { log(`combined view: no FairPlay form — ${String(e.message || e).slice(0, 300)}`); }
+        if (!mayMake(answer)) { noForm = refusal(com, answer); log(`combined view: no FairPlay form — ${noForm}`); }
+        else { if (!answer.accepted) log(`combined view: ${refusal(com, answer)}; its form is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: next, key, com, verified: answer.accepted }); log("combined view: FairPlay form added"); }
+      } catch (e) { noForm = String(e.message || e).slice(0, 300); log(`combined view: no FairPlay form — ${noForm}`); }
+    }
+    if (samePictures && alive && !fairplay) {
+      await fs.rm(next, { recursive: true, force: true });
+      return keep(`its rebuild made no Apple form (${noForm.slice(0, 200) || "no Axinom key"}); the current view and its form stay`, "failed");
     }
     const meta = { kind: "mosaic", version: MOSAIC_VERSION, width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
-      ids: used.map((u) => u.id), tiles: used.map((u, i) => ({ id: u.id, name: u.name, ...layout.tiles[i] })), skipped, fairplay };
-    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(meta)));
+      ids: used.map((u) => u.id), tiles: used.map((u, i) => ({ id: u.id, name: u.name, ...layout.tiles[i] })), skipped, fairplay, answered: withAnswer(cur && cur.answered, ask) };
+    await fs.writeFile(join(next, "meta.json.enc"), await sealText(key, JSON.stringify(meta)));
+    await fs.rm(out, { recursive: true, force: true });
+    await fs.rename(next, out);
     log(`combined view ready: ${used.length} picture(s) in ${layout.cols}x${layout.rows}, ${layout.width}x${layout.height}${skipped.length ? `, ${skipped.length} left out` : ""}`);
     return { status: "ready", count: used.length, skipped: skipped.length, fairplay: !!fairplay };
+  } catch (e) {
+    await fs.rm(next, { recursive: true, force: true }); // nothing half-made is left beside the view
+    throw e;
   } finally {
     await fs.rm(work, { recursive: true, force: true }); // the clear stills are gone with the runner
   }
@@ -286,22 +312,25 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
 // The combined view's Apple form renewed from the view's OWN protected output (its still read back the way
 // a picture's is), so a token running out never needs the whole view rebuilt (a rebuild needs Google's key
 // server for its Widevine form). "current" when its form is good, "renewed", or "none" without a view.
-async function refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }) {
+async function refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk, ask = null }) {
   const out = join(siteDir, "mosaic"), metaPath = join(out, "meta.json.enc");
   let meta; try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); } catch { return "none"; }
   if (await fairPlayCurrent(out, meta.fairplay, com)) return "current";
-  const answer = await keyOk(), replacing = !!(meta.fairplay && meta.fairplay.master);
+  const answer = await keyOk(), replacing = formAlive(meta.fairplay); // an expired form is replaced as if there were none
   if (!(replacing ? mayReplace(answer) : mayMake(answer))) throw Object.assign(new Error(refusal(com, answer) + "; the combined view's Apple form was left as it was"), { gate: true, answer, replacing });
   const work = await fs.mkdtemp(join(tmpdir(), "site-fp-mosaic-"));
   try {
-    let s; // the view's own output unreadable is the one failure a rebuild can mend; any other leaves the view as it is
+    let s; // the view's own output unreadable is the one failure a rebuild can mend; any other (a program that could not
+    // be started included) leaves the view as it is
     try { s = await stillFromOutput(tools, key, out, String(meta.prKidGuid || "").replace(/-/g, "").toLowerCase(), work, 0); }
-    catch (e) { throw Object.assign(new Error(String(e.message || e)), { unreadable: true }); }
+    catch (e) { throw Object.assign(new Error(String(e.message || e)), { unreadable: !e.notRun }); }
     await renderClip(tools, s.still, join(work, "clip.mp4"), { maxSide: Math.max(MOSAIC_MAX.width, MOSAIC_MAX.height) });
     meta.fairplay = await addFairPlay({ tools, work, outDir: out, key, com, verified: answer.accepted });
     delete meta.kept; // a note that the view was kept is history once its form is renewed
+    meta.answered = withAnswer(meta.answered, ask);
     await fs.writeFile(metaPath, await sealText(key, JSON.stringify(meta)));
-    await removeOtherFairPlay(out, meta.fairplay); // only now: the meta points to the new form
+    try { await removeOtherFairPlay(out, meta.fairplay); } // only now: the meta points to the new form; a leftover is
+    catch (e) { log(`the combined view's old Apple form was not removed (${e.message}); the next renewal removes it`); } // removed next time
     return "renewed";
   } finally { await fs.rm(work, { recursive: true, force: true }); }
 }
@@ -364,8 +393,10 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
   // the backfill has its own workflow and queue: a page's request (the payload) can never start it
   if (act === "fairplay" && action !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
   if (!/^[0-9a-f]{64}$/.test(String(p.key))) throw new Error("bad key");
+  // the page's request id (16 hex), written into the combined view's record with the answer; absent from the job's own runs
+  if (p.ask !== undefined && !(typeof p.ask === "string" && /^[0-9a-f]{16}$/.test(p.ask))) throw new Error("bad request id");
   const keyOk = com ? keyGate(com, checkKey) : null;
-  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk });
+  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk, ask: p.ask || null });
   if (act === "fairplay") return backfillFairPlay({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk });
   if (!/^[0-9a-f]{24}$/.test(String(p.id))) throw new Error("bad picture id");
   const key = await importKeyHex(p.key);
@@ -433,13 +464,28 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
   gallery.photos.push(entry);
   gallery.updatedAt = new Date().toISOString(); // the page compares the combined view with this
   await writeGallery(siteDir, key, gallery);
-  return { status: entry.status, error: entry.error };
+  return { status: entry.status, error: entry.error, ...(com && entry.status === "ready" ? { fairplay: entry.fairplay } : {}) };
+}
+
+// The job's last lines: the result, and a warning on the run's page whenever the combined view or a picture ends
+// without the Apple form it should have, so a form that could not be made is never silent. A view kept as it is
+// ("kept": Axinom refused the key or could not be asked) is said in the result line and on the page, not warned:
+// the weekly run stops with an error on the same cause.
+export function resultLines(r, { com = null, action = "" } = {}) {
+  const lines = [`result: ${r.status}${r.error ? " — " + r.error : ""}${r.count !== undefined ? ` (${r.count} picture(s))` : ""}${r.fairplay !== undefined ? `; Apple form: ${r.fairplay}` : ""}`];
+  if (r.fairplay === "failed") lines.push("::warning title=Apple form::the combined view's new Apple form could not be made; its current one is kept (see the log above)");
+  if (com && r.status === "ready" && r.fairplay === false) lines.push(`::warning title=Apple form::${action === "mosaic" ? "the combined view" : "the picture"} was made without its Apple form (see the log above); Apple devices are held back until it has one`);
+  return lines;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const event = JSON.parse(await fs.readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
   const siteDir = process.env.SITE_DIR || fileURLToPath(new URL("./", import.meta.url));
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+  const action = process.env.WORKER_ACTION || (event.client_payload || {}).action;
+  if (action !== "delete") { // only the pinned build ever runs on a picture (a deletion runs no packager, and is never held up)
+    try { await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
+  }
   // Apple's form needs the Axinom key; without a usable one every picture is still prepared for the rest
   let com = null;
   if (process.env.AXINOM_COM_KEY_ID || process.env.AXINOM_COM_KEY) {
@@ -447,6 +493,5 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     catch (e) { console.log(`::warning title=Apple form::the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
   } else console.log("the Axinom key is not set: no Apple (FairPlay) form (Apple devices stay held back)");
   const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com });
-  console.log(`result: ${r.status}${r.error ? " — " + r.error : ""}${r.count !== undefined ? ` (${r.count} picture(s))` : ""}${r.fairplay !== undefined ? `; Apple form: ${r.fairplay}` : ""}`);
-  if (r.fairplay === "failed") console.log("::warning title=Apple form::the combined view's new Apple form could not be made; its current one is kept (see the log above)");
+  for (const line of resultLines(r, { com, action })) console.log(line);
 }

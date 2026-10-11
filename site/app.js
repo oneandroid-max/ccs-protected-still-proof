@@ -138,12 +138,18 @@ export function mosaicCurrent(meta, readyIds) {
   const held = new Set([...meta.ids, ...(meta.skipped || []).map((x) => x.id)]);
   return held.size === readyIds.length && readyIds.every((id) => held.has(id));
 }
-// Asks GitHub to (re)make the combined view; the time is kept so a page does not ask again too soon.
+// Asks GitHub to (re)make the combined view; the time is kept so a page does not ask again too soon. The request
+// carries a fresh id (16 hex), which the job writes into the view's record with its answer (meta.answered): the page
+// that asked knows its own answer by it, whatever else changed the record meanwhile. Returns the id.
 export const MOSAIC_ASK_GAP = 8 * 60 * 1000;
 export async function askMosaic(st) {
   sessionStorage.setItem("ccs-mosaic-asked", String(Date.now())); // stamped first: a refused request waits the full gap too
-  await dispatch(st, { action: "mosaic" });
+  const ask = toHex(randomBytes(8));
+  await dispatch(st, { action: "mosaic", ask });
+  return ask;
 }
+// Whether the view's record carries the answer to the request with this id.
+export const answeredAsk = (meta, ask) => !!ask && !!meta && Array.isArray(meta.answered) && meta.answered.includes(ask);
 export function mosaicAskedAt() { return Number(sessionStorage.getItem("ccs-mosaic-asked") || 0); }
 
 // Whether the prepared files have reached the live site (Pages publishes about a minute after the Action).

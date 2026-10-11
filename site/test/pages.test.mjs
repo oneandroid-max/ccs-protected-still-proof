@@ -120,10 +120,12 @@ async function guardWith(extra, edit, files = {}) {
   await fs.rm(d, { recursive: true, force: true });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
 }
-// THE GUARD'S THIRD RULE (the sixth to tenth reviews): a packager is brought in only by the pinned download, in a
+// THE GUARD'S THIRD RULE (the sixth to eleventh reviews): a packager is brought in only by the pinned download, in a
 // workflow or a Dockerfile, checked against its SHA-256 by the exact line after it; a workflow that downloads it lets
-// no failure pass; every known download is counted. Every way around an earlier version that a review found is here.
-test("the guard holds every way of bringing in a packager to the pinned, checked download", async () => {
+// no failure pass; every known download is counted. Every way around an earlier version that a review found is here,
+// but those the guard is not meant to see (named in its comment; the run-time check in service/lib/packager-pin.mjs
+// refuses what they bring wherever our programs run the packager: site/test/fairplay.test.mjs).
+test("the guard refuses the obvious ways of bringing in a packager other than the pinned, checked download", async () => {
   const PIN = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
   const LATEST = "https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64";
   const MIRROR = "https://mirror.example.com/packager-linux-x64";
@@ -170,6 +172,13 @@ test("the guard holds every way of bringing in a packager to the pinned, checked
     [[DF, afterRun("COPY bin/packager /usr/local/bin/packager")], NAMED],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM someorg/packager:v3 AS base")], NAMED],
     [[DF, afterRun("RUN --mount=type=bind,from=someorg/packager,target=/p /p/packager --version")], NAMED],
+    // the eleventh review: a line that names shaka-packager itself, wherever it stands (an image on a continuation line,
+    // in a variable, a build argument, a heredoc); a packager named in capitals
+    [[ST, (t) => t.replace(AT, `      - run: |\n          docker run --rm \\\n            google/shaka-packager:latest packager --version\n${AT}`)], NAMED],
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      TOOL_IMAGE: google/shaka-packager:latest")], NAMED],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "ARG BASE=google/shaka-packager:latest\nFROM $1")], NAMED],
+    [[ST, (t) => t.replace(AT, `      - run: |\n          docker build -t tools - <<'EOF'\n          FROM google/shaka-packager:latest\n          EOF\n${AT}`)], NAMED],
+    [[ST, step(`curl -sSL -o /usr/local/bin/PACKAGER ${MIRROR}`)], NAMED],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
     [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
     // a curl that is not only the pinned download: another address beside it, another option, an output built by a command
@@ -217,7 +226,15 @@ test("the guard holds every way of bringing in a packager to the pinned, checked
     ["deploy/docker-compose.yml", "services:\n  pack:\n    image: someorg/packager:v3\n", /deploy\/docker-compose\.yml:3: brings in a packager other than by the pinned download/],
     ["Makefile", `packager:\n\t${down("bin/packager").split("\n")[0]}\n`, OUTSIDE("Makefile")],
     ["scripts/package.json", `{ "scripts": { "postinstall": "curl -sSL -o bin/packager ${PIN}" } }\n`, /scripts\/package\.json:1: brings in a packager other than by the pinned download/],
+    // the eleventh review: every kind it claims to read, in either case (batch, module and Makefile names were not tested)
+    ...["tools/get.bat", "tools/GET.BAT", "tools/get.cmd", "tools/get.psm1", "makefile", "GNUmakefile", "build/tools.mk", "MAKEFILE"].map((f) => [f, `${down("/tmp/packager").split("\n")[0]}\n`, OUTSIDE(f)]),
   ]) { const g = await guardWith(null, null, { [file]: text }); assert.equal(g.code, 1, `${file}: ${g.out}`); assert.match(g.out, re); }
+  // a pinned, checked download in a workflow that DOWNLOADERS does not list: refused until it is listed
+  const unlisted = await guardWith(null, null, { ".github/workflows/zz-new.yml": `name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          curl -sSL -o /tmp/packager ${PIN}\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1\n` });
+  assert.equal(unlisted.code, 1, unlisted.out); assert.match(unlisted.out, /zz-new\.yml: a pinned download of shaka-packager that DOWNLOADERS in tools\/check-workflow-links\.mjs does not list/);
+  // lock files are not read (a package named "packager" in one is not a download: the eleventh review)
+  const lock = await guardWith(null, null, { "package-lock.json": `{ "packages": { "node_modules/@electron/packager": { "resolved": "https://registry.npmjs.org/@electron/packager/-/packager-18.3.6.tgz" } } }\n` });
+  assert.equal(lock.code, 0, lock.out);
   // legitimate text: accepted (the tenth review: the version before refused the last five)
   const accepted = [
     [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: packager --version\n${AT}`)]],
@@ -257,6 +274,11 @@ test("the guard in a git checkout: what git ignores is left out, everything else
     // in a folder git ignores: never committed, left out
     await fs.mkdir(join(d, "ignored"), { recursive: true }); await fs.writeFile(join(d, "ignored", "get.sh"), bad);
     const skipped = run(); assert.equal(skipped.code, 0, skipped.out);
+    // ... unless it is committed there all the same (added by force): then it is the repository's, read, refused
+    git("add", "-f", "ignored/get.sh"); git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "forced");
+    const forced = run(); assert.equal(forced.code, 1, forced.out); assert.match(forced.out, /ignored\/get\.sh:1: brings in a packager other than by the pinned download/);
+    git("rm", "-q", "--cached", "ignored/get.sh"); git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "unforced");
+    assert.equal(run().code, 0, "taken out of the repository again: left out");
     // the same in a new file git does not ignore (not added yet), and once committed: read, refused
     await fs.mkdir(join(d, "scripts"), { recursive: true }); await fs.writeFile(join(d, "scripts", "get.sh"), bad);
     const fresh = run(); assert.equal(fresh.code, 1, fresh.out); assert.match(fresh.out, /scripts\/get\.sh:1: brings in a packager other than by the pinned download/);
