@@ -341,6 +341,15 @@ device for it; no outside service is in the chain.
   - **Still open (older than this work):** if a rebuild Axinom allowed then fails (Google's key server down, say), there is no combined view until the next run. Building into a separate folder and swapping only when complete would keep the old one.
   - **Measured here:** site 42 of 42 with the real packager, none skipped; service 15 of 15; the drive 86 of 86; the guard 9 of 9.
   - **Next:** the deliberate breaks (mine, and the reviewer's five), CI, and an eleventh review of this fix before the merge.
+  - **Watched failing (21:47Z):** 30 deliberate breaks.
+    - On `3e0c849`, 28 of 29 were caught at once. They include the ninth review's blocker, and four of the five breaks the tenth review's set found that no test caught: the three worker paths and the ten-times default limit.
+    - The fifth, git's answer making the guard read nothing, was run on `fd22c0e`: caught.
+    - The one missed: the download's output allowed to be built by a command. Its only test was refused for another reason, so it tested nothing. A test for that rule alone was added in `fd22c0e`; the break, re-run there, is caught.
+  - **CI on `3e0c849`:** site test, service test and drive passed (runs 38176722623, 38176724900, 38176717009). **On `fd22c0e`:** service test passed (run 38177756083); the site test was still running at 21:48Z.
+  - **Now (21:48Z):** the eleventh review, on `35073c2..fd22c0e`, is running. The merge waits until it comes back clean.
+  - **Side items from QuicLINKs (not this repository), told to the owner at 21:45Z:**
+    - QuicLINKs PR #953 was merged on github.com. CCS's own repository lacks that commit, so the production mirror script will refuse its next push until CCS main takes it in. This sandbox cannot sign in to CCS's server, so that step is the owner's, or a session on his PC.
+    - QuicLINKs PR #954 now conflicts with #953, and its independent review never finished. It is fixed after the Apple merge.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
