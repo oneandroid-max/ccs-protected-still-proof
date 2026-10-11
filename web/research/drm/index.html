@@ -11,7 +11,7 @@
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
   button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #d9d4c8; background: #fff; cursor: pointer; }
   button.primary { background: #1f4e8c; color: #fff; border-color: #1f4e8c; font-weight: 600; }
-  .stage { background: #000; border-radius: 10px; aspect-ratio: 3 / 4; max-height: 60vh; display: grid; place-items: center; color: #fff; text-align: center; margin: 0 auto; position: relative; }
+  .stage { background: #000; border-radius: 10px; aspect-ratio: 3 / 4; max-height: 60vh; display: grid; place-items: center; color: #fff; text-align: center; margin: 0 auto; }
   video { display: block; max-width: 100%; max-height: 60vh; background: #000; border-radius: 10px; }
   dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
   dt { color: #6b665c; } dd { margin: 0; word-break: break-word; }
@@ -22,7 +22,7 @@
 </head>
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
-<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM (Widevine in Chrome, PlayReady in Edge) decrypts it inside the device's protected path, played here by the same player the first proof used. Where the device grants <em>hardware</em> protection the phone or PC withholds the frame from every capture; where it grants only software decryption the capture shows the video. What plays is a labeled test pattern, not the portrait, because this page measures one thing: whether your device's protected path blacks out a capture. The keys are the vendors' public test keys and protect nothing. Read the result first, then tap Play.</p>
+<p class="lede">No install. A short video is encrypted with Common Encryption and the browser's own DRM decrypts it inside the device's protected path, played here by the same player the first proof used. Chrome and Edge on Android use Widevine; Edge on Windows uses PlayReady; Safari uses FairPlay. Where the device grants <em>hardware</em> protection the screen shows the picture while every capture of it is black; where it grants only software decryption the capture shows the video. Read the result first, then tap Play — it tries whatever DRM this browser actually has.</p>
 
 <div class="row">
   <button id="auto" class="primary">Play (this browser's DRM)</button>
@@ -58,10 +58,13 @@
   shaka.polyfill.installAll();
   if (!shaka.Player.isBrowserSupported()) { set("r-ks", "this browser cannot play protected video", "bad"); return; }
 
-  async function play(which) {
-    $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—");
+  let current = null;
+  // Try one key system. Returns "ok" when it plays, "unavailable" when the browser has no such DRM
+  // (so the caller can try the next one), and throws on a real failure (e.g. the licence was refused).
+  async function tryOne(which) {
     const manifest = which === "playready" ? "playready.mpd" : "widevine.mpd";
-    const player = new shaka.Player();
+    if (current) { try { await current.destroy(); } catch (e) {} current = null; }
+    const player = new shaka.Player(); current = player;
     await player.attach(video);
     const cfg = { drm: { servers: {}, advanced: {} } };
     if (which === "playready") {
@@ -73,28 +76,47 @@
     }
     player.configure(cfg);
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`licence response: ${response.data.byteLength} bytes`); }
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("r-lic", `obtained, ${response.data.byteLength} bytes`, "ok"); log(`${which} licence response: ${response.data.byteLength} bytes`); }
     });
-    player.addEventListener("error", (e) => { const err = e.detail || e; set("r-ks", `error ${err.code}`, "bad"); log(`shaka error ${err.code}: ${(err.data || []).join(" ")}`); });
+    log(`${which}: loading ${manifest} …`);
     try {
-      log(`loading ${manifest} …`);
       await player.load(manifest);
-      const info = player.drmInfo();
-      const ks = info ? info.keySystem : "none", robust = (info && info.videoRobustness) || "";
-      const hw = /HW_SECURE|3000/.test(robust);
-      set("r-ks", ks);
-      set("r-granted", robust || "(level not reported)", hw ? "ok" : "bad");
-      set("r-expect", hw ? "hardware protection: a screenshot or recording of the video area should be BLACK. Take one." : "software decryption: the capture will show the video. That is this device's answer, not a bug.", hw ? "ok" : "bad");
-      await video.play().catch(() => {});
-      const tick = () => { set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok"); };
-      tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
-    } catch (e) { set("r-ks", "load failed: " + (e.code || e.message), "bad"); log("load failed: " + (e.code || e.message)); }
+    } catch (e) {
+      const code = e && e.code;
+      log(`${which}: load failed ${code}`);
+      // 6000 unsupported scheme, 6001 requested key-system config unavailable: this browser has no such DRM
+      if (code === 6000 || code === 6001) return "unavailable";
+      set("r-ks", `${which}: load failed ${code}`, "bad");
+      return "error";
+    }
+    const info = player.drmInfo();
+    const ks = info ? info.keySystem : "none", robust = (info && info.videoRobustness) || "";
+    const hw = /HW_SECURE|3000/.test(robust);
+    set("r-ks", ks); set("r-granted", robust || "(level not reported)", hw ? "ok" : "bad");
+    set("r-expect", hw ? "hardware protection: a screenshot or recording of the video area should be BLACK. Take one." : "software decryption: the capture will show the video. That is this device's answer, not a bug.", hw ? "ok" : "bad");
+    await video.play().catch(() => {});
+    const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
+    tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
+    return "ok";
   }
 
-  const isEdge = /Edg\//.test(navigator.userAgent);
-  $("auto").addEventListener("click", () => play(isEdge ? "playready" : "widevine"));
-  $("wv").addEventListener("click", () => play("widevine"));
-  $("pr").addEventListener("click", () => play("playready"));
+  async function play(order) {
+    $("log").textContent = ""; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…");
+    for (const which of order) {
+      const r = await tryOne(which);
+      if (r === "ok" || r === "error") return;
+      log(`${which} is not available in this browser; trying the next…`);
+    }
+    set("r-ks", "this browser has neither Widevine nor PlayReady for this video", "bad");
+    set("r-expect", "nothing plays, nothing to capture", "bad");
+  }
+
+  // Prefer the system most likely to give HARDWARE protection on each platform, then fall back:
+  //   Windows → PlayReady first (hardware SL3000), else Widevine; everywhere else → Widevine first, else PlayReady.
+  const isWindows = /Windows NT/.test(navigator.userAgent);
+  $("auto").addEventListener("click", () => play(isWindows ? ["playready", "widevine"] : ["widevine", "playready"]));
+  $("wv").addEventListener("click", () => play(["widevine"]));
+  $("pr").addEventListener("click", () => play(["playready"]));
 })();
 </script>
 </body>
