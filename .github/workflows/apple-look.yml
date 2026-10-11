@@ -42,6 +42,8 @@ jobs:
           python3 -u - <<'PY'
           import json, urllib.request, time, base64, subprocess, os
           B = "http://127.0.0.1:4444"
+          def note(title, text):  # also as a notice on the run, readable without the log
+              print("::notice title=" + title + "::" + str(text).replace("%", "%25").replace("\r", "").replace("\n", "%0A"))
           def call(method, path, body=None):
               req = urllib.request.Request(B + path, method=method, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json"})
               return json.loads(urllib.request.urlopen(req, timeout=120).read() or b"{}")
@@ -53,7 +55,9 @@ jobs:
           for t in (15, 30, 45):
               time.sleep(15)
               print(f"=== readout at {t} s ===")
-              print(call("POST", f"/session/{sid}/execute/sync", {"script": read, "args": []})["value"])
+              r = call("POST", f"/session/{sid}/execute/sync", {"script": read, "args": []})["value"]
+              print(r)
+          note("Apple check at 45 s", r)
           # scroll so both videos are on screen, then capture: the operating system's capture first
           call("POST", f"/session/{sid}/execute/sync", {"script": "document.getElementById('videos').scrollIntoView({block:'start'}); return 1;", "args": []})
           time.sleep(3)
@@ -71,7 +75,9 @@ jobs:
           for t in (10, 25):
               time.sleep(15 if t == 25 else 10)
               print(f"=== route 1, ?levels=fairplay, readout at {t} s ===")
-              print(call("POST", f"/session/{sid}/execute/sync", {"script": read1, "args": []})["value"])
+              r = call("POST", f"/session/{sid}/execute/sync", {"script": read1, "args": []})["value"]
+              print(r)
+          note("route 1 Apple test at 25 s", r)
           png = call("GET", f"/session/{sid}/screenshot")["value"]
           open("web/research/apple/results/mac-safari-route1-fairplay.png", "wb").write(base64.b64decode(png))
           call("DELETE", f"/session/{sid}")
