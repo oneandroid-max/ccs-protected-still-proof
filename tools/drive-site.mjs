@@ -46,14 +46,14 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
 await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic() {
+async function publishMosaic(builtAt = new Date().toISOString()) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
     const b = new Uint8Array(size); for (let i = 0; i < size; i++) b[i] = (i * 11 + size) & 255; mosaicBytes[f] = b;
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
-  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt: new Date().toISOString(),
+  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
     ids: [ID], tiles: [{ id: ID, name: "Cotton <Bowl>.jpg", x: 6, y: 8, w: 1068, h: 1424 }], skipped: [] })));
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
@@ -141,7 +141,9 @@ try {
   await page.waitForSelector("#open-all", { timeout: 20000 });
   check((await page.textContent("#open-all")) === "Open all 1 at once" && /All 1 in one protected view/.test(await page.textContent("#all")), "once published, the gallery offers it: " + (await page.textContent("#all")));
   check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "it does not ask again while the view is current");
-  // the same with the eight-minute gap out of the way: a page that has never asked still does not ask while it is current
+  // the same with the eight-minute gap out of the way and a view made an hour ago (so only "it is current"
+  // can hold the page back): a page that has never asked still does not ask while it is current
+  await publishMosaic(HOUR_AGO);
   await page.evaluate(() => sessionStorage.removeItem("ccs-mosaic-asked"));
   await page.reload(); await page.waitForSelector("#open-all", { timeout: 20000 }); await page.waitForTimeout(1500);
   check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "a current combined view is never asked for again, gap or no gap");
@@ -197,6 +199,7 @@ try {
   // 4c. a combined view that falls out of date (a second picture is ready): it says so, offers the earlier
   // one, asks only after three minutes out of date, and gives up visibly after twenty (a fake clock)
   api.galleryMode = "two";
+  await publishMosaic(); // made just now
   const sctx = await mockedContext();
   const p4 = await sctx.newPage();
   await p4.clock.install();
