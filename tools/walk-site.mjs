@@ -35,9 +35,11 @@ await fs.mkdir(OUT, { recursive: true });
 let shot = 0;
 async function capture(label) {
   const png = join(tmpdir(), `clear-${NAME}-${++shot}.png`);
-  const ps = `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); $bmp.Save('${png}', [System.Drawing.Imaging.ImageFormat]::Png)`;
-  try { execFileSync("powershell", ["-NoProfile", "-Command", ps], { stdio: "pipe" }); }
-  catch (e) { say(`capture ${label} failed: ${String(e.stderr || e.message).slice(0, 200)}`); return; }
+  // the path reaches PowerShell through the environment, never quoted into the command
+  const ps = "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); $bmp.Save($env:CAPTURE_PNG, [System.Drawing.Imaging.ImageFormat]::Png)";
+  // a capture that fails is a FAILED step: a walk with no evidence never passes
+  try { execFileSync("powershell", ["-NoProfile", "-Command", ps], { stdio: "pipe", env: { ...process.env, CAPTURE_PNG: png } }); }
+  catch (e) { step(false, `capture ${label} failed: ${String(e.stderr || e.message).slice(0, 200)}`); return; }
   const clear = await fs.readFile(png);
   await fs.rm(png, { force: true });
   const key = randomBytes(32), iv = randomBytes(12);

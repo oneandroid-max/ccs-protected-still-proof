@@ -15,7 +15,8 @@
 // that seals its captures; and the walker itself must delete each clear capture before sealing it.
 //
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, lstatSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -53,7 +54,7 @@ const WALK_SAFEGUARDS = [
   [/run: node tools\/check-workflow-links\.mjs/, "the walk job runs this guard before anything else"],
   [/path: \|\s*\n\s+walk\/\*\.sealed\.json\s*\n\s+walk\/\*-steps\.json\s*\n/, "the upload names only sealed captures and step records"],
   [/persist-credentials: false/, "checkout leaves no token behind"],
-  [/ls walk\/clear-\*.*rm -rf walk; exit 1/, "a clear capture left behind deletes everything and fails"],
+  [/os\.tmpdir\(\).*\^clear-.*rmSync\("walk".*process\.exit\(1\)/, "a clear capture left behind (in the temporary folder) is deleted, everything is refused, and the run fails"],
   [/if: always\(\)\s*\n\s+shell: bash\s*\n\s+run: \|\s*\n\s+ls -l walk/, "the clear-capture check runs even after a failed walk"],
   [/find dl -type f ! -name '\*\.sealed\.json' ! -name '\*-steps\.json'/, "the keep job refuses any file that is not sealed or a step record"],
   [/HEAD:walk-evidence/, "kept only on the walk-evidence branch"],
@@ -72,20 +73,27 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
 // code only: comments removed, so a comment cannot stand in for the real line
 const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/(^|[^:"'`])\/\/.*$/, "$1")).join("\n");
 // A tool can open the live site from a workflow that never names it, and can build the address from
-// parts, so EVERY file under tools/ (any extension, any depth; installed packages aside) that names the
-// Pages host at all must be the walker.
+// parts, so EVERY file under tools/ (any extension, any depth) that names the Pages host at all must be
+// the walker. (A known cost: a future tool for the public proof pages on that host must be named here
+// with its reason.) The files judged are the repository's own (git ls-files), so a local run and CI see
+// the same set; without git, every file but installed packages. A symbolic link is refused by name.
 const HOST = /github\.io/i;
-const walk = (d) => readdirSync(d).flatMap((x) => { const p = join(d, x); return x === "node_modules" ? [] : statSync(p).isDirectory() ? walk(p) : [p]; });
-for (const f of walk("tools")) {
-  if (f.replace(/\\/g, "/") === "tools/walk-site.mjs") continue;
-  if (HOST.test(readFileSync(f, "latin1"))) bad.push(`${f}: names the live Pages host; only tools/walk-site.mjs (sealed captures) may`);
+const walkDir = (d) => readdirSync(d).flatMap((x) => { const p = join(d, x); if (x === "node_modules") return []; const s = lstatSync(p); return s.isSymbolicLink() ? [p] : s.isDirectory() ? walkDir(p) : [p]; });
+let toolFiles;
+try { toolFiles = execFileSync("git", ["ls-files", "-z", "tools"], { encoding: "utf8" }).split("\0").filter(Boolean); } catch { toolFiles = walkDir("tools"); }
+for (const f of toolFiles) {
+  const rel = f.replace(/\\/g, "/");
+  if (rel === "tools/walk-site.mjs") continue;
+  let st; try { st = lstatSync(f); } catch { continue; } // listed by git but not on disk: nothing to open
+  if (st.isSymbolicLink()) { bad.push(`${rel}: a symbolic link under tools/ is not allowed (its target cannot be judged)`); continue; }
+  if (HOST.test(readFileSync(f, "latin1"))) bad.push(`${rel}: names the live Pages host; only tools/walk-site.mjs (sealed captures) may`);
 }
 // THE PIN. Rules about text can always be stepped around (a review found ten ways), so the walk's two
 // files are pinned by content: ANY change to them fails here until this pin is updated in the same
 // change, which forces whoever changes them to re-read the safeguards above, and a reviewer to see it.
 const PINNED = {
-  ".github/workflows/site-walk.yml": "396394d4fd20a02f571868c6f919c5b7e93c5b96f7abccf12d6726aea3d22e43",
-  "tools/walk-site.mjs": "b2078e95d41111bb5f55febdf5c9bd0dbcbeaf1734b53960c93b749fc41098ed",
+  ".github/workflows/site-walk.yml": "a876fa83889a444b9024a76c238dae2e651d250528b589950cf32316323a5f60",
+  "tools/walk-site.mjs": "952b793aa8c71a65e556772b2e203b0df124b439f8ea9ddc1e03e2b7f67b7cdf",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");

@@ -63,7 +63,8 @@ jobs:
         shell: bash
         run: |
           ls -l walk || true
-          if ls walk/clear-* > /dev/null 2>&1; then echo "a clear capture was left behind: refusing to keep anything"; rm -rf walk; exit 1; fi
+          # clear captures are written to the system's temporary folder: any still there is deleted, and the run keeps nothing
+          node -e 'const fs = require("fs"), os = require("os"), path = require("path"); const d = os.tmpdir(); const c = fs.readdirSync(d).filter((f) => /^clear-/.test(f)); for (const f of c) fs.rmSync(path.join(d, f), { force: true }); if (c.length) { console.log("clear captures left behind (" + c.length + "): deleted; refusing to keep anything"); fs.rmSync("walk", { recursive: true, force: true }); process.exit(1); } console.log("no clear capture left behind in " + d);' 
       - uses: actions/upload-artifact@v4
         if: always()
         with:

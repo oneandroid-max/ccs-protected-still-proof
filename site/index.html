@@ -81,7 +81,8 @@ async function load() {
     // the combined view: every ready, published picture in one protected video
     const readyIds = g.photos.filter((p) => p.status === "ready" && pub[p.id] && !deleting.has(p.id)).map((p) => p.id);
     let meta = readyIds.length ? await mosaicMeta(st) : null;
-    if (meta === undefined) meta = lastMeta; else { lastMeta = meta; metaKnown = true; } // the site could not be reached: keep what was known
+    if (meta === undefined) meta = lastMeta; // the site could not be reached: keep what was known
+    else { lastMeta = meta; if (readyIds.length) metaKnown = true; } // known only once a fetch has actually answered
     const current = mosaicCurrent(meta, readyIds);
     // the stale clock restarts whenever the set of ready pictures changes
     const key = readyIds.join(",");
