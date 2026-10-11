@@ -28,12 +28,13 @@ jobs:
       - name: Safari, through its own WebDriver — open, wait, read the readout, capture
         timeout-minutes: 6
         run: |
-          sw_vers; /Applications/Safari.app/Contents/MacOS/Safari --version 2>/dev/null || defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString
+          # (run 1 hung here: Safari has no --version flag, so asking for one simply launched Safari)
+          sw_vers; echo "Safari $(defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString)"
           sudo safaridriver --enable
           safaridriver -p 4444 > /tmp/safaridriver.log 2>&1 &
           sleep 3
           mkdir -p web/research/apple/results
-          python3 - <<'PY'
+          python3 -u - <<'PY'
           import json, urllib.request, time, base64, subprocess, os
           B = "http://127.0.0.1:4444"
           def call(method, path, body=None):
