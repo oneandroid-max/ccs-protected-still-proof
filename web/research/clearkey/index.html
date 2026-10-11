@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Research candidate 4: ClearKey video</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 920px; margin: 0 auto; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  h1 { font-size: 1.2rem; } p { max-width: 65ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  input { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 6px 10px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #d9d4c8; background: #fff; cursor: pointer; }
+  video { display: block; max-width: 100%; background: #000; border-radius: 10px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  dt { color: #6b665c; } dd { margin: 0; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Candidate 4: the still as a ClearKey-encrypted video</h1>
+<p>The photo is a two-second video encrypted with the standard ClearKey system. No licence server: this page derives the key from the link key and the PIN and hands it to the browser itself. The first proof's Widevine video came out black on Android because Widevine decrypts inside the phone's protected path; ClearKey decrypts in the browser's own software, so the expectation is that the screenshot shows the frame. The screenshot you take is the measurement.</p>
+<div class="row">
+  <input id="pin" type="text" inputmode="numeric" maxlength="6" placeholder="PIN" aria-label="PIN">
+  <button id="play">Play the encrypted video</button>
+</div>
+<video id="v" playsinline muted loop></video>
+<dl>
+  <dt>Key system</dt><dd id="r-ks">not asked yet</dd>
+  <dt>Key status</dt><dd id="r-key">—</dd>
+  <dt>Video</dt><dd id="r-video">—</dd>
+  <dt>Key id</dt><dd id="r-kid">—</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+<p><a href="../">Back to the list of candidates</a></p>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id), set = (id, t) => { $(id).textContent = t; };
+  set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+  const secret = new URLSearchParams(location.hash.replace(/^#/, "")).get("k") || "";
+  const info = await (await fetch("info.json")).json();
+  set("r-kid", info.kid);
+  const b64url = (u8) => btoa(String.fromCharCode(...u8)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const video = $("v");
+  $("play").addEventListener("click", async () => {
+    const pin = $("pin").value.trim();
+    if (!/^\d{6}$/.test(pin) || !secret) { set("r-key", "type the 6-digit PIN; the key must be in the link"); return; }
+    const contentType = `video/mp4; codecs="${info.codecs}"`;
+    let access;
+    try {
+      access = await navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{ initDataTypes: ["keyids", "cenc"], videoCapabilities: [{ contentType }] }]);
+      set("r-ks", "org.w3.clearkey granted for " + contentType);
+    } catch (e) { set("r-ks", "org.w3.clearkey refused: " + e.message); return; }
+    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(`${secret}:${pin}`), "PBKDF2", false, ["deriveBits"]);
+    const key = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: new TextEncoder().encode("ccs-clearkey-v1"), iterations: 100000 }, material, 128));
+    const mediaKeys = await access.createMediaKeys();
+    await video.setMediaKeys(mediaKeys);
+    const session = mediaKeys.createSession("temporary");
+    session.addEventListener("message", async () => {
+      const license = JSON.stringify({ keys: [{ kty: "oct", kid: info.kid, k: b64url(key) }], type: "temporary" });
+      await session.update(new TextEncoder().encode(license));
+      const statuses = []; session.keyStatuses.forEach((status) => statuses.push(status));
+      set("r-key", statuses.length ? statuses.join(", ") : "no key status reported");
+    });
+    video.addEventListener("encrypted", (e) => { set("r-ks", $("r-ks").textContent + "; encrypted event: " + e.initDataType); });
+    await session.generateRequest("keyids", new TextEncoder().encode(JSON.stringify({ kids: [info.kid] })));
+    if (!("MediaSource" in window) || !MediaSource.isTypeSupported(contentType)) { set("r-video", "MediaSource does not support " + contentType); return; }
+    const ms = new MediaSource();
+    video.src = URL.createObjectURL(ms);
+    ms.addEventListener("sourceopen", async () => {
+      const sb = ms.addSourceBuffer(contentType);
+      const bytes = await (await fetch("video.mp4", { cache: "force-cache" })).arrayBuffer();
+      sb.addEventListener("updateend", () => { if (ms.readyState === "open") ms.endOfStream(); }, { once: true });
+      sb.appendBuffer(bytes);
+    });
+    try { await video.play(); } catch (e) { set("r-video", "play refused: " + e.message); return; }
+    setTimeout(() => set("r-video", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s. Take a screenshot now.`), 1500);
+  });
+})();
+</script>
+</body>
+</html>

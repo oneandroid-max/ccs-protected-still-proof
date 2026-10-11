@@ -1,0 +1,8 @@
+{
+  "kid": "EAYWYu-ojI1DyEmymoexLg",
+  "codecs": "avc1.4d001f",
+  "width": 720,
+  "height": 960,
+  "bytes": 126944,
+  "keyDerivation": "PBKDF2-SHA256(secret:pin, salt 'ccs-clearkey-v1', 100000) → 16 bytes"
+}

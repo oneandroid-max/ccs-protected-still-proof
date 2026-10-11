@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Web research bench</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 920px; margin: 0 auto; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  h1 { font-size: 1.2rem; } p { max-width: 65ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  input { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 6px 10px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #d9d4c8; background: #fff; cursor: pointer; }
+  #stage { background: #000; border-radius: 10px; min-height: 160px; display: grid; place-items: center; color: #fff; }
+  canvas, video { display: block; max-width: 100%; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  dt { color: #6b665c; } dd { margin: 0; }
+</style>
+</head>
+<body>
+<h1>Web research bench: candidates 2, 3 and 5</h1>
+<p>The same encrypted photo as the traceable page, drawn three other ways. Each is a candidate for a black capture on a stock browser without a vendor path; each is expected to fail, and the screenshot you take is the measurement. The key comes from the link (<code>#k=</code>) and the PIN; nothing is sent anywhere.</p>
+<div class="row">
+  <input id="pin" type="text" inputmode="numeric" maxlength="6" placeholder="PIN" aria-label="PIN">
+  <button id="b-fullscreen">2: fullscreen + pointer lock</button>
+  <button id="b-pip">3: picture-in-picture video</button>
+  <button id="b-webgl">5: WebGL canvas, no preserved buffer</button>
+</div>
+<div id="stage"><span id="msg">Type the PIN, then pick a candidate.</span></div>
+<dl>
+  <dt>Candidate</dt><dd id="r-mode">none</dd>
+  <dt>PIN</dt><dd id="r-pin">waiting</dd>
+  <dt>Measured</dt><dd id="r-fact">—</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+<p><a href="../">Back to the list of candidates</a></p>
+<script type="module" src="bench.js"></script>
+</body>
+</html>
