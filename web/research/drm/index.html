@@ -126,9 +126,13 @@
       } catch (e) { set("r-lic", "failed: " + e.message, "bad"); }
     });
     session.addEventListener("keystatuseschange", () => { const s = []; session.keyStatuses.forEach((v) => s.push(v)); set("r-key", s.join(", ") || "none"); });
-    try { await session.generateRequest("cenc", b64(asset.pssh || "")); } catch (e) { /* no page pssh: packager put it in the file; the encrypted event drives generateRequest */ }
     const contentType = `video/mp4; codecs="${asset.codecs || info.codecs}"`;
-    video.addEventListener("encrypted", async (e) => { try { if (session && !session.sessionId) await session.generateRequest(e.initDataType, e.initData); } catch (err) { log("generateRequest(encrypted): " + err.message); } }, { once: false });
+    // Ask for the licence once, from the page's PSSH if we have it (the path that returned HTTP 200 + usable keys),
+    // else from the in-stream PSSH the packager embedded (the "encrypted" event carries it).
+    let requested = false;
+    const doRequest = async (type, data) => { if (requested) return; requested = true; try { log(`generateRequest(${type}, ${data.byteLength} bytes)`); await session.generateRequest(type, data); } catch (err) { set("r-lic", "generateRequest failed: " + err.message, "bad"); } };
+    if (asset.pssh) { await doRequest("cenc", b64(asset.pssh)); }
+    else { video.addEventListener("encrypted", (e) => doRequest(e.initDataType, e.initData)); }
     if (!("MediaSource" in window) || !MediaSource.isTypeSupported(contentType)) { set("r-video", "MediaSource does not support " + contentType, "bad"); return; }
     const ms = new MediaSource();
     video.src = URL.createObjectURL(ms);

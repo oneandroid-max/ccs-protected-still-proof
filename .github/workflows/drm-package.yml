@@ -101,16 +101,25 @@ jobs:
           const profileHex = ({ Baseline:"42", Main:"4d", High:"64" })[st.profile] || "4d";
           const codecs = `avc1.${profileHex}00${Number(st.level).toString(16).padStart(2,"0")}`;
           const size = (f) => fs.statSync(f).size;
+          // Extract each file's PSSH box (full box, base64) so the page can request the licence from it.
+          const psshOf = (f, systemId) => { const data = fs.readFileSync(f); let found = null;
+            const walk = (off, end) => { while (off + 8 <= end) { let s = data.readUInt32BE(off); const t = data.toString("latin1", off+4, off+8);
+              if (s===1) s = Number(data.readBigUInt64BE(off+8)); if (s===0) s = end-off;
+              if (t==="pssh" && data.toString("hex", off+12, off+28) === systemId) found = data.toString("base64", off, off+s);
+              if (["moov","trak","mdia","minf","stbl","moof","traf"].includes(t)) walk(off+8, off+s); off += s; } };
+            walk(0, data.length); return found; };
           const info = {
             content: "a labeled test pattern, not the portrait; the portrait goes through the same path once the mechanism is proven",
             codecs, width: st.width, height: st.height,
             widevine: { file: "video-widevine.mp4", bytes: size("web/research/drm/video-widevine.mp4"),
               contentId: process.env.WV_CONTENT_ID || "ccs-proof-drm-test",
               licenseServer: "https://cwip-shaka-proxy.appspot.com/no_auth",
+              pssh: psshOf("web/research/drm/video-widevine.mp4", "edef8ba979d64acea3c827dcd51d21ed"),
               note: "test-only: Google's public test licence proxy issues this key to anyone presenting the content's PSSH" },
             playready: { file: "video-playready.mp4", bytes: size("web/research/drm/video-playready.mp4"),
               kid: process.env.PR_KID, kidGuid: process.env.PR_KID_GUID,
               licenseServer: "https://test.playready.microsoft.com/service/rightsmanager.asmx",
+              pssh: psshOf("web/research/drm/video-playready.mp4", "9a04f07998404286ab92e65be0885f95"),
               note: "test-only: Microsoft's public test licence server issues this key to anyone asking with the key id" },
             packager: fs.readFileSync("/tmp/packager-version.txt","utf8").trim(),
             builtAt: new Date().toISOString(), run: Number(process.env.RUN_NUMBER),
