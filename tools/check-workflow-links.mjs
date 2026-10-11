@@ -68,7 +68,7 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 if (bad.length) {
   console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site:`);
   for (const b of bad) console.error("  " + b);
-  console.error("Add clip=card, levels=software or levels=clearkey as the FIRST parameter of each link's query.");
+  if (bad.some((b) => /does not ask for the test card/.test(b))) console.error("Add clip=card, levels=software or levels=clearkey as the FIRST parameter of each link's query.");
   process.exit(1);
 }
 console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards`);
