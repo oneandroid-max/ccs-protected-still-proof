@@ -201,6 +201,20 @@ device for it; no outside service is in the chain.
     - **Axinom's FairPlay server, now reachable from here:** it checks the device's request before the token. A good token and a tampered one got the same refusal for a dummy request, so tokens can only be proven with a real Apple device's request (the Apple check page does that).
   - **Next:** the reviewer's fourth pass, on these fixes, before merge.
 
+- 2026-10-11T16:19Z: **the reviewer's fourth pass, on the fixes (`b8e3137`): no blockers; one should-fix, five minor (one was already done in `7aec429`), all acted on.**
+  - **Should-fix: part of a slice could still sit in the clear.** My 1,024-byte limit on clear runs counted a slice's whole clear run without telling the encoder's settings note apart from the slice itself. So up to about 1,000 bytes at the start of a slice's own picture data could have been clear and still passed. **Now the check reads each sample's own bytes, NAL unit by NAL unit, against its records.** A clear run may hold only whole NAL units that are not slices (the settings note, filler, delimiters), then at most 64 bytes of the slice's own head. The protected range must end exactly where its slice ends, and no slice may be wholly in the clear.
+    - The 64 is from measurement. On nine real outputs (a noisy photo, a solid colour, the test pattern at 960×1280 and at the combined view's 1080×1920, four slices, CBR filler, access unit delimiters, heavy B-frame settings, the committed card), a slice's clear head was 11 to 19 bytes. Every protected range ended exactly at its slice's end, and no slice was wholly clear.
+  - **Minor, each fixed:**
+    - **Refused wrongly:** CBR filler (16,639 bytes of filler, no picture) is now accepted, since filler is not a slice. Tiny pictures had no keyframe data to encrypt (a solid 2×2 and 16×16 were refused), so the weekly Apple run would have stayed red every Monday. **Pictures are now drawn at least 64 pixels on their short side**, and a 2×2 passes. *Residue, stated plainly:* an extreme strip such as 2000×3 cannot reach 64 without passing the largest size, so it still gets no Apple version.
+    - **Checks added:**
+      - Apple's pattern (one block in ten) on a protected track is now required, in the track's encryption header.
+      - Samples must lie inside the file's media data, not merely inside the file.
+      - The rule no longer depends on how long the encoder's settings note is. That length changes with the runner (GitHub moves to Ubuntu 26 from October 19).
+  - **Measured here:**
+    - 32 of 32 site tests with the real packager, none skipped; 15 of 15 service tests; the drive 81 of 81.
+    - The real-packager test of legitimate encodes passes all four (CBR filler, access unit delimiters, heavy B-frames, a 2×2 drawn at 64×64), each with 2 of 2 keyframes encrypted.
+    - CI and the breakage run follow this commit.
+
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
 Route 1 means a plain link, nothing installed, the browser's own protected path. Where each format stands, and what gets it there:

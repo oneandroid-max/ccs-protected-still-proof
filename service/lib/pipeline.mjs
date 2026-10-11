@@ -33,10 +33,15 @@ export async function probe(ffprobe, file) {
 const even = (x) => Math.max(2, Math.round(x / 2) * 2);
 
 // The clip's size: the picture as the viewer sees it (rotated upright), longest side at most maxSide.
+// A picture smaller than MIN_SIDE on its short side is drawn larger (up to MIN_SIDE, never past maxSide):
+// a keyframe of a few pixels has too little coded data for Apple's form to encrypt any of it (measured: a
+// solid 16x16 and 2x2 refused, a solid 64x64 passed).
+export const MIN_SIDE = 64;
 export function targetSize({ width, height }, orientation, maxSide = MAX_SIDE) {
   const swap = orientation >= 5;
   const w = swap ? height : width, h = swap ? width : height;
-  const f = Math.min(1, maxSide / Math.max(w, h));
+  let f = Math.min(1, maxSide / Math.max(w, h));
+  if (Math.min(w, h) * f < MIN_SIDE) f = Math.min(MIN_SIDE / Math.min(w, h), maxSide / Math.max(w, h));
   return { width: even(w * f), height: even(h * f) };
 }
 
@@ -83,30 +88,33 @@ export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }, {
 }
 
 // What a FairPlay output must carry before it is published: the playlist's key line with this key
-// address and Apple's key format; in the file the 'cbcs' scheme with this key id and this constant IV (so
-// the licence's IV matches the encryption); and, fragment by fragment, the sample table ('trun': each
-// sample's size and whether it is a keyframe, and where the samples lie) matched record for record with
-// the sample-encryption records ('senc': per sample, each slice's clear and protected byte counts):
-// - every sample recorded, its record adding up to its size (no byte of it outside the record), with a
-//   protected range, and its bytes inside the file;
-// - EVERY SLICE OF EVERY KEYFRAME with at least one encrypted block. Under 'cbcs' each slice is encrypted
-//   on its own, and a protected range shorter than one 16-byte block encrypts nothing: normal for the
-//   near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a solid colour),
-//   never for a keyframe's slice, which a decoder can show on its own;
-// - no slice anywhere leaving more than MAX_CLEAR bytes in the clear before its protected range (the
-//   longest clear run in a real output: 697 to 706 bytes, the encoder's settings note and the headers
-//   before the first slice; between keyframes, 19 bytes or fewer).
+// address and Apple's key format; in the file the 'cbcs' scheme with Apple's pattern (one 16-byte block
+// encrypted in ten) on a protected track, with this key id and this constant IV (so the licence's IV
+// matches the encryption); and, fragment by fragment, the sample table ('trun': each sample's size,
+// whether it is a keyframe, and where its bytes lie, which must be inside the file's media data) matched
+// record for record with the sample-encryption records ('senc': per sample, per slice, clear bytes then
+// protected bytes), each record adding up to its sample's size and read exactly to its box's end. Then
+// each sample's own bytes are read, NAL unit by NAL unit, against its records:
+// - a clear run holds only whole NAL units that are not slices (the encoder's settings note, filler, an
+//   access unit delimiter), then at most SLICE_HEADER_MAX bytes of the slice whose protected range follows
+//   (its length, its NAL header and its slice header: 11 to 19 bytes in every real output measured);
+// - that protected range ends exactly where its slice ends, and no slice is left wholly in the clear;
+// - EVERY SLICE OF EVERY KEYFRAME has at least one encrypted block (16 protected bytes or more). Under
+//   'cbcs' each slice is encrypted on its own and a protected range under one block encrypts nothing:
+//   normal for the near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a
+//   solid colour), never for a keyframe's slice, which a decoder can show on its own.
 export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   const problems = [];
   const keyLine = playlist.split("\n").find((l) => l.startsWith("#EXT-X-KEY:")) || "";
   if (!/METHOD=SAMPLE-AES/.test(keyLine)) problems.push("the playlist's key line is not SAMPLE-AES");
   if (!keyLine.includes(`URI="${keyUri}"`)) problems.push("the playlist does not carry the key address");
   if (!/KEYFORMAT="com\.apple\.streamingkeydelivery"/.test(keyLine)) problems.push("the playlist does not name Apple's key format");
-  let scheme = null, tencKid = null, constIv = null, ivSize = 0;
+  let scheme = null, tencKid = null, constIv = null, ivSize = 0, tenc = null, nalLen = 0;
   const trex = new Map(); // per track: the movie's default sample size and flags
-  const n = { samples: 0, samplesMarked: 0, samplesEncrypted: 0, keyframes: 0, keyframesEncrypted: 0, protectedBytes: 0, mismatched: 0, uncovered: 0, longClear: 0 };
+  const mdats = [], samples = []; // the media data's byte ranges; every sample with its record
+  const n = { samples: 0, samplesMarked: 0, samplesEncrypted: 0, keyframes: 0, keyframesEncrypted: 0, protectedBytes: 0, mismatched: 0, uncovered: 0, outside: 0, offSlice: 0, clearSlices: 0 };
   const NOT_KEYFRAME = 0x10000; // sample_is_non_sync_sample, in a sample's flags
-  const MAX_CLEAR = 1024;
+  const SLICE_HEADER_MAX = 64;
   const header = (off, end) => { let s = data.readUInt32BE(off); if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off; return [s, data.toString("latin1", off + 4, off + 8)]; };
   const cut = (what) => { throw new Error(`a fragment's ${what} is cut short`); };
   const sane = (count) => { if (count > 1e6) throw new Error(`a fragment lists ${count} samples`); return count; };
@@ -131,17 +139,16 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
         const row = 4 * [0x100, 0x200, 0x400, 0x800].filter((b) => f & b).length;
         if (16 + (f & 0x1 ? 4 : 0) + (f & 0x4 ? 4 : 0) + count * row > s) cut("sample table");
         if (f & 0x1) { offset = data.readInt32BE(q); q += 4; } if (f & 0x4) { first = data.readUInt32BE(q); q += 4; }
-        let bytes = 0;
-        for (let i = 0; i < count; i++) {
-          const r = { size: dflt.size, flags: i === 0 && first !== null ? first : dflt.flags };
-          if (f & 0x100) q += 4; if (f & 0x200) { r.size = data.readUInt32BE(q); q += 4; } if (f & 0x400) { r.flags = data.readUInt32BE(q); q += 4; } if (f & 0x800) q += 4;
-          table.push(r); bytes += r.size;
-        }
         // where the samples lie: from the data offset (counted from the fragment's base, which is the 'moof'
         // unless the fragment names one), or straight after the previous run's samples
-        const at = offset !== null ? base + offset : next !== null ? next : base;
-        next = at + bytes;
-        if (at < 0 || next > data.length) cut("media data");
+        let at = offset !== null ? base + offset : next !== null ? next : base;
+        for (let i = 0; i < count; i++) {
+          const r = { size: dflt.size, flags: i === 0 && first !== null ? first : dflt.flags, at };
+          if (f & 0x100) q += 4; if (f & 0x200) { r.size = data.readUInt32BE(q); q += 4; } if (f & 0x400) { r.flags = data.readUInt32BE(q); q += 4; } if (f & 0x800) q += 4;
+          table.push(r); at += r.size;
+        }
+        next = at;
+        if (table.length && (table[0].at < 0 || next > data.length)) cut("media data");
       }
       if (t === "senc") { // full box: version and flags, the sample count, then per sample its IV and, with flag 2, its subsamples
         if (s < 16) cut("encryption record");
@@ -163,19 +170,7 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
     }
     if (p !== end) cut("box"); // the file ends inside the fragment
     if (records.length !== table.length) n.mismatched++;
-    table.forEach((r, i) => {
-      const keyframe = !(r.flags & NOT_KEYFRAME), rec = records[i];
-      n.samples++; if (keyframe) n.keyframes++;
-      if (rec === undefined) return; // no record: neither protected nor encrypted
-      const subs = rec === null ? [[0, r.size]] : rec; // per slice: clear bytes, then protected bytes
-      const clear = subs.reduce((a, x) => a + x[0], 0), prot = subs.reduce((a, x) => a + x[1], 0);
-      if (clear + prot !== r.size) n.uncovered++;
-      if (subs.some((x) => x[0] > MAX_CLEAR)) n.longClear++;
-      n.protectedBytes += prot;
-      if (prot > 0) n.samplesMarked++;
-      if (subs.some((x) => x[1] >= 16)) n.samplesEncrypted++;
-      if (keyframe && subs.length && subs.every((x) => x[1] >= 16)) n.keyframesEncrypted++;
-    });
+    table.forEach((r, i) => samples.push({ r, rec: records[i] }));
   };
   const walk = (off, end, moof = 0) => {
     end = Math.min(end, data.length);
@@ -184,11 +179,14 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
       if (s < 8) return;
       if (t === "schm") scheme = data.toString("latin1", off + 12, off + 16);
       if (t === "tenc") {
+        tenc = { version: data[off + 8], pattern: data[off + 13], isProtected: data[off + 14] };
         tencKid = data.toString("hex", off + 16, off + 32);
         ivSize = data[off + 15];
         if (ivSize === 0) { const len = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + len); }
       }
+      if (t === "avcC" && s >= 13) nalLen = (data[off + 12] & 3) + 1; // H.264's configuration: the size of each NAL unit's length field
       if (t === "trex") { if (s < 32) throw new Error("the movie's sample defaults are cut short"); trex.set(data.readUInt32BE(off + 12), { size: data.readUInt32BE(off + 24), flags: data.readUInt32BE(off + 28) }); }
+      if (t === "mdat") mdats.push([off + (data.readUInt32BE(off) === 1 ? 16 : 8), Math.min(off + s, data.length)]);
       if (t === "traf") fragment(off + 8, off + s, moof);
       if (t === "moof") walk(off + 8, off + s, off);
       if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "mvex"].includes(t)) walk(off + 8, off + s, moof);
@@ -197,20 +195,64 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
       off += s;
     }
   };
-  try { walk(0, data.length); } catch (e) { problems.push(`the file cannot be read: ${e.message}`); }
+  // one sample's slices, read from its own bytes against its records: for each slice whose protected range
+  // follows a clear run, its protected byte count; null when the records do not follow the slices
+  const slicesOf = (r, subs) => {
+    const out = []; let pos = r.at;
+    for (const [c, prot] of subs) {
+      const clearEnd = pos + c, protEnd = clearEnd + prot; let q = pos, slice = false;
+      while (q < clearEnd) {
+        if (q + nalLen + 1 > protEnd) return null;
+        const len = data.readUIntBE(q, nalLen), type = data[q + nalLen] & 0x1f, nalEnd = q + nalLen + len;
+        const isSlice = type >= 1 && type <= 5; // H.264's slice NAL units (5: a keyframe's)
+        if (nalEnd <= clearEnd) { if (isSlice) out.push(0); q = nalEnd; continue; } // a slice wholly in the clear counts as one with nothing encrypted
+        if (!isSlice || clearEnd - q > SLICE_HEADER_MAX || nalEnd !== protEnd) return null;
+        out.push(prot); slice = true; q = protEnd;
+      }
+      if (prot > 0 && !slice) return null; // protected bytes that are no slice's
+      pos = protEnd;
+    }
+    return out;
+  };
+  const inMedia = (a, b) => mdats.some(([x, y]) => a >= x && b <= y);
+  try {
+    walk(0, data.length);
+    for (const { r, rec } of samples) {
+      const keyframe = !(r.flags & NOT_KEYFRAME);
+      n.samples++; if (keyframe) n.keyframes++;
+      const inside = inMedia(r.at, r.at + r.size); if (!inside) n.outside++;
+      if (rec === undefined) continue; // no record: neither protected nor encrypted
+      const subs = rec === null ? [[0, r.size]] : rec; // per slice: clear bytes, then protected bytes
+      const clear = subs.reduce((a, x) => a + x[0], 0), prot = subs.reduce((a, x) => a + x[1], 0);
+      if (clear + prot !== r.size) n.uncovered++;
+      n.protectedBytes += prot;
+      if (prot > 0) n.samplesMarked++;
+      if (subs.some((x) => x[1] >= 16)) n.samplesEncrypted++;
+      if (rec === null) { if (keyframe && r.size >= 16) n.keyframesEncrypted++; continue; } // the whole sample protected
+      if (!inside || clear + prot !== r.size || !nalLen) continue; // its bytes cannot be read against its records (named above)
+      const slices = slicesOf(r, subs);
+      if (slices === null) { n.offSlice++; continue; }
+      if (slices.includes(0)) n.clearSlices++;
+      if (keyframe && slices.length && slices.every((x) => x >= 16)) n.keyframesEncrypted++;
+    }
+  } catch (e) { problems.push(`the file cannot be read: ${e.message}`); }
   if (scheme !== "cbcs") problems.push(`the file's scheme is ${scheme}, not cbcs`);
+  if (!tenc || tenc.version !== 1 || tenc.pattern !== 0x19 || tenc.isProtected !== 1) problems.push("the file's encryption is not Apple's (a protected track, one block encrypted in ten)");
   if (tencKid !== kid) problems.push("the file's key id is not this key id");
   if (constIv !== iv) problems.push("the file's constant IV is not this IV");
+  if (!nalLen) problems.push("the file carries no H.264 configuration ('avcC'), so its slices cannot be read");
   let boxes = { ok: false }; try { boxes = checkBoxes(data); } catch {} // a file cut short is already named above
   if (!boxes.ok) problems.push("the file is missing its sample-encryption boxes");
   if (!n.samples) problems.push("the file carries no samples");
   if (n.mismatched) problems.push(`${n.mismatched} fragment(s) list a different number of encryption records than samples`);
+  if (n.outside) problems.push(`${n.outside} of ${n.samples} samples lie outside the file's media data`);
   if (n.samples && n.samplesMarked !== n.samples) problems.push(`${n.samples - n.samplesMarked} of ${n.samples} samples have no protected bytes`);
   if (n.uncovered) problems.push(`${n.uncovered} of ${n.samples} samples are not covered whole by their encryption records`);
-  if (n.longClear) problems.push(`${n.longClear} of ${n.samples} samples leave more than ${MAX_CLEAR} bytes in the clear in one run`);
+  if (n.offSlice) problems.push(`${n.offSlice} of ${n.samples} samples have encryption records that do not follow their slices (more than ${SLICE_HEADER_MAX} clear bytes of a slice, protected bytes outside a slice, or a protected range not ending with its slice)`);
+  if (n.clearSlices) problems.push(`${n.clearSlices} of ${n.samples} samples carry a slice wholly in the clear`);
   if (n.samples && !n.keyframes) problems.push("no sample is marked as a keyframe");
   if (n.keyframesEncrypted !== n.keyframes) problems.push(`${n.keyframes - n.keyframesEncrypted} of ${n.keyframes} keyframes have a slice with no encrypted block`);
-  const { mismatched, uncovered, longClear, ...counts } = n;
+  const { mismatched, uncovered, outside, offSlice, clearSlices, ...counts } = n;
   return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, ...counts };
 }
 

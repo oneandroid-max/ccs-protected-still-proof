@@ -26,6 +26,12 @@ test("the clip's size: upright, rotated, capped at the longest side, always even
   assert.deepEqual(targetSize({ width: 3000, height: 2000 }, 1), { width: MAX_SIDE, height: 854 });
   assert.deepEqual(targetSize({ width: 3000, height: 2000 }, 8), { width: 854, height: MAX_SIDE });
   assert.deepEqual(targetSize({ width: 333, height: 333 }, 1), { width: 334, height: 334 });
+  // a picture smaller than the minimum on its short side is drawn larger, so its keyframes have something to encrypt
+  assert.deepEqual(targetSize({ width: 2, height: 2 }, 1), { width: 64, height: 64 });
+  assert.deepEqual(targetSize({ width: 16, height: 16 }, 1), { width: 64, height: 64 });
+  assert.deepEqual(targetSize({ width: 100, height: 50 }, 1), { width: 128, height: 64 });
+  assert.deepEqual(targetSize({ width: 50, height: 100 }, 6), { width: 128, height: 64 });
+  assert.deepEqual(targetSize({ width: 2000, height: 3 }, 1), { width: MAX_SIDE, height: 2 }, "never past the largest size, even if the short side stays under the minimum");
 });
 
 test("ffmpeg renders a sideways phone photo upright and caps a large one (real ffmpeg)", async () => {
