@@ -1,0 +1,41 @@
+# Reads, from a GitHub runner (this sandbox cannot reach these hosts), what the Apple check needs to
+# match exactly: Axinom's public FairPlay test playlists (the key line, the segment format), its
+# evaluation FairPlay certificate, and whether its licence server and certificate answer a page on our
+# Pages origin (CORS). Started by hand or through the API; it reads only and changes nothing.
+name: apple probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  look:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: The protected and the clear HLS test playlists
+        run: |
+          for m in https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8 https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8; do
+            echo "=== $m"; curl -sS -m 20 "$m" -o /tmp/master.m3u8 -w 'http %{http_code}, %{size_download} bytes, %{content_type}\n'; head -c 1500 /tmp/master.m3u8; echo
+            v=$(awk '!/^#/ && /m3u8/ {print; exit}' /tmp/master.m3u8); base=${m%/*}
+            [ -n "$v" ] && { echo "--- first media playlist: $v"; curl -sS -m 20 "$base/$v" | head -c 1200; echo; }
+          done
+      - name: The evaluation FairPlay certificates (both published addresses)
+        run: |
+          for c in https://tools.axinom.com/FPScert/fairplay.cer https://vtb.axinom.com/FPScert/fairplay.cer; do
+            echo "=== $c"; curl -sS -m 20 -o /tmp/c.cer -w 'http %{http_code}, %{size_download} bytes\n' "$c" || continue
+            sha256sum /tmp/c.cer | cut -c1-64; openssl x509 -inform der -in /tmp/c.cer -noout -subject -issuer -dates 2>&1 | head -5
+          done
+      - name: CORS for a page on our origin
+        run: |
+          O="https://oneandroid-max.github.io"
+          for u in https://drm-fairplay-licensing.axprod.net/AcquireLicense https://tools.axinom.com/FPScert/fairplay.cer https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8; do
+            echo "=== preflight $u"; curl -sS -m 20 -i -X OPTIONS -H "Origin: $O" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: x-axdrm-message,content-type" "$u" | awk 'NR==1 || tolower($0) ~ /^access-control/'
+            echo "=== GET $u"; curl -sS -m 20 -i -H "Origin: $O" "$u" -o /dev/null -D - | awk 'NR==1 || tolower($0) ~ /^access-control|^content-type/'
+          done
+      - name: The player library we load names FairPlay's key system
+        run: |
+          curl -sSL -m 30 -o /tmp/shaka.js https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js
+          for s in com.apple.fps useNativeHlsForFairPlay serverCertificateUri skd; do printf '%-26s %s\n' "$s" "$(grep -o "$s" /tmp/shaka.js | wc -l)"; done
