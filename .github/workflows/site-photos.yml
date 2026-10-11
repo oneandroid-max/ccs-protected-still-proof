@@ -20,9 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # The key is read from the event file INSIDE the script: a step-level env would be printed in
+      # clear in the step's header before the mask line runs (caught by the independent review).
       - name: Mask the key
-        env: { K: "${{ github.event.client_payload.key }}" }
-        run: echo "::add-mask::$K"
+        run: |
+          K=$(jq -r '.client_payload.key // empty' "$GITHUB_EVENT_PATH")
+          if [ -n "$K" ]; then echo "::add-mask::$K"; fi
       - uses: actions/checkout@v4
       - name: ffmpeg and shaka-packager
         run: |
