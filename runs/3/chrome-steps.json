@@ -1,0 +1,78 @@
+{
+ "browser": "chrome",
+ "at": "2026-10-11T07:48:35.346Z",
+ "results": [
+  {
+   "ok": true,
+   "what": "signed in; the gallery shows 8 picture card(s), 8 ready (slots: 8 of 10 slots used)"
+  },
+  {
+   "ok": true,
+   "what": "the gallery offers the combined view of all 8 (ready pictures: 8)"
+  },
+  {
+   "ok": true,
+   "what": "the combined view plays: 1080x1440, playing, time 0.10 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element: {\"paused\":false,\"width\":1080,\"height\":1440,\"from\":0.54,\"to\":0,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "its title: All your pictures, protected (8)"
+  },
+  {
+   "ok": true,
+   "what": "its list holds 8 picture(s)"
+  },
+  {
+   "ok": true,
+   "what": "still playing three seconds later: 1080x1440, playing, time 1.04 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen: stage, 1080x1440, playing, time 1.04 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen left again"
+  },
+  {
+   "ok": true,
+   "what": "tapping picture 2 opened that picture on its own"
+  },
+  {
+   "ok": true,
+   "what": "the single view plays: 961x1150, playing, time 0.00 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element: {\"paused\":false,\"width\":961,\"height\":1150,\"from\":0.2,\"to\":1.7,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "after Back the combined view is a freshly loaded page (not the one held in memory)"
+  },
+  {
+   "ok": true,
+   "what": "back returns to the combined view (from memory, then reload)"
+  },
+  {
+   "ok": true,
+   "what": "and it plays again: 1080x1440, playing, time 0.00 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element after Back: {\"paused\":false,\"width\":1080,\"height\":1440,\"from\":0.82,\"to\":0.17,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "the footer link returns to the gallery, still signed in"
+  },
+  {
+   "ok": true,
+   "what": "no page errors"
+  }
+ ]
+}
