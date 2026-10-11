@@ -1,0 +1,50 @@
+{
+ "browser": "chrome",
+ "at": "2026-10-11T07:43:55.067Z",
+ "results": [
+  {
+   "ok": true,
+   "what": "signed in; the gallery shows 8 picture card(s), 8 ready (slots: 8 of 10 slots used)"
+  },
+  {
+   "ok": true,
+   "what": "the gallery offers the combined view of all 8 (ready pictures: 8)"
+  },
+  {
+   "ok": true,
+   "what": "the combined view plays: 1080x1440, playing, time 0.10 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its title: All your pictures, protected (8)"
+  },
+  {
+   "ok": true,
+   "what": "its list holds 8 picture(s)"
+  },
+  {
+   "ok": true,
+   "what": "still playing three seconds later: 1080x1440, playing, time 1.05 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen: stage, 1080x1440, playing, time 1.05 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen left again"
+  },
+  {
+   "ok": true,
+   "what": "tapping picture 2 opened that picture on its own"
+  },
+  {
+   "ok": true,
+   "what": "the single view plays: 961x1150, playing, time 0.00 s — take a screenshot now"
+  },
+  {
+   "ok": false,
+   "what": "the walk stopped: page.waitForURL: Timeout 15000ms exceeded."
+  }
+ ]
+}
