@@ -1,0 +1,65 @@
+# Opens the route-1 page the way a person would — tap the link, look at the screen — in Safari on an
+# iPhone simulator and in Safari on the Mac runner, and saves a screenshot of each to
+# web/research/drm/results/. It first waits until the live page carries the expected version, so it
+# never photographs an old copy.
+name: safari look
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/safari-look.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  EXPECT_VERSION: "03:05 UTC"
+
+jobs:
+  look:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for the live page to carry the expected version
+        run: |
+          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}"
+          for i in $(seq 1 45); do
+            if curl -sS -m 15 "$U" | grep -q "$EXPECT_VERSION"; then echo "live page has version $EXPECT_VERSION"; exit 0; fi
+            sleep 8
+          done
+          echo "the live page never showed $EXPECT_VERSION"; exit 1
+
+      - name: iPhone simulator, Safari — open the link and screenshot
+        run: |
+          mkdir -p web/research/drm/results
+          UDID=$(xcrun simctl list devices available -j | python3 apple/pick-simulator.py)
+          echo "simulator: $UDID"; test -n "$UDID"
+          xcrun simctl list devices available | awk -v u="$UDID" 'index($0,u){print}'
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b > /dev/null
+          xcrun simctl openurl "$UDID" "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}#readout"
+          sleep 40
+          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari.png
+          sleep 20
+          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari-later.png
+          ls -l web/research/drm/results/
+
+      - name: Mac, Safari — open the link and screenshot
+        run: |
+          open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}m#readout"
+          sleep 40
+          screencapture -x web/research/drm/results/mac-safari.png
+          ls -l web/research/drm/results/
+
+      - name: Save the screenshots
+        run: |
+          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/safari-look.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/research/drm/results/
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -m "research(drm): Safari look — iPhone simulator and Mac screenshots (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
