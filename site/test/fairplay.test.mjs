@@ -176,7 +176,9 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910, 710, 500], flags: [0, NOT_KEY, 0] }), ids), /different number of encryption records/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910, 710, 500], flags: [0, NOT_KEY, 0] }), ids), /1 of 3 samples have no protected bytes/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910], flags: [0] }), ids), /different number of encryption records/],
-    // a file or a record cut short is named, never read past: the file ending inside a box, or inside a box's header
+    // a file or a record cut short is named, never read past: the file ending inside the last box's body, inside
+    // an earlier box, or inside a box's header
+    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 4); })(), ids), /cannot be read: a fragment's box is cut short/],
     [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 30); })(), ids), /cannot be read: a fragment's box is cut short/],
     [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 33); })(), ids), /cannot be read: a fragment's box is cut short/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sencCount: 3 }), ids), /cannot be read: a fragment's encryption record is cut short/],
