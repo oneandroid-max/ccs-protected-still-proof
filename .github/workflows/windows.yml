@@ -43,7 +43,8 @@ jobs:
           S=$(sed -n 's/^secret=//p' tests/vectors/inputs.txt); P=$(sed -n 's/^pin=//p' tests/vectors/inputs.txt); H=$(sed -n 's/^hour=//p' tests/vectors/inputs.txt)
           ./windows/coretest.exe sha
           ./windows/crosscheck.exe tests/vectors/photo-test.enc "$S" "$P" "$H" --canonical | tr -d '\r' | tee /tmp/c.txt
-          diff /tmp/c.txt tests/vectors/expected.txt && echo "C port matches the vector"
+          tr -d '\r' < tests/vectors/expected.txt > /tmp/expected.txt     # a Windows checkout may carry CRLF
+          diff /tmp/c.txt /tmp/expected.txt && echo "C port matches the vector"
 
       - name: Probe this runner (gate run without the affinity, then with it)
         shell: pwsh

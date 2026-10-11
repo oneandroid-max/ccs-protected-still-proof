@@ -38,7 +38,7 @@ jobs:
 
       - name: Mac probe on this runner (gate run, then the no-sharing run)
         run: |
-          swiftc -O -framework AppKit mac/Probe.swift -o /tmp/macprobe
+          swiftc -O -framework AppKit -framework AVFoundation mac/Probe.swift -o /tmp/macprobe
           /tmp/macprobe readOnly --out=/tmp/gate.json || true
           /tmp/macprobe none --out=/tmp/none.json || true
           echo "== gate (readOnly):"; cat /tmp/gate.json 2>/dev/null || echo "not written"; echo

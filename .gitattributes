@@ -1,0 +1,6 @@
+# Windows runners check out with CRLF by default; the test-vector line is diffed byte for byte.
+tests/vectors/expected.txt text eol=lf
+tests/vectors/inputs.txt text eol=lf
+*.enc binary
+*.apk binary
+*.keystore binary

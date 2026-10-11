@@ -54,7 +54,7 @@ final class ViewerApp: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     var macMajor: Int { ProcessInfo.processInfo.operatingSystemVersion.majorVersion }
-    var sharingReadBack: String { switch window.sharingType { case .none: return "none"; case .readOnly: return "readOnly"; case .readWrite: return "readWrite"; @unknown default: return "unknown" } }
+    var sharingReadBack: String { switch window.sharingType { case .none: return "none"; case .readOnly: return "readOnly"; default: return "other" } }
     var refusalHolds: Bool { sharingReadBack == "none" && (macMajor < 15 || Self.POLICY_B_MEASURED_SCREENSHOT_EXCLUDED) }
 
     @objc func showPhoto() {

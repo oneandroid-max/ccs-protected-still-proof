@@ -46,7 +46,7 @@ final class ViewerViewController: UIViewController {
         lede.text = "The photo is stored only encrypted inside this app. The key comes from the link and the PIN. The content is drawn inside the system's own secure text layer, which iOS has left out of screenshots and recordings; Apple does not promise it. The full photo is drawn only on iOS versions measured black on a real phone; elsewhere a test rectangle is shown instead. Every line below is measured on this phone."
         keyField.placeholder = "Link key (the part after #k= in the link)"; keyField.borderStyle = .roundedRect; keyField.autocapitalizationType = .none; keyField.autocorrectionType = .no; keyField.text = keyFromLink
         pinField.placeholder = "PIN (6 digits)"; pinField.borderStyle = .roundedRect; pinField.keyboardType = .numberPad
-        showButton.setTitle("Show", for: .normal); showButton.addTarget(self, action: #selector(show), for: .touchUpInside)
+        showButton.setTitle("Show", for: .normal); showButton.addTarget(self, action: #selector(showPhoto), for: .touchUpInside)
         statusLabel.numberOfLines = 0; statusLabel.text = "Type the PIN, then Show."
         // The secure layer: the content lives inside the secure text field's canvas view.
         secureField.isSecureTextEntry = true; secureField.isUserInteractionEnabled = false; secureField.backgroundColor = .black
@@ -89,7 +89,7 @@ final class ViewerViewController: UIViewController {
 
     private static func readFile() -> Data? { Bundle.main.url(forResource: "photo", withExtension: "enc").flatMap { try? Data(contentsOf: $0) } }
 
-    @objc private func show() {
+    @objc private func showPhoto() {
         guard let secret = keyField.text?.trimmingCharacters(in: .whitespaces), secret.count >= 8, let pin = pinField.text, pin.count == 6, pin.allSatisfy(\.isNumber) else { statusLabel.text = "Enter the link key and the 6-digit PIN."; return }
         // Fail closed: the secure canvas must exist, the screen must not be captured, and this iOS major must be measured black.
         let major = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
