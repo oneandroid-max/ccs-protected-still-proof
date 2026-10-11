@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Route 1: the browser's protected video path</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 920px; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  h1 { font-size: 1.2rem; } h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665c; margin: 18px 0 6px; } p { max-width: 65ch; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #d9d4c8; background: #fff; cursor: pointer; }
+  button.primary { background: #1f4e8c; color: #fff; border-color: #1f4e8c; font-weight: 600; }
+  .stage { background: #000; border-radius: 10px; min-height: 200px; display: grid; place-items: center; color: #fff; text-align: center; }
+  video { display: block; max-width: 100%; width: 100%; background: #000; border-radius: 10px; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  dt { color: #6b665c; } dd { margin: 0; word-break: break-word; }
+  .ok { color: #1d6b3a; } .bad { color: #a83a2b; }
+  pre { font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d9d4c8; border-radius: 8px; padding: 10px; }
+</style>
+</head>
+<body>
+<h1>Route 1: the photo through the browser's protected video path</h1>
+<p>No install. The photo is a two-second video encrypted with Common Encryption, and the browser's own DRM (Widevine in Chrome, PlayReady in Edge) decrypts it inside the device's protected path. Where the device grants <em>hardware</em> protection, the phone or PC withholds the frame from every capture; where it grants only software decryption, the capture shows the photo. This page prints what the device grants and the capture you take is the measurement. The keys here are the vendors' public test keys, so they protect nothing; the real build binds every licence to the viewer's session on CCS's own licence service.</p>
+
+<div class="row">
+  <button id="auto" class="primary">Play (this browser's DRM)</button>
+  <button id="wv">Widevine</button>
+  <button id="pr">PlayReady</button>
+</div>
+<div class="stage" id="stage"><video id="v" playsinline muted loop></video></div>
+
+<h2>What this device is doing</h2>
+<dl>
+  <dt>Key system</dt><dd id="r-ks">not asked yet</dd>
+  <dt>Granted</dt><dd id="r-granted">—</dd>
+  <dt>Expected capture</dt><dd id="r-expect">—</dd>
+  <dt>Licence</dt><dd id="r-lic">—</dd>
+  <dt>Key status</dt><dd id="r-key">—</dd>
+  <dt>Video</dt><dd id="r-video">—</dd>
+  <dt>Platform</dt><dd id="r-platform">—</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+<h2>Attempts, in order</h2>
+<pre id="log"></pre>
+<p><a href="../">Back to the list of candidates</a> · <a href="../../../widevine/">the first Widevine proof (2026-10-09)</a></p>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
+  const log = (t) => { $("log").textContent += t + "\n"; };
+  set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+  set("r-platform", navigator.userAgent.replace(/Mozilla\/5\.0 \((.*?)\).*?(Chrome\/[\d.]+|Firefox\/[\d.]+|Safari\/[\d.]+|Edg\/[\d.]+)?.*$/, "$1 $2"));
+  const info = await (await fetch("info.json")).json();
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  const video = $("v");
+
+  // Each entry is one requestMediaKeySystemAccess call, so the first that succeeds tells the level granted.
+  const widevineAttempts = ["HW_SECURE_ALL", "HW_SECURE_DECODE", "HW_SECURE_CRYPTO", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"].map((r) => ({ keySystem: "com.widevine.alpha", robustness: r, hardware: r.startsWith("HW_") }));
+  const playreadyAttempts = [
+    { keySystem: "com.microsoft.playready.recommendation.3000", robustness: "", hardware: true },
+    { keySystem: "com.microsoft.playready.recommendation", robustness: "3000", hardware: true },
+    { keySystem: "com.microsoft.playready.recommendation", robustness: "2000", hardware: false },
+    { keySystem: "com.microsoft.playready.recommendation", robustness: "", hardware: false },
+    { keySystem: "com.microsoft.playready", robustness: "", hardware: false },
+  ];
+
+  async function request(attempts, asset) {
+    const contentType = `video/mp4; codecs="${asset.codecs}"`;
+    for (const a of attempts) {
+      const config = { initDataTypes: ["cenc"], videoCapabilities: [{ contentType, robustness: a.robustness }], persistentState: "optional", distinctiveIdentifier: "optional", sessionTypes: ["temporary"] };
+      try {
+        const access = await navigator.requestMediaKeySystemAccess(a.keySystem, [config]);
+        const granted = access.getConfiguration();
+        const robustness = (granted.videoCapabilities && granted.videoCapabilities[0] && granted.videoCapabilities[0].robustness) || "";
+        log(`${a.keySystem} robustness "${a.robustness}": GRANTED (read back "${robustness}")`);
+        return { access, attempt: a, robustness };
+      } catch (e) { log(`${a.keySystem} robustness "${a.robustness}": refused (${e.name}: ${e.message})`); }
+    }
+    return null;
+  }
+
+  // PlayReady: Edge may wrap the challenge in <PlayReadyKeyMessage> (UTF-16) with its own HTTP headers; unwrap if so.
+  function playreadyBody(message) {
+    const u16 = new TextDecoder("utf-16le").decode(message), u8 = new TextDecoder("utf-8").decode(message);
+    const xml = u16.indexOf("PlayReadyKeyMessage") >= 0 ? u16 : (u8.indexOf("PlayReadyKeyMessage") >= 0 ? u8 : null);
+    if (!xml) return { body: message, headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "\"http://schemas.microsoft.com/DRM/2007/03/protocols/AcquireLicense\"" } };
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    const headers = {};
+    for (const h of doc.getElementsByTagName("HttpHeader")) headers[h.getElementsByTagName("name")[0].textContent] = h.getElementsByTagName("value")[0].textContent;
+    const challenge = doc.getElementsByTagName("Challenge")[0];
+    const body = challenge.getAttribute("encoding") === "base64encoded" ? b64(challenge.textContent) : new TextEncoder().encode(challenge.textContent);
+    return { body, headers };
+  }
+
+  async function play(which) {
+    $("log").textContent = "";
+    const asset = which === "playready" ? info.playready : info.widevine;
+    if (!asset) { set("r-ks", "the Widevine asset is not built yet (the key workflow has not run)", "bad"); return; }
+    const got = await request(which === "playready" ? playreadyAttempts : widevineAttempts, asset);
+    if (!got) { set("r-ks", `${which}: no configuration granted (this browser has no ${which === "playready" ? "PlayReady" : "Widevine"}, or not for H.264)`, "bad"); set("r-expect", "nothing plays, nothing to capture"); return; }
+    set("r-ks", got.attempt.keySystem);
+    set("r-granted", `robustness "${got.robustness || got.attempt.robustness || "(none asked)"}"`, got.attempt.hardware ? "ok" : "bad");
+    set("r-expect", got.attempt.hardware ? "hardware protection granted: a screenshot or recording of the photo area should be black. Take one." : "software decryption only: the capture will show the photo. That is this device's answer, not a bug of the page.", got.attempt.hardware ? "ok" : "bad");
+    const mediaKeys = await got.access.createMediaKeys();
+    await video.setMediaKeys(mediaKeys);
+    const session = mediaKeys.createSession("temporary");
+    session.addEventListener("message", async (ev) => {
+      try {
+        let res;
+        if (which === "playready") {
+          const urls = [asset.licenseServer + `?cfg=(kid:${asset.kidGuid},sl:3000)`, asset.licenseServer + `?cfg=(kid:${asset.kidGuid},sl:2000)`, asset.licenseServer + `?cfg=(kid:${asset.kidGuid})`];
+          const { body, headers } = playreadyBody(ev.message);
+          for (const url of urls) {
+            res = await fetch(url, { method: "POST", headers, body });
+            log(`licence ${url.slice(url.indexOf("cfg="))}: HTTP ${res.status}`);
+            if (res.ok) break;
+          }
+        } else {
+          res = await fetch(asset.licenseServer, { method: "POST", body: ev.message });
+          log(`licence ${asset.licenseServer}: HTTP ${res.status}`);
+        }
+        const lic = await res.arrayBuffer();
+        set("r-lic", `HTTP ${res.status}, ${lic.byteLength} bytes`, res.ok ? "ok" : "bad");
+        if (!res.ok) { set("r-key", new TextDecoder().decode(lic).slice(0, 300)); return; }
+        await session.update(lic);
+        const statuses = []; session.keyStatuses.forEach((s) => statuses.push(s));
+        set("r-key", statuses.length ? statuses.join(", ") : "no key status reported", statuses.indexOf("usable") >= 0 ? "ok" : "bad");
+      } catch (e) { set("r-lic", "failed: " + e.message, "bad"); }
+    });
+    session.addEventListener("keystatuseschange", () => { const statuses = []; session.keyStatuses.forEach((s) => statuses.push(s)); set("r-key", statuses.join(", ") || "none"); });
+    try { await session.generateRequest("cenc", b64(asset.pssh)); } catch (e) { set("r-lic", "generateRequest failed: " + e.message, "bad"); return; }
+    const contentType = `video/mp4; codecs="${asset.codecs}"`;
+    if (!("MediaSource" in window) || !MediaSource.isTypeSupported(contentType)) { set("r-video", "MediaSource does not support " + contentType, "bad"); return; }
+    const ms = new MediaSource();
+    video.src = URL.createObjectURL(ms);
+    ms.addEventListener("sourceopen", async () => {
+      const sb = ms.addSourceBuffer(contentType);
+      const bytes = await (await fetch(asset.file, { cache: "force-cache" })).arrayBuffer();
+      sb.addEventListener("updateend", () => { if (ms.readyState === "open") ms.endOfStream(); }, { once: true });
+      sb.appendBuffer(bytes);
+    });
+    video.addEventListener("error", () => set("r-video", "video error " + (video.error && video.error.code) + ": " + (video.error && video.error.message), "bad"));
+    try { await video.play(); } catch (e) { set("r-video", "play refused: " + e.message, "bad"); }
+    setTimeout(() => set("r-video", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : ". Take a screenshot now."}`, video.paused ? "bad" : "ok"), 2500);
+  }
+
+  const isEdge = /Edg\//.test(navigator.userAgent);
+  $("auto").addEventListener("click", () => play(isEdge ? "playready" : "widevine"));
+  $("wv").addEventListener("click", () => play("widevine"));
+  $("pr").addEventListener("click", () => play("playready"));
+})();
+</script>
+</body>
+</html>

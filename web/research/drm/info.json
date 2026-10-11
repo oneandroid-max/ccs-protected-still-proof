@@ -1,0 +1,28 @@
+{
+  "playready": {
+    "file": "video-playready.mp4",
+    "codecs": "avc1.4d001f",
+    "width": 720,
+    "height": 960,
+    "bytes": 126944,
+    "kid": "d1924bd2ddf79a23248af62094440471",
+    "kidGuid": "D1924BD2-DDF7-9A23-248A-F62094440471",
+    "pssh": "AAADNHBzc2gAAAAAmgTweZhAQoarkuZb4IhflQAAAxQUAwAAAQABAAoDPABXAFIATQBIAEUAQQBEAEUAUgAgAHgAbQBsAG4AcwA9ACIAaAB0AHQAcAA6AC8ALwBzAGMAaABlAG0AYQBzAC4AbQBpAGMAcgBvAHMAbwBmAHQALgBjAG8AbQAvAEQAUgBNAC8AMgAwADAANwAvADAAMwAvAFAAbABhAHkAUgBlAGEAZAB5AEgAZQBhAGQAZQByACIAIAB2AGUAcgBzAGkAbwBuAD0AIgA0AC4AMAAuADAALgAwACIAPgA8AEQAQQBUAEEAPgA8AFAAUgBPAFQARQBDAFQASQBOAEYATwA+ADwASwBFAFkATABFAE4APgAxADYAPAAvAEsARQBZAEwARQBOAD4APABBAEwARwBJAEQAPgBBAEUAUwBDAFQAUgA8AC8AQQBMAEcASQBEAD4APAAvAFAAUgBPAFQARQBDAFQASQBOAEYATwA+ADwASwBJAEQAPgAwAGsAdQBTADAAZgBmAGQASQA1AG8AawBpAHYAWQBnAGwARQBRAEUAYwBRAD0APQA8AC8ASwBJAEQAPgA8AEMASABFAEMASwBTAFUATQA+AEkARgBrAGgAVwBrAHkAUgA0ACsAcwA9ADwALwBDAEgARQBDAEsAUwBVAE0APgA8AEwAQQBfAFUAUgBMAD4AaAB0AHQAcABzADoALwAvAHQAZQBzAHQALgBwAGwAYQB5AHIAZQBhAGQAeQAuAG0AaQBjAHIAbwBzAG8AZgB0AC4AYwBvAG0ALwBzAGUAcgB2AGkAYwBlAC8AcgBpAGcAaAB0AHMAbQBhAG4AYQBnAGUAcgAuAGEAcwBtAHgAPwBjAGYAZwA9ACgAawBpAGQAOgBEADEAOQAyADQAQgBEADIALQBEAEQARgA3AC0AOQBBADIAMwAtADIANAA4AEEALQBGADYAMgAwADkANAA0ADQAMAA0ADcAMQAsAHMAbAA6ADIAMAAwADAAKQA8AC8ATABBAF8AVQBSAEwAPgA8AC8ARABBAFQAQQA+ADwALwBXAFIATQBIAEUAQQBEAEUAUgA+AA==",
+    "licenseServer": "https://test.playready.microsoft.com/service/rightsmanager.asmx",
+    "keyDerivation": "Microsoft's published test key seed + key id (SHA-256 ×3, XOR), the test server's own rule",
+    "note": "test-only: Microsoft's public test licence server issues this key to anyone who asks with the key id"
+  },
+  "widevine": {
+    "file": "video-widevine.mp4",
+    "codecs": "avc1.4d001f",
+    "width": 720,
+    "height": 960,
+    "bytes": 126944,
+    "contentId": "ccs-proof-drm-1",
+    "kid": "cfef68e5dced55479a0d85f2587b6d22",
+    "pssh": "AAAAN3Bzc2gAAAAA7e+LqXnWSs6jyCfc1R0h7QAAABciD2Njcy1wcm9vZi1kcm0tMUjj3JWbBg==",
+    "licenseServer": "https://cwip-shaka-proxy.appspot.com/no_auth",
+    "note": "test-only: Google's public test licence proxy issues this key to anyone who presents the PSSH"
+  },
+  "builtAt": "2026-10-11T01:41:13.215Z"
+}
