@@ -78,6 +78,7 @@ jobs:
       - name: Package for PlayReady (the key the public test server derives for this key id)
         if: env.SKIP != '1'
         run: |
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1 # checked again where it runs
           LA="https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${PR_KID_GUID},sl:2000)"
           /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4 \
             --enable_raw_key_encryption --keys "label=:key_id=${PR_KID}:key=${PR_KEY}" \

@@ -146,7 +146,8 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 // or the card (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the service) first checks the file it is
 // about to run against the pinned build's SHA-256 (service/lib/packager-pin.mjs, the same value as PACKAGER_SHA256
 // below, a test keeps them equal) and refuses any other, however it got there. The two jobs that run it from a shell
-// (drm-package.yml, drm-card.yml) download it, check it and run it in one step. This rule only catches the obvious
+// (drm-package.yml, drm-card.yml) check it on the line after the download, and again first in any later step that
+// runs it. This rule only catches the obvious
 // slips: a workflow, image or script that brings in a packager some other way. It reads every file in the repository
 // but what git ignores (where git cannot say, nothing is left out) of these kinds: YAML anywhere (workflows, actions,
 // compose files), Dockerfiles and Containerfiles, Makefiles, package.json, and shell, PowerShell and batch scripts.

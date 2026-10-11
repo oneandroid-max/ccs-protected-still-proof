@@ -1320,7 +1320,7 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   const wf = join(REPO, ".github", "workflows"); let lines = 0;
   for (const f of [...(await fs.readdir(wf)).map((x) => join(wf, x)), join(REPO, "service", "Dockerfile")])
     for (const m of (await fs.readFile(f, "utf8")).matchAll(/echo "([0-9a-f]{64})  [^"]*packager" \| sha256sum -c -/g)) { assert.equal(m[1], PACKAGER_SHA256, f); lines++; }
-  assert.equal(lines, 9, "every download's check line names the same build");
+  assert.equal(lines, 10, "every check line names the same build (9 after a download, 1 where drm-package.yml runs it again)");
   const wrong = join(tmp, "not-the-packager"); await fs.writeFile(wrong, "#!/bin/sh\necho 'packager version v3.9.3'\n"); await fs.chmod(wrong, 0o755);
   const REFUSED = /is not the pinned shaka-packager v3\.9\.3 \(sha256 [0-9a-f]{16}…, pinned 7a3cf35ad146fd78…\): refused/;
   await assert.rejects(checkPackager(wrong), REFUSED);

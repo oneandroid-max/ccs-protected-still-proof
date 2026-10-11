@@ -178,7 +178,7 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      TOOL_IMAGE: google/shaka-packager:latest")], NAMED],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "ARG BASE=google/shaka-packager:latest\nFROM $1")], NAMED],
     [[ST, (t) => t.replace(AT, `      - run: |\n          docker build -t tools - <<'EOF'\n          FROM google/shaka-packager:latest\n          EOF\n${AT}`)], NAMED],
-    [[ST, step(`curl -sSL -o /usr/local/bin/PACKAGER ${MIRROR}`)], NAMED],
+    [[ST, step("curl -sSL -o /usr/local/bin/PACKAGER https://mirror.example.com/bin/x64")], NAMED], // the name only in capitals, nowhere else on the line
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
     [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
     // a curl that is not only the pinned download: another address beside it, another option, an output built by a command

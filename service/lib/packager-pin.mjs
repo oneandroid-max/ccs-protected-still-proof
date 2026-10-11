@@ -3,7 +3,7 @@
 // on a picture or the card asks checkPackager first (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the
 // service's pipeline), so whatever put the file there (a download, an image, a cache, a copy), a file that is not this
 // build is refused before it touches anything. The jobs that call the packager from a shell instead (drm-package.yml,
-// drm-card.yml) download it and check this same SHA-256 on the very next line of the same step.
+// drm-card.yml) check this same SHA-256 on the line after the download, and again first in any later step that runs it.
 import { promises as fs, constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
