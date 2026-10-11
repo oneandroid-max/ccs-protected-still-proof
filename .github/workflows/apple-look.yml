@@ -14,7 +14,7 @@ permissions:
 
 env:
   EXPECT_VERSION: "Apple check (Axinom public FairPlay test stream + clear control)"
-  PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/"
+  APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/"
 
 jobs:
   mac-safari:
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Wait for the live page version
         run: |
-          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live"; exit 0; }; sleep 8; done; exit 1
+          for i in $(seq 1 45); do curl -sS -m 15 "$APPLE_PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live"; exit 0; }; sleep 8; done; exit 1
       - name: Safari, through its own WebDriver — open, wait, read the readout, capture
         timeout-minutes: 6
         run: |
@@ -41,7 +41,7 @@ jobs:
               return json.loads(urllib.request.urlopen(req, timeout=120).read() or b"{}")
           sid = call("POST", "/session", {"capabilities": {"alwaysMatch": {"browserName": "safari"}}})["value"]["sessionId"]
           call("POST", f"/session/{sid}/window/rect", {"x": 0, "y": 0, "width": 1280, "height": 1000})
-          url = os.environ["PAGE"] + "?v=" + os.environ["GITHUB_RUN_NUMBER"]
+          url = os.environ["APPLE_PAGE"] + "?v=" + os.environ["GITHUB_RUN_NUMBER"]
           call("POST", f"/session/{sid}/url", {"url": url})
           read = "return ['r-ua','r-fps','p-ks','p-lic','p-play','c-play'].map(function(k){return k+': '+document.getElementById(k).textContent}).join('\\n') + '\\n---\\n' + document.getElementById('log').textContent;"
           for t in (15, 30, 45):
