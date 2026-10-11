@@ -53,12 +53,18 @@ async function publishMosaic() {
     const b = new Uint8Array(size); for (let i = 0; i < size; i++) b[i] = (i * 11 + size) & 255; mosaicBytes[f] = b;
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
-  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt: "2026-10-11T06:00:00.000Z",
+  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt: new Date().toISOString(),
     ids: [ID], tiles: [{ id: ID, name: "Cotton <Bowl>.jpg", x: 6, y: 8, w: 1068, h: 1424 }], skipped: [] })));
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
-const galleryJson = JSON.stringify({ photos: [{ id: ID, name: "Cotton <Bowl>.jpg", bytes: 288000, width: 720, height: 862, status: "ready", prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }] });
+const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
+const galleryJson = JSON.stringify({ photos: [{ id: ID, name: "Cotton <Bowl>.jpg", bytes: 288000, width: 720, height: 862, status: "ready", readyAt: HOUR_AGO, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }] });
 const gallerySealed = await sealText(PHOTO, galleryJson);
+// a second ready picture the combined view does not hold yet (the stale path)
+const ID2 = "fedcba9876543210fedcba98";
+await fs.mkdir(join(www, "site", "photos", ID2), { recursive: true });
+await fs.writeFile(join(www, "site", "photos", ID2, "widevine.mpd.enc"), await seal(PHOTO, new Uint8Array(10)));
+const twoSealed = await sealText(PHOTO, JSON.stringify({ photos: [...JSON.parse(galleryJson).photos, { id: ID2, name: "second.jpg", bytes: 1000, width: 720, height: 960, status: "ready", readyAt: HOUR_AGO }] }));
 const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some other password here", cfg.salt, 1000)), galleryJson);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
@@ -93,10 +99,10 @@ async function mockedContext() {
     const req = route.request(); const u = new URL(req.url()); const auth = req.headers()["authorization"];
     if (auth !== `Bearer ${TOKEN}`) return route.fulfill({ status: 401, body: "{}" });
     if (req.method() === "GET" && u.pathname === `/repos/${REPO}`) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ permissions: { push: true } }) });
-    if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/gallery.json.enc`) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from(api.galleryMode === "foreign" ? foreignSealed : gallerySealed) });
+    if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/gallery.json.enc`) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from(api.galleryMode === "foreign" ? foreignSealed : api.galleryMode === "two" ? twoSealed : gallerySealed) });
     if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/config.json`) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sha: "deadbeef", content: Buffer.from(JSON.stringify({ repo: REPO, salt: REPO_SALT, iterations: 1000, tokenEnc: "x" })).toString("base64") }) });
     if (req.method() === "POST" && u.pathname === `/repos/${REPO}/git/blobs`) { api.blobs.push(JSON.parse(req.postData())); return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ sha: "b".repeat(40) }) }); }
-    if (req.method() === "POST" && u.pathname === `/repos/${REPO}/dispatches`) { api.dispatches.push(JSON.parse(req.postData())); return route.fulfill({ status: 204, body: "" }); }
+    if (req.method() === "POST" && u.pathname === `/repos/${REPO}/dispatches`) { api.dispatches.push(JSON.parse(req.postData())); return route.fulfill(api.refuseDispatch ? { status: 502, body: "{}" } : { status: 204, body: "" }); }
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
@@ -135,6 +141,10 @@ try {
   await page.waitForSelector("#open-all", { timeout: 20000 });
   check((await page.textContent("#open-all")) === "Open all 1 at once" && /All 1 in one protected view/.test(await page.textContent("#all")), "once published, the gallery offers it: " + (await page.textContent("#all")));
   check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "it does not ask again while the view is current");
+  // the same with the eight-minute gap out of the way: a page that has never asked still does not ask while it is current
+  await page.evaluate(() => sessionStorage.removeItem("ccs-mosaic-asked"));
+  await page.reload(); await page.waitForSelector("#open-all", { timeout: 20000 }); await page.waitForTimeout(1500);
+  check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "a current combined view is never asked for again, gap or no gap");
   // 2. upload
   await page.setInputFiles("#files", join(www, "pic.png"));
   await page.waitForFunction(() => /uploaded|refused/.test(document.getElementById("uploads").textContent), null, { timeout: 20000 });
@@ -184,6 +194,33 @@ try {
   await page.mouse.click(spot.x, spot.y);
   await page.waitForURL(/view\.html\?id=/, { timeout: 10000 });
   check(page.url().endsWith("view.html?id=" + ID), "a tap on the picture opens it on its own: " + page.url());
+  // 4c. a combined view that falls out of date (a second picture is ready): it says so, offers the earlier
+  // one, asks only after three minutes out of date, and gives up visibly after twenty (a fake clock)
+  api.galleryMode = "two";
+  const sctx = await mockedContext();
+  const p4 = await sctx.newPage();
+  await p4.clock.install();
+  await p4.goto(BASE + "index.html");
+  await p4.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
+  await p4.goto(BASE + "index.html");
+  const allText = async () => (await p4.textContent("#all").catch(() => "")) || "";
+  const until = async (re, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (re.test(await allText())) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
+  const asks = () => api.dispatches.filter((x) => x.client_payload.action === "mosaic").length;
+  const before = asks();
+  check(await until(/made for an earlier set \(1 picture\); it is being remade with your 2/, 20000) && (await p4.textContent("#open-all")) === "Open the earlier one (1)", "out of date: it says so and offers the earlier one: " + (await allText()));
+  check(asks() === before, "a freshly made view out of date for under three minutes is not asked for yet");
+  api.refuseDispatch = true; // GitHub refuses this one
+  await p4.clock.fastForward("03:30");
+  const end1 = Date.now() + 15000; while (asks() === before && Date.now() < end1) await new Promise((r) => setTimeout(r, 250));
+  check(asks() === before + 1, "after three minutes out of date the page asks once");
+  check(await until(/did not take the request/, 15000), "a refused request is shown: " + (await allText()));
+  await p4.clock.fastForward("00:30"); await new Promise((r) => setTimeout(r, 2500));
+  check(asks() === before + 1, "a refused request is not repeated at the next refresh (it waits the full gap)");
+  api.refuseDispatch = false;
+  await p4.clock.fastForward("20:00");
+  check(await until(/not caught up after twenty minutes/, 15000) && (await p4.$("#ask-all")) !== null, "after twenty minutes it says so, with the job link and Ask again: " + (await allText()));
+  check(asks() === before + 1, "and it does not keep asking after giving up");
+  await sctx.close(); api.galleryMode = "normal";
   // 5. the view without a session goes to the password; an expired session too
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);

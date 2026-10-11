@@ -67,7 +67,8 @@ export function mosaicLayout(sizes, pad = 6) {
   const tiles = sizes.map((s, i) => {
     const col = i % best.cols, row = Math.floor(i / best.cols);
     const f = Math.min((best.cw - 2 * pad) / s.width, (best.ch - 2 * pad) / s.height);
-    const w = Math.max(2, down2(s.width * f)), h = Math.max(2, down2(s.height * f));
+    const near2 = (v) => Math.max(2, Math.round(v / 2) * 2); // nearest even size: floor-to-even skewed very thin pictures
+    const w = Math.min(best.cw - 2, near2(s.width * f)), h = Math.min(best.ch - 2, near2(s.height * f));
     return { x: col * best.cw + down2((best.cw - w) / 2), y: row * best.ch + down2((best.ch - h) / 2), w, h };
   });
   return { width: best.W, height: best.H, cols: best.cols, rows: best.rows, cell: { width: best.cw, height: best.ch }, tiles };
@@ -90,9 +91,18 @@ async function stillFromOutput(tools, key, dir, kidHex, work, i) {
 export async function buildMosaic({ siteDir, key, tools }) {
   const gallery = await readGallery(siteDir, key);
   const out = join(siteDir, "mosaic");
+  const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
+  // a repeated request (the page asking while the job's own run is on its way) changes nothing: when the
+  // combined view already holds exactly these pictures, in this order, with none left out, keep it
+  try {
+    const cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc")))));
+    if (ready.length && !(cur.skipped || []).length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id))) {
+      log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
+      return { status: "current", count: ready.length };
+    }
+  } catch {}
   await fs.rm(out, { recursive: true, force: true }); // never a combined view from an older set left beside a new one
   if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }
-  const ready = gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
   if (!ready.length) { log("no ready pictures: no combined view"); return { status: "none", count: 0 }; }
   const work = await fs.mkdtemp(join(tmpdir(), "site-mosaic-"));
   try {

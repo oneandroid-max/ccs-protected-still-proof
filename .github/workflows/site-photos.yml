@@ -60,7 +60,7 @@ jobs:
 
   mosaic:
     needs: photo
-    if: ${{ !cancelled() && (needs.photo.result == 'success' || needs.photo.result == 'skipped') }}
+    if: ${{ !cancelled() && (needs.photo.result == 'success' || (needs.photo.result == 'skipped' && github.event.client_payload.action == 'mosaic')) }}
     concurrency: { group: site-mosaic, cancel-in-progress: false }
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -86,7 +86,7 @@ jobs:
           for i in 1 2 3 4 5; do
             git fetch -q origin main && git reset -q --hard origin/main
             node site/worker.mjs
-            git add -A site/mosaic
+            git add -A site   # the worker touches only site/mosaic here; naming that folder fails when it never existed
             if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
             git commit -q -m "site: combined view"
             if git push -q origin HEAD:main; then echo "pushed"; exit 0; fi

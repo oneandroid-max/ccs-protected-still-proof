@@ -25,6 +25,7 @@ const step = (ok, what) => { results.push({ ok, what }); say(`${ok ? "ok  " : "F
 
 if (!PASSWORD) { console.error("SITE_PASSWORD is not set"); process.exit(2); }
 const pub = createPublicKey({ key: Buffer.from(process.env.WALK_PUBKEY || "", "base64"), format: "der", type: "spki" });
+if (pub.asymmetricKeyType !== "rsa" || pub.asymmetricKeyDetails.modulusLength < 3072) { console.error("the sealing key must be RSA of at least 3072 bits"); process.exit(2); }
 await fs.mkdir(OUT, { recursive: true });
 
 // The whole screen, as the operating system draws it, sealed: AES-256-GCM under a fresh key, the key
@@ -122,6 +123,17 @@ try {
   await page.waitForTimeout(3000);
   const r2 = await readout();
   step(/playing/.test(r2["r-play"]), `still playing three seconds later: ${r2["r-play"]}`);
+  // full screen, as a person would press it to see the pictures larger
+  await page.click("#fullscreen");
+  await page.waitForTimeout(2000);
+  const fsOn = await page.evaluate(() => document.fullscreenElement && document.fullscreenElement.id);
+  const r2b = await readout();
+  step(fsOn === "stage" && /playing/.test(r2b["r-play"]), `full screen: ${fsOn || "not entered"}, ${r2b["r-play"]}`);
+  await capture("all-fullscreen");
+  // leaving it through the page (a key sent by the walker may not reach the browser's own full-screen handling)
+  await page.evaluate(() => document.exitFullscreen && document.exitFullscreen()).catch(() => {});
+  await page.waitForTimeout(1000);
+  step(await page.evaluate(() => !document.fullscreenElement), "full screen left again");
   await page.locator("#tiles").scrollIntoViewIfNeeded();
   await capture("all-list");
   // 5. tap a picture (the second, or the first if there is one)

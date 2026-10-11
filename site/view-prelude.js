@@ -57,6 +57,11 @@ function wireAll(meta) {
     const t = tileAt(meta, r, e.clientX - r.left, e.clientY - r.top);
     if (t) location.href = "view.html?id=" + t.id;
   });
+  // full screen makes every picture larger (on a phone held upright the pictures then fill the screen)
+  const full = document.createElement("button"); full.id = "fullscreen"; full.textContent = "Full screen";
+  full.addEventListener("click", () => { const f = stage.requestFullscreen || stage.webkitRequestFullscreen; if (f) f.call(stage); });
+  document.addEventListener("fullscreenchange", () => { stage.style.maxHeight = document.fullscreenElement === stage ? "none" : "85vh"; });
+  const bar = document.createElement("p"); bar.className = "row"; bar.appendChild(full);
   const h = document.createElement("h2"); h.textContent = "What is in this view (tap a picture to open it on its own)";
   const ol = document.createElement("ol"); ol.id = "tiles";
   for (const t of meta.tiles) {
@@ -66,7 +71,7 @@ function wireAll(meta) {
   const when = document.createElement("p"); when.id = "built";
   when.textContent = `Left to right, top to bottom. Combined ${meta.builtAt.replace("T", " ").slice(0, 16)} UTC.`
     + (meta.skipped && meta.skipped.length ? ` Left out (could not be read back): ${meta.skipped.map((s) => s.name).join(", ")}.` : "");
-  stage.after(h, ol, when);
+  stage.after(bar, h, ol, when);
   // where each picture sits (sizes and ids only), for a walker that taps the way a person does
   window.__ccsMosaic = { width: meta.width, height: meta.height, tiles: meta.tiles.map(({ id, x, y, w, h }) => ({ id, x, y, w, h })) };
 }

@@ -44,13 +44,13 @@
 </section>
 
 <script type="module">
-import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js";
+import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js?v=2026-10-11.2"; // versioned: a cached app.js from before a change must not pair with this page
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
 const ACTIONS = "https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml";
-let st = session.get(), timer = null, busy = false, staleSince = 0;
+let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "";
 const MOSAIC_GIVE_UP = 20 * 60 * 1000; // a combined view that has not caught up in twenty minutes is reported, not waited on
 const then = new URLSearchParams(location.search).get("then");
 
@@ -82,12 +82,20 @@ async function load() {
     const readyIds = g.photos.filter((p) => p.status === "ready" && pub[p.id] && !deleting.has(p.id)).map((p) => p.id);
     const meta = readyIds.length ? await mosaicMeta(st) : null;
     const current = mosaicCurrent(meta, readyIds);
+    // the stale clock restarts whenever the set of ready pictures changes
+    const key = readyIds.join(",");
+    if (key !== readyKey) { readyKey = key; staleSince = 0; }
     if (!readyIds.length || current) staleSince = 0; else if (!staleSince) staleSince = Date.now();
     const staleFor = staleSince ? Date.now() - staleSince : 0;
-    // The job remakes it after every change on its own; the page asks only when none exists, or when it
-    // has stayed out of date for three minutes with nothing of this tab's still on its way.
+    // The job remakes it after every change on its own. The page asks only when nothing of this tab's is
+    // still on its way, the newest picture has been ready three minutes (the job's own run had its turn),
+    // and either there is none, it is over five minutes old, or it has stayed out of date three minutes
+    // here; never more than once in eight minutes, and not after the twenty-minute give-up.
+    const newestReady = Math.max(0, ...g.photos.filter((p) => readyIds.includes(p.id)).map((p) => Date.parse(p.readyAt) || 0));
+    const builtAt = meta && Date.parse(meta.builtAt) || 0;
     let asked = "";
-    if (readyIds.length && !current && pend.length === 0 && Date.now() - mosaicAskedAt() > MOSAIC_ASK_GAP && (!meta || staleFor > 3 * 60 * 1000)) {
+    if (readyIds.length && !current && pend.length === 0 && staleFor <= MOSAIC_GIVE_UP && Date.now() - mosaicAskedAt() > MOSAIC_ASK_GAP
+      && Date.now() - newestReady > 3 * 60 * 1000 && (!meta || Date.now() - builtAt > 5 * 60 * 1000 || staleFor > 3 * 60 * 1000)) {
       try { await askMosaic(st); } catch (err) { asked = err.message; }
     }
     renderAll(readyIds, meta, current, staleFor > MOSAIC_GIVE_UP, asked);
@@ -108,10 +116,10 @@ function renderAll(readyIds, meta, current, gaveUp, askError) {
   const open = (label) => '<div class="row" style="margin-top:8px"><a class="btn primary" id="open-all" href="all.html">' + label + "</a></div>";
   let html = "<strong>All your pictures at once</strong>";
   if (current) html += '<div class="muted">All ' + k + " in one protected view, at the same protection as each picture on its own. Tap a picture there to open it alone.</div>"
-    + (meta.skipped && meta.skipped.length ? '<div class="warn">Left out (could not be read back): ' + esc(meta.skipped.map((x) => x.name).join(", ")) + "</div>" : "") + open("Open all " + k + " at once");
+    + (meta.skipped && meta.skipped.length ? '<div class="warn">Left out (could not be read back): ' + esc(meta.skipped.map((x) => x.name).join(", ")) + ' <button id="ask-all">Try again</button></div>' : "") + open("Open all " + k + " at once");
   else if (meta) html += '<div class="muted">The combined view was made for an earlier set (' + k + " picture" + (k === 1 ? "" : "s") + "); it is being remade with your " + n + " (about two minutes)…</div>" + open("Open the earlier one (" + k + ")");
   else html += '<div class="muted">Combining your ' + n + " picture" + (n === 1 ? "" : "s") + " into one protected view (about two minutes)…</div>";
-  if (gaveUp) html += '<div class="warn">The combined view has not caught up after twenty minutes — <a href="' + ACTIONS + '">see the job</a> <button id="ask-all">Ask again</button></div>';
+  if (gaveUp && !(current && meta.skipped && meta.skipped.length)) html += '<div class="warn">The combined view has not caught up after twenty minutes — <a href="' + ACTIONS + '">see the job</a> <button id="ask-all">Ask again</button></div>';
   if (askError) html += '<div class="bad">GitHub did not take the request: ' + esc(askError) + "</div>";
   box.innerHTML = html;
   const again = $("ask-all");
@@ -147,7 +155,7 @@ function render(photos, pend, pub) {
   }
   $("list").innerHTML = rows.join("") || '<p class="muted">No pictures yet. Choose some above.</p>';
   for (const b of $("list").querySelectorAll("button[data-del]")) b.addEventListener("click", async () => {
-    if (!confirm("Delete this picture? Its protected view stops working once the job has run.")) return;
+    if (!confirm("Delete this picture? Its protected view stops working once the job has run, and it leaves the all-at-once view when that is remade (about two minutes later).")) return;
     try { await remove(st, b.dataset.del); } catch (err) { alert(err.message); } load();
   });
   for (const b of $("list").querySelectorAll("button[data-retry]")) b.addEventListener("click", async () => {

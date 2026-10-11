@@ -15,8 +15,10 @@ on:
         description: "Public key (base64 DER SPKI, RSA) the screen captures are sealed to"
         required: true
 
+# read-only by default: the walk (which runs installed code beside the password) cannot write anything;
+# only the job that keeps the sealed files may push, and only to its own branch
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   walk:
@@ -29,6 +31,7 @@ jobs:
         browser: [chrome, edge]
     steps:
       - uses: actions/checkout@v4
+        with: { persist-credentials: false }
       - name: Playwright's driver only (no browser download; the walk drives the installed browser)
         shell: bash
         run: |
@@ -66,18 +69,21 @@ jobs:
     needs: walk
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dl }
       - name: Keep the sealed captures and the step records on the branch walk-evidence
-        env: { GH_REPO: "${{ github.repository }}" }
+        env: { GH_REPO: "${{ github.repository }}", TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
         run: |
           find dl -type f | sort
           if find dl -type f ! -name '*.sealed.json' ! -name '*-steps.json' | grep -q .; then echo "an unexpected file: refusing to keep anything"; exit 1; fi
           git init -q keep && cd keep
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GH_REPO.git"
+          git remote add origin "https://github.com/$GH_REPO.git"
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
           if git fetch -q origin walk-evidence; then git checkout -q -b walk-evidence FETCH_HEAD; else git checkout -q --orphan walk-evidence; fi
           mkdir -p "runs/${{ github.run_number }}" && find ../dl -type f -exec cp {} "runs/${{ github.run_number }}/" \;
           git add runs && git commit -q -m "walk ${{ github.run_number }}: sealed captures and step records" && git push -q origin HEAD:walk-evidence

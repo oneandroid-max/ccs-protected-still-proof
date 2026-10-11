@@ -7,6 +7,13 @@
 // every file under .github/workflows/. Two kinds of line are skipped because they open nothing: the env
 // line that defines PAGE, and a line that only prints a link (`echo …`).
 //
+// SECOND RULE (2026-10-11, from the independent review of the all-at-once view): the password-protected
+// test site shows the owner's OWN pictures, and a runner has no protected path, so a runner that opens
+// it in a browser captures them in clear. Every workflow that touches the site (a `site/` path or page,
+// SITE_PASSWORD, or the walker) must be named below with its reason. A named one that is not the walk
+// must start no browser and take no screen capture. The walk may, only while it keeps every safeguard
+// that seals its captures; and the walker itself must delete each clear capture before sealing it.
+//
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,10 +34,41 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
     }
   });
 }
+// the second rule
+const SITE = /(^|[^\w-])site\/|SITE_PASSWORD|walk-site/;
+const BROWSER = /chrome|msedge|firefox|safari|screencapture|CopyFromScreen|import -window|playwright|puppeteer|simctl io/i;
+const SITE_ALLOWED = {
+  "site-photos.yml": "prepares pictures on the runner; opens no page",
+  "site-test.yml": "tests the site's code; opens no page",
+  "live-check.yml": "fetches pages with curl; every picture file it can fetch is encrypted",
+  "site-walk.yml": "THE WALK: a real browser on the live site; every capture sealed (safeguards required below)",
+};
+const WALK_SAFEGUARDS = [
+  [/^permissions:\s*\n\s+contents: read/m, "read-only by default (only the keep job may write)"],
+  [/persist-credentials: false/, "checkout leaves no token behind"],
+  [/ls walk\/clear-\*.*rm -rf walk; exit 1/, "a clear capture left behind deletes everything and fails"],
+  [/find dl -type f ! -name '\*\.sealed\.json' ! -name '\*-steps\.json'/, "the keep job refuses any file that is not sealed or a step record"],
+  [/HEAD:walk-evidence/, "kept only on the walk-evidence branch"],
+];
+let siteFiles = 0;
+for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
+  const text = readFileSync(join(DIR, file), "utf8");
+  const live = text.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+  if (!SITE.test(live)) continue;
+  siteFiles++;
+  if (!SITE_ALLOWED[file]) { bad.push(`${DIR}/${file}: touches the test site (the owner's own pictures) but is not in SITE_ALLOWED in tools/check-workflow-links.mjs`); continue; }
+  if (file === "site-walk.yml") {
+    for (const [re, what] of WALK_SAFEGUARDS) if (!re.test(live)) bad.push(`${DIR}/${file}: the walk lost a safeguard: ${what}`);
+  } else if (BROWSER.test(live)) bad.push(`${DIR}/${file}: touches the test site and starts a browser or a screen capture (${live.match(BROWSER)[0]}); only the sealed walk may`);
+}
+const walker = readFileSync("tools/walk-site.mjs", "utf8");
+const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicEncrypt(");
+if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
+
 if (bad.length) {
-  console.error(`FAIL: ${bad.length} of ${checked} workflow links could open the page with the owner's photo:`);
+  console.error(`FAIL: ${bad.length} problem(s); ${checked} workflow links to the route-1 page checked, ${siteFiles} workflows touching the test site:`);
   for (const b of bad) console.error("  " + b);
   console.error("Add clip=card, levels=software or levels=clearkey as the FIRST parameter of each link's query.");
   process.exit(1);
 }
-console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card`);
+console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards`);

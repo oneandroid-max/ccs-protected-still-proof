@@ -126,9 +126,11 @@ export async function remove(st, id) {
 // each change): its sealed layout as published on the live site, or null when there is none yet or it
 // was made under another password.
 export async function mosaicMeta(st) {
-  const r = await fetch(`mosaic/meta.json.enc?v=${Date.now()}`, { cache: "no-store" });
-  if (!r.ok) return null;
-  try { return JSON.parse(await openText(await importKeyHex(st.photoKeyHex), new Uint8Array(await r.arrayBuffer()))); } catch { return null; }
+  try {
+    const r = await fetch(`mosaic/meta.json.enc?v=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return JSON.parse(await openText(await importKeyHex(st.photoKeyHex), new Uint8Array(await r.arrayBuffer())));
+  } catch { return null; } // a network error, or another password's view: the page treats it as not there yet
 }
 // Whether the combined view holds exactly the pictures that are ready now (left-out ones count as held).
 export function mosaicCurrent(meta, readyIds) {
@@ -139,8 +141,8 @@ export function mosaicCurrent(meta, readyIds) {
 // Asks GitHub to (re)make the combined view; the time is kept so a page does not ask again too soon.
 export const MOSAIC_ASK_GAP = 8 * 60 * 1000;
 export async function askMosaic(st) {
+  sessionStorage.setItem("ccs-mosaic-asked", String(Date.now())); // stamped first: a refused request waits the full gap too
   await dispatch(st, { action: "mosaic" });
-  sessionStorage.setItem("ccs-mosaic-asked", String(Date.now()));
 }
 export function mosaicAskedAt() { return Number(sessionStorage.getItem("ccs-mosaic-asked") || 0); }
 

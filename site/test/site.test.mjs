@@ -64,7 +64,7 @@ test("site/view.html and site/all.html are generated from the route-1 page and a
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
   assert.equal(all, await fs.readFile(join(REPO, "site", "all.html"), "utf8"), "run node tools/build-site-view.mjs");
   for (const page of [out, all]) {
-    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js"', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-']) assert.ok(page.includes(s), s);
+    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-']) assert.ok(page.includes(s), s);
     assert.ok(!page.includes('"widevine.mpd"'), "no plain manifest name remains");
   }
   assert.ok(all.includes('window.__ccsMode = "all";') && !out.includes("__ccsMode"), "only the combined view runs the prelude in its 'all' mode");
@@ -232,6 +232,16 @@ test("worker with the real packager: the combined view holds every ready picture
     assert.ok(near(got, want), `${tile.name} at its centre: got ${got}, want ${want}`);
   }
   assert.ok(near(at(1, 1), [0, 0, 0], 20), "the frame around the pictures is black: " + at(1, 1));
+  // asked again for the same set with a picture left out: remade (a left-out picture is tried again)
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "ready");
+  // with nothing left out, a repeated request leaves the combined view exactly as it is (no new commit)
+  const g2 = await readGallery(siteDir, KEY); g2.photos = g2.photos.filter((x) => x.id !== "d".repeat(24));
+  await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g2)));
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "ready");
+  const snap = await Promise.all(names.map((n) => fs.readFile(join(dir, n))));
+  const again = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools });
+  assert.equal(again.status, "current"); assert.equal(again.count, 2);
+  for (const [i, n] of names.entries()) assert.ok((await fs.readFile(join(dir, n))).equals(snap[i]), n + " untouched");
   // the mosaic is remade from the list each time: deleting a picture removes it from the next one
   await worker({ payload: { action: "delete", id: "b".repeat(24), key: KEY_HEX }, siteDir, tools });
   const r2 = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools });

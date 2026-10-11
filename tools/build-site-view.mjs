@@ -12,6 +12,10 @@ const REPO = fileURLToPath(new URL("../", import.meta.url));
 const SRC = REPO + "web/research/drm/index.html";
 const OUTS = { one: REPO + "site/view.html", all: REPO + "site/all.html" };
 
+// Bumped whenever view-prelude.js changes, so a browser holding the old one in its cache (Pages caches
+// for ten minutes) never pairs it with a new page.
+export const PRELUDE_VERSION = "2026-10-11.2";
+
 function once(html, from, to, label) {
   const i = html.indexOf(from);
   if (i < 0 || html.indexOf(from, i + 1) >= 0) throw new Error(`the route-1 page no longer matches the view template at: ${label}`);
@@ -27,7 +31,7 @@ export function buildView(indexHtml, mode = "one") {
   // the player library's tag carries its integrity hash (read from the CDN on a runner, live-check.yml)
   const PLAYER = '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>';
   t = once(t, PLAYER,
-    '<script>' + (ALL ? 'window.__ccsMode = "all"; ' : "") + 'window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js"></script>', "player script");
+    '<script>' + (ALL ? 'window.__ccsMode = "all"; ' : "") + 'window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js?v=' + PRELUDE_VERSION + '"></script>', "player script");
   t = once(t, "<script>\n(async () => {", '<script>\n(async () => {\n  const CTX = await window.__ccsReady; // decrypted in memory by view-prelude.js\n  document.getElementById("title").textContent = CTX.title;', "page script");
   t = once(t, 'name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"',
     'name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid', "photo clip");
