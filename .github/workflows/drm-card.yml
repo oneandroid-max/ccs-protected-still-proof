@@ -46,7 +46,7 @@ jobs:
       - name: Package the card for Widevine and PlayReady
         run: |
           curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
-          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - # the v3.9.3 release's binary, pinned
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned
           chmod +x /tmp/packager; /tmp/packager --version
           CID=$(printf '%s' "$CARD_WV_CONTENT_ID" | xxd -p | tr -d '\n')
           /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-widevine.mp4 \

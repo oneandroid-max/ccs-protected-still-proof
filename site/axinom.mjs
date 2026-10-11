@@ -43,17 +43,24 @@ export async function readAxinomSettings(siteDir) {
 //                   versions are 1, 2 or 3, but used version is 0." at 176 and above)
 //   another key:    "Invalid DRM message. The signature is invalid." (at every size from 0 to 400 bytes)
 //   unknown key id: "License denied. The DRM message references the ID of an unknown communication key."
-// Only an answer about the request counts as accepted. It proves the key pair, and nothing else: not the
-// address (a made-up prefix answers the same way), not the rest of the token's message, which Axinom reads after
-// a device's request. A device has the last word. Axinom out of reach is retried, then reported as such.
+// Only one of the measured answers about the request counts as accepted ("Invalid license request." also opens an
+// answer about the token's header, which is not: the seventh review). It proves the key pair, and nothing else:
+// not the address (a made-up prefix answers the same way), not the rest of the token's message, which Axinom reads
+// after a device's request. A device has the last word. Something that is not a token is never sent. Each try
+// has its own time limit; no answer, or a server error (HTTP 5xx, 429), is retried, then reported as Axinom out
+// of reach, never as a refusal.
 export const TOKEN_CHECK_BODY_BYTES = 176;
-export const TOKEN_ACCEPTED = /^Invalid license request\./;
-export async function checkTokenWithAxinom(token, license, fetchFn = fetch, { tries = 3, pause = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+export const TOKEN_CHECK_TIMEOUT_MS = 20000;
+export const TOKEN_ACCEPTED = /^Invalid license request\. (The request body is missing\.|License request total size is less than the expected header size\.|Supported versions are 1, 2 or 3, but used version is 0\.)$/;
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+export async function checkTokenWithAxinom(token, license, fetchFn = fetch, { tries = 3, pause = (ms) => new Promise((r) => setTimeout(r, ms)), timeoutMs = TOKEN_CHECK_TIMEOUT_MS } = {}) {
   if (!FAIRPLAY_LICENSE_ADDRESS.test(String(license))) throw new Error("the FairPlay licence address is not one of Axinom's");
+  if (!TOKEN_SHAPE.test(String(token))) return { accepted: false, reached: false, status: 0, message: "that is not a licence token: nothing was sent" };
   let last = null;
   for (let i = 0; i < tries; i++) {
     try {
-      const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES) });
+      const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES), signal: AbortSignal.timeout(timeoutMs) });
+      if (r.status >= 500 || r.status === 429) throw new Error(`Axinom answered HTTP ${r.status}`);
       const message = String(r.headers.get("x-axdrm-errormessage") || "").trim();
       return { accepted: TOKEN_ACCEPTED.test(message), reached: true, status: r.status, message: message || `no message (HTTP ${r.status})` };
     } catch (e) { last = e; if (i + 1 < tries) await pause(2000 * 2 ** i); }

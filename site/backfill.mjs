@@ -32,6 +32,13 @@ let sealed = null;
 try { sealed = new Uint8Array(await fs.readFile(join(siteDir, "gallery.json.enc"))); } catch {}
 if (sealed) { try { await open(photoKey, sealed); } catch { stop("SITE_PASSWORD does not open the gallery (was the site's password changed? update the secret)"); } }
 const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
-const r = await run({ payload: { key }, action: "fairplay", siteDir, tools, com });
+// a run that stops (Axinom refusing our key, or out of reach, before anything is replaced) is named on the run's
+// page too, and leaves a result the workflow can read
+let r;
+try { r = await run({ payload: { key }, action: "fairplay", siteDir, tools, com }); }
+catch (e) {
+  if (process.env.BACKFILL_RESULT) await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "stopped", added: 0, already: 0, failed: 0, error: String(e.message || e).slice(0, 400) }));
+  stop(String(e.message || e).slice(0, 400));
+}
 console.log(`::notice title=Apple backfill::${r.status} — ${r.added || 0} added or renewed, ${r.already || 0} already good, ${r.failed || 0} failed; combined view ${r.mosaic || "none"}`);
 if (process.env.BACKFILL_RESULT) await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify(r));

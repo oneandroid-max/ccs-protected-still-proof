@@ -102,28 +102,37 @@ test("a minted token: HS256 under the communication key, the content key encrypt
 test("the token check accepts only Axinom's answers about the request, never one about the token; out of reach is said so", async () => {
   const seen = [];
   const reply = (message) => async (url, init) => { seen.push({ url, init }); return { status: 400, headers: new Headers(message === null ? {} : { "X-AxDRM-ErrorMessage": message }) }; };
-  const good = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply("Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."));
+  const good = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, reply("Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."));
   assert.deepEqual([good.accepted, good.reached], [true, true]);
-  assert.deepEqual([seen[0].url, seen[0].init.method, seen[0].init.headers["X-AxDRM-Message"], seen[0].init.body.length], [OWN_LICENSE, "POST", "TOKEN-1", TOKEN_CHECK_BODY_BYTES], "the token, to the account's address, with a dummy body");
+  assert.deepEqual([seen[0].url, seen[0].init.method, seen[0].init.headers["X-AxDRM-Message"], seen[0].init.body.length], [OWN_LICENSE, "POST", "h.p.s", TOKEN_CHECK_BODY_BYTES], "the token, to the account's address, with a dummy body");
   // a good token's answer at the other body sizes measured: still about the request
   for (const m of ["Invalid license request. License request total size is less than the expected header size.", "Invalid license request. The request body is missing."])
-    assert.equal((await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply(m))).accepted, true, m);
-  // about the token, or nothing: refused, with Axinom's words or the HTTP status
-  for (const m of ["Invalid DRM message. The signature is invalid.", "License denied. The DRM message references the ID of an unknown communication key.", "", null]) {
-    const r = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, reply(m));
+    assert.equal((await checkTokenWithAxinom("h.p.s", OWN_LICENSE, reply(m))).accepted, true, m);
+  // about the token, or nothing: refused, with Axinom's words or the HTTP status. "Invalid license request." also
+  // opens Axinom's answer about the token's own header (measured by the seventh review for a blank token): refused
+  for (const m of ["Invalid DRM message. The signature is invalid.", "License denied. The DRM message references the ID of an unknown communication key.", 'Invalid license request. The "X-AxDRM-Message" HTTP header must have exactly one non-empty value.', "Invalid license request. Something else entirely.", "", null]) {
+    const r = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, reply(m));
     assert.deepEqual([r.accepted, r.reached], [false, true], `refused: ${JSON.stringify(m)}`); assert.ok(r.message.length > 0);
   }
+  // something that is not a token is never sent
+  const sentBefore = seen.length;
+  for (const bad of ["", " ", "a,b.c.d", "TOKEN-1", "a.b"]) { const r = await checkTokenWithAxinom(bad, OWN_LICENSE, reply("Invalid license request. The request body is missing.")); assert.deepEqual([r.accepted, r.reached], [false, false], JSON.stringify(bad)); }
+  assert.equal(seen.length, sentBefore, "nothing sent for what is not a token");
+  // each try has its own time limit (passed to fetch as a signal); a server error is retried, then reported as Axinom out of reach
+  let signals = 0, served = 0;
+  const busy = await checkTokenWithAxinom("a.b.c", OWN_LICENSE, async (url, init) => { if (init.signal instanceof AbortSignal) signals++; served++; return { status: 503, headers: new Headers() }; }, { pause: async () => {} });
+  assert.deepEqual([busy.accepted, busy.reached, served, signals], [false, false, 3, 3]); assert.match(busy.message, /^Axinom could not be reached \(3 tries\): Axinom answered HTTP 503$/);
   // Axinom out of reach: three tries, then said so plainly (never taken as accepted)
   let tries = 0; const pauses = [];
-  const down = await checkTokenWithAxinom("TOKEN-1", OWN_LICENSE, async () => { tries++; throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED (a test)") }); }, { pause: async (ms) => { pauses.push(ms); } });
+  const down = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, async () => { tries++; throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED (a test)") }); }, { pause: async (ms) => { pauses.push(ms); } });
   assert.deepEqual([down.accepted, down.reached, tries, pauses], [false, false, 3, [2000, 4000]]);
   assert.match(down.message, /^Axinom could not be reached \(3 tries\): connect ECONNREFUSED \(a test\)$/);
   const before = seen.length;
-  await assert.rejects(checkTokenWithAxinom("TOKEN-1", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense", reply("x")), /not one of Axinom's/);
+  await assert.rejects(checkTokenWithAxinom("h.p.s", "https://evil.example/collect?u=https://drm-fairplay-licensing.axprod.net/AcquireLicense", reply("x")), /not one of Axinom's/);
   assert.equal(seen.length, before, "nothing is sent to an address that is not Axinom's");
   // the key itself, asked with a token for a throwaway key: signed with this key, naming its id, to its address
   const asked = [];
-  const k = await checkKeyWithAxinom({ ...COM, license: OWN_LICENSE }, async (url, init) => { asked.push([url, init.headers["X-AxDRM-Message"]]); return { status: 400, headers: new Headers({ "X-AxDRM-ErrorMessage": "Invalid license request. (a test)" }) }; });
+  const k = await checkKeyWithAxinom({ ...COM, license: OWN_LICENSE }, async (url, init) => { asked.push([url, init.headers["X-AxDRM-Message"]]); return { status: 400, headers: new Headers({ "X-AxDRM-ErrorMessage": "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0." }) }; });
   assert.equal(k.accepted, true); assert.equal(asked.length, 1); assert.equal(asked[0][0], OWN_LICENSE);
   assert.equal(tokenSignedWith(asked[0][1], COM.key), true, "signed with our key"); assert.equal(b64url(asked[0][1].split(".")[1]).com_key_id, COM.id, "naming our key id");
   // a token's signature read back with the key, and the key's check value: both tell a corrected key VALUE
@@ -579,8 +588,9 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc")))));
   assert.equal((await mosaic(null)).status, "ready"); assert.equal((await mosaicMeta()).fairplay, null);
   assert.equal((await mosaic(null)).status, "current");
-  // ... and remade with its own form once the key exists; then kept
-  assert.equal((await mosaic(COM)).status, "ready", "the same pictures, but no Apple form: remade");
+  // ... and given its own form once the key exists (the form alone, from the view's own output: the same pictures
+  // are never rebuilt for it); then kept
+  assert.deepEqual(await mosaic(COM), { status: "current", count: 2, fairplay: "renewed" }, "the same pictures, but no Apple form: the form added");
   const mm = await mosaicMeta();
   assert.match(mm.fairplay.master, /^fp-[0-9a-f]{8}\/master\.m3u8$/);
   await fs.access(join(siteDir, "mosaic", mm.fairplay.master)); await fs.access(join(siteDir, "mosaic", mm.fairplay.master.split("/")[0], "token.enc"));
@@ -690,6 +700,41 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   asked.length = 0;
   const again = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: refuse, com: corrected });
   assert.deepEqual([again.added, again.already, again.failed, again.mosaic], [0, 2, 0, "current"], JSON.stringify(again)); assert.equal(asked.length, 0, "not asked when every form is good");
+  const unreachable = async (com) => { asked.push(com.id); return { accepted: false, reached: false, status: 0, message: "Axinom could not be reached (3 tries): connect ECONNREFUSED (a test)" }; };
+  // the combined view, the same pictures, its form to renew for another key value: refused, or Axinom out of reach,
+  // the view and its working form are kept (the seventh review: it used to be rebuilt, its form deleted first);
+  // accepted, only its form is renewed
+  const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc")))));
+  const formM = (await mosaicMeta()).fairplay, value2 = { ...COM, key: nodeRandom(32) };
+  assert.ok(formM && formM.master, "the combined view has its form");
+  for (const gate of [refuse, unreachable]) {
+    const m = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: gate, com: value2 });
+    assert.deepEqual([m.status, m.fairplay], ["current", "kept"], JSON.stringify(m));
+    assert.deepEqual((await mosaicMeta()).fairplay, formM, "its working form kept");
+    assert.ok((await fs.readdir(join(siteDir, "mosaic"))).includes(formM.master.split("/")[0]), "and its folder");
+  }
+  const renewed = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: answer(true, "Invalid license request. (a test)"), com: value2 });
+  assert.deepEqual([renewed.status, renewed.fairplay], ["current", "renewed"], JSON.stringify(renewed));
+  assert.notEqual((await mosaicMeta()).fairplay.master, formM.master, "the form alone renewed");
+  // the backfill with Axinom out of reach: stopped before anything is replaced, said so
+  await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, checkKey: unreachable, com: { ...COM, key: nodeRandom(32) } }), /Axinom could not be asked about our key \(key id [0-9a-f-]{36}\): Axinom could not be reached \(3 tries\): connect ECONNREFUSED \(a test\); no Apple form was made or replaced/);
+  // a NEW picture with Axinom out of reach: its form replaces nothing, so it is made all the same
+  const C = "c".repeat(24);
+  logged.length = 0; console.log = (...a) => { logged.push(a.join(" ")); };
+  let rC; try { rC = await add(C, await solid("gate-c.png", 320, 240, "0x16a085"), unreachable); } finally { console.log = consoleLog; }
+  assert.equal(rC.status, "ready"); assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === C).fairplay, true, "a new picture gets its form when Axinom is only out of reach");
+  assert.ok(logged.some((l) => /could not be asked about our key .*; the form for c{24} is made all the same \(it replaces nothing\)/.test(l)), logged.join(" | "));
+  // a view of other pictures (C added) is rebuilt: its form is new; Axinom refusing the key, the new view has none
+  const rebuilt = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: refuse, com: value2 });
+  assert.equal(rebuilt.status, "ready", JSON.stringify(rebuilt)); assert.equal((await mosaicMeta()).fairplay, null, "refused: no form for the new view");
+  // the worker's own default question (the one its command and the backfill's use) goes to Axinom, here a
+  // stand-in fetch: refused there, a new picture gets no form
+  const realFetch = globalThis.fetch, sent = [], D = "d".repeat(24);
+  globalThis.fetch = async (url) => { sent.push(url); return new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid DRM message. The signature is invalid." } }); };
+  try { process.env.WORKER_BLOB_FILE = await upload(await solid("gate-d.png", 320, 240, "0x7d3c98")); await worker({ payload: { action: "add", id: D, name: "d.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, com: COM }); }
+  finally { globalThis.fetch = realFetch; }
+  assert.deepEqual(sent, [AXINOM_FAIRPLAY_LICENSE], "Axinom asked once, at the key's address");
+  assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === D).fairplay, false, "refused by the default question: no form");
 });
 
 // The card job's command, run as the job runs it (a child process of tools/fairplay-card.mjs with the Axinom key
@@ -762,6 +807,26 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
       shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, (id, text) => sets.push([id, text]), () => {}, "T", "https://drm-fairplay-licensing.axprod.net/AcquireLicense");
     await protectedPlay("vo", "o", "u", "our card, our account (protected)");
     assert.ok(sets.some(([id, text]) => id === "o-lic" && text === "refused by Axinom: " + WHY), `${how}: the licence cell names Axinom's reason: ${JSON.stringify(sets)}`);
+  }
+  // "obtained" is written for a licence response, and for nothing else the player fetches
+  const responseFilters = [], sets = [];
+  const shaka2 = { net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } }, Player: class {
+    async attach() {} configure() {} addEventListener() {} async load() {} drmInfo() { return { keySystem: "com.apple.fps" }; }
+    getNetworkingEngine() { return { registerRequestFilter() {}, registerResponseFilter(f) { responseFilters.push(f); } }; } } };
+  await new Function("shaka", "$", "CERT", "log", "set", "watch", "TOKEN", "LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+    shaka2, () => ({ play: () => Promise.resolve() }), "cert", () => {}, (id, text) => sets.push([id, text]), () => {}, "T", "https://drm-fairplay-licensing.axprod.net/AcquireLicense")("vo", "o", "u", "x");
+  responseFilters[0](1, { data: new ArrayBuffer(5) }); responseFilters[0](0, { data: new ArrayBuffer(6) });
+  assert.ok(!sets.some(([id]) => id === "o-lic"), "Apple page: no licence line for a manifest or a segment");
+  responseFilters[0](2, { data: new ArrayBuffer(7) });
+  assert.deepEqual(sets.filter(([id]) => id === "o-lic"), [["o-lic", "obtained, 7 bytes"]], "Apple page: obtained, for the licence");
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const pg = await fs.readFile(join(REPO, f), "utf8"), at = pg.indexOf("player.getNetworkingEngine().registerResponseFilter("), end = pg.indexOf("\n    });", at);
+    assert.ok(at > 0 && end > at, `${f}: its response filter is where this test reads it`);
+    const got = [], filter = new Function("shaka", "set", "log", "tierName", `return ${pg.slice(at + "player.getNetworkingEngine().registerResponseFilter(".length, end)}\n    };`)(shaka2, (id, text) => got.push([id, text]), () => {}, "t");
+    filter(1, { data: new ArrayBuffer(5) }); filter(0, { data: new ArrayBuffer(6) });
+    assert.deepEqual(got, [], `${f}: no licence line for a manifest or a segment`);
+    filter(2, { data: new ArrayBuffer(9) });
+    assert.deepEqual(got, [["r-lic", "obtained, 9 bytes"]], `${f}: obtained, for the licence`);
   }
 });
 
@@ -847,6 +912,20 @@ test("the backfill's entry: the picture key masked first and nowhere else; a wro
   r = go({ AXINOM_COM_KEY_ID: "not-a-guid" }); assert.equal(r.code, 1); assert.match(r.out, /::error title=Apple backfill::AXINOM_COM_KEY_ID is not a GUID/);
   assert.ok(!r.out.includes(COM.key.toString("base64")), "the Axinom key never printed");
   r = go({ SITE_PASSWORD: "" }); assert.equal(r.code, 1); assert.match(r.out, /SITE_PASSWORD is not set/);
+  // a picture that needs its form, and Axinom refusing our key (a stand-in fetch loaded first): stopped before
+  // anything is replaced, named on the run's page, a result left for the workflow; the key never printed
+  const photoKey = await derivePhotoKey(await deriveKey(PW, SALT, 1000)), F = "f".repeat(24);
+  await fs.writeFile(join(site, "gallery.json.enc"), await sealText(photoKey, JSON.stringify({ photos: [{ id: F, name: "f.png", status: "ready", prKidGuid: "00000000-0000-0000-0000-000000000001", fairplay: false }] })));
+  await fs.mkdir(join(site, "photos", F), { recursive: true });
+  await fs.writeFile(join(site, "photos", F, "meta.json.enc"), await sealText(photoKey, JSON.stringify({ id: F, fairplay: null })));
+  const stub = join(tmp, "stub-refuse.mjs");
+  await fs.writeFile(stub, `globalThis.fetch = async () => new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid DRM message. The signature is invalid." } });\n`);
+  const s2 = spawnSync(process.execPath, ["--import", pathToFileURL(stub).href, join(REPO, "site", "backfill.mjs")], { encoding: "utf8", env });
+  const out2 = (s2.stdout || "") + (s2.stderr || "");
+  assert.equal(s2.status, 1, out2); masked(out2);
+  assert.match(out2, /::error title=Apple backfill::Axinom does not accept our key \(key id [0-9a-f-]{36}\): Invalid DRM message\. The signature is invalid\.; no Apple form was made or replaced/);
+  assert.equal(JSON.parse(await fs.readFile(join(site, "result.json"), "utf8")).status, "stopped");
+  assert.ok(!out2.includes(COM.key.toString("base64")), "the Axinom key never printed");
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
