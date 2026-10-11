@@ -61,6 +61,17 @@ const errors = [];
 page.on("pageerror", (e) => errors.push(e.message));
 const text = (sel) => page.textContent(sel).catch(() => "");
 const readout = async () => Object.fromEntries(await Promise.all(["r-rule", "r-ks", "r-granted", "r-expect", "r-lic", "r-play"].map(async (k) => [k, (await text("#" + k)).trim()])));
+// The video element itself, not the readout's text (a page handed back from memory brings its old text
+// with it): not paused, a decoded frame, and its time moving over a second and a half.
+async function videoAdvancing() {
+  return page.evaluate(async () => {
+    const v = document.getElementById("v"); if (!v) return { ok: false, why: "no video element" };
+    const t0 = v.currentTime; await new Promise((r) => setTimeout(r, 1500));
+    const r = { paused: v.paused, width: v.videoWidth, height: v.videoHeight, from: +t0.toFixed(2), to: +v.currentTime.toFixed(2), visible: getComputedStyle(v).visibility };
+    r.ok = !v.paused && v.videoWidth > 0 && v.currentTime !== t0 && r.visible === "visible";
+    return r;
+  });
+}
 async function waitPlaying(label) {
   const until = Date.now() + 90000;
   while (Date.now() < until) {
@@ -118,6 +129,8 @@ try {
   const r1 = await waitPlaying("all");
   say(`combined view readout: ${JSON.stringify(r1)}`);
   step(/playing/.test(r1["r-play"]), `the combined view plays: ${r1["r-play"]}`);
+  const a1 = await videoAdvancing();
+  step(a1.ok, `its video element: ${JSON.stringify(a1)}`);
   step((await text("#title")).trim() === `All your pictures, protected (${n})`, `its title: ${(await text("#title")).trim()}`);
   const tiles = await page.$$eval("#tiles li", (els) => els.length);
   step(tiles === n, `its list holds ${tiles} picture(s)`);
@@ -140,7 +153,9 @@ try {
   step(await page.evaluate(() => !document.fullscreenElement), "full screen left again");
   await page.locator("#tiles").scrollIntoViewIfNeeded();
   await capture("all-list");
-  // 5. tap a picture (the second, or the first if there is one)
+  // 5. tap a picture (the second, or the first if there is one); first note, in this tab, how the page
+  // comes back later (handed back from the browser's memory, or loaded afresh)
+  await page.evaluate(() => addEventListener("pageshow", (e) => sessionStorage.setItem("walk-pageshow", e.persisted ? "from memory" : "loaded")));
   await page.locator("#v").scrollIntoViewIfNeeded();
   const pick = n > 1 ? 1 : 0;
   const spot = await page.evaluate((i) => {
@@ -153,6 +168,8 @@ try {
   step(page.url().endsWith("view.html?id=" + spot.id), `tapping picture ${pick + 1} opened that picture on its own`);
   const r3 = await waitPlaying("one");
   step(/playing/.test(r3["r-play"]), `the single view plays: ${r3["r-play"]}`);
+  const a3 = await videoAdvancing();
+  step(a3.ok, `its video element: ${JSON.stringify(a3)}`);
   await page.locator("#v").scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
   await capture("one-picture");
@@ -160,11 +177,14 @@ try {
   // a real browser may restore the page from memory on Back, which fires no "load" event: wait for the
   // address, then for the readout, and record which kind of return it was
   await page.goBack({ waitUntil: "commit", timeout: 15000 });
-  await page.waitForURL(/all\.html/, { timeout: 15000 });
-  const how = await page.evaluate(() => (performance.getEntriesByType("navigation")[0] || {}).type).catch(() => "?");
-  step(/all\.html/.test(page.url()), `back returns to the combined view (navigation type: ${how})`);
+  // the address alone, polled (waitForURL also waits for a "load" event, which a page handed back from memory never fires)
+  for (let i = 0; i < 60 && !/all\.html/.test(page.url()); i++) await page.waitForTimeout(250);
   const r4 = await waitPlaying("all again");
+  const how = await page.evaluate(() => `${sessionStorage.getItem("walk-pageshow")}, then ${(performance.getEntriesByType("navigation")[0] || {}).type}`).catch(() => "?");
+  step(/all\.html/.test(page.url()), `back returns to the combined view (${how})`);
   step(/playing/.test(r4["r-play"]), `and it plays again: ${r4["r-play"]}`);
+  const a4 = await videoAdvancing();
+  step(a4.ok, `its video element after Back: ${JSON.stringify(a4)}`);
   await page.locator("#v").scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
   await capture("back-to-all");

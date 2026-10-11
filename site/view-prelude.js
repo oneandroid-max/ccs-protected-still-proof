@@ -77,6 +77,9 @@ function wireAll(meta) {
 }
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
+  // Back or Forward may hand a page back from the browser's memory, with its protected video paused or
+  // its frame released: load it afresh instead, so it plays again under the same rule from the start
+  window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
   (async () => {
     const ALL = window.__ccsMode === "all";
     const params = new URLSearchParams(location.search);
