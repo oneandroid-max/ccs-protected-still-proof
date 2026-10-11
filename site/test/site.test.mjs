@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { deriveKey, derivePhotoKey, exportKeyHex, importKeyHex, seal, open, sealText, openText, toBase64, fromBase64, randomBytes } from "../crypto.js";
 import { sliceRange, tileAt } from "../view-prelude.js";
 import { run as worker, readGallery, MAX_PHOTOS, mosaicLayout, MOSAIC_MAX } from "../worker.mjs";
-import { buildView } from "../../tools/build-site-view.mjs";
+import { buildView, stampVersions } from "../../tools/build-site-view.mjs";
 import { checkBoxes } from "../../service/lib/pipeline.mjs";
 import { derivePlayReadyTestKey } from "../../tools/playready-test-key.mjs";
 import { withOrientation } from "../../service/lib/exif.mjs";
@@ -60,7 +60,13 @@ test("the in-memory scheme honours byte ranges the way the player asks for them"
 
 test("site/view.html and site/all.html are generated from the route-1 page and are current", async () => {
   const index = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
-  const out = buildView(index), all = buildView(index, "all");
+  // every module URL carries the hash of the file it names, so a cached older copy never pairs with a newer page
+  const names = ["site/crypto.js", "site/app.js", "site/view-prelude.js", "site/index.html", "site/setup.html"];
+  const files = Object.fromEntries(await Promise.all(names.map(async (f) => [f, await fs.readFile(join(REPO, f), "utf8")])));
+  const { files: stamped, preludeVersion } = stampVersions(files);
+  for (const f of names) assert.equal(files[f], stamped[f], `${f} carries current version stamps: run node tools/build-site-view.mjs`);
+  for (const [f, re] of [["site/app.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/view-prelude.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/setup.html", /"\.\/crypto\.js\?v=[0-9a-f]{12}"[\s\S]*"\.\/app\.js\?v=[0-9a-f]{12}"/], ["site/index.html", /"\.\/app\.js\?v=[0-9a-f]{12}"/]]) assert.match(files[f], re, f + " imports by versioned URL");
+  const out = buildView(index, "one", preludeVersion), all = buildView(index, "all", preludeVersion);
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
   assert.equal(all, await fs.readFile(join(REPO, "site", "all.html"), "utf8"), "run node tools/build-site-view.mjs");
   for (const page of [out, all]) {
@@ -81,6 +87,7 @@ test("the combined view's layout: every picture whole and in proportion, inside 
     const what = `${n} ${set === "mixed" ? "mixed" : set.width + "x" + set.height}`;
     assert.ok(L.width <= MOSAIC_MAX.width && L.height <= MOSAIC_MAX.height && L.width % 2 === 0 && L.height % 2 === 0, `${what}: frame ${L.width}x${L.height}`);
     assert.ok(Math.ceil(L.width / 16) * Math.ceil(L.height / 16) <= 8160, `${what}: within a 1080p frame's macroblocks`);
+    assert.ok(L.width * L.height <= 2073600, `${what}: within the HD class's pixel count (shaka-packager's own ceiling, the class a single picture already has)`);
     assert.equal(L.tiles.length, n);
     assert.ok(L.cols * L.rows - n < L.cols, `${what}: no empty row`);
     L.tiles.forEach((t, i) => {
@@ -126,7 +133,9 @@ test("worker: bad payloads are refused; without a packager a picture fails visib
   const freshDel = await worker({ payload: { action: "delete", id: "b".repeat(24), key: await exportKeyHex(otherKey) }, siteDir, tools: noPackager });
   assert.equal(freshDel.status, "deleted");
   await assert.rejects(fs.stat(join(siteDir, "photos", "a".repeat(24))), "the old folder is gone");
-  assert.deepEqual(await readGallery(siteDir, otherKey), { photos: [] }, "the list now belongs to the new key");
+  const relisted = await readGallery(siteDir, otherKey);
+  assert.deepEqual(relisted.photos, [], "the list now belongs to the new key");
+  assert.ok(Date.now() - Date.parse(relisted.updatedAt) < 60000, "and records when it last changed (the page compares the combined view with it)");
   await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g))); // back to the first key for the rest of the test
   // an upload that is not a picture
   process.env.WORKER_BLOB_FILE = await sealedUpload(new TextEncoder().encode("not a picture"));

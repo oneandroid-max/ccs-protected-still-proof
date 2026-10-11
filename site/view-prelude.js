@@ -3,7 +3,7 @@
 // in-memory "mem://" scheme, so the public site only ever carries encrypted bytes and the player sees
 // the same files the proof page plays. Two pages use it: view.html (one picture, ?id=) and all.html
 // (window.__ccsMode = "all": the combined view of every ready picture, site/mosaic/, built by the job).
-import { importKeyHex, open, openText } from "./crypto.js";
+import { importKeyHex, open, openText } from "./crypto.js?v=aeb9bfd1fe59";
 
 const FILES = ["widevine.mpd", "video-widevine.mp4", "playready.mpd", "video-playready.mp4"];
 

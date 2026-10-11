@@ -45,6 +45,9 @@ const SITE_ALLOWED = {
 };
 const WALK_SAFEGUARDS = [
   [/^permissions:\s*\n\s+contents: read/m, "read-only by default (only the keep job may write)"],
+  [(t) => (t.match(/contents: write/g) || []).length === 1 && t.indexOf("contents: write") > t.indexOf("\n  keep:"), "write access only inside the keep job"],
+  [/run: node tools\/check-workflow-links\.mjs/, "the walk job runs this guard before anything else"],
+  [/path: \|\s*\n\s+walk\/\*\.sealed\.json\s*\n\s+walk\/\*-steps\.json\s*\n/, "the upload names only sealed captures and step records"],
   [/persist-credentials: false/, "checkout leaves no token behind"],
   [/ls walk\/clear-\*.*rm -rf walk; exit 1/, "a clear capture left behind deletes everything and fails"],
   [/find dl -type f ! -name '\*\.sealed\.json' ! -name '\*-steps\.json'/, "the keep job refuses any file that is not sealed or a step record"],
@@ -58,10 +61,17 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
   siteFiles++;
   if (!SITE_ALLOWED[file]) { bad.push(`${DIR}/${file}: touches the test site (the owner's own pictures) but is not in SITE_ALLOWED in tools/check-workflow-links.mjs`); continue; }
   if (file === "site-walk.yml") {
-    for (const [re, what] of WALK_SAFEGUARDS) if (!re.test(live)) bad.push(`${DIR}/${file}: the walk lost a safeguard: ${what}`);
+    for (const [re, what] of WALK_SAFEGUARDS) if (!(typeof re === "function" ? re(live) : re.test(live))) bad.push(`${DIR}/${file}: the walk lost a safeguard: ${what}`);
   } else if (BROWSER.test(live)) bad.push(`${DIR}/${file}: touches the test site and starts a browser or a screen capture (${live.match(BROWSER)[0]}); only the sealed walk may`);
 }
-const walker = readFileSync("tools/walk-site.mjs", "utf8");
+// code only: comments removed, so a comment cannot stand in for the real line
+const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/(^|[^:"'`])\/\/.*$/, "$1")).join("\n");
+// a tool that opens the LIVE site can be started from a workflow that never names it: only the walker may
+const LIVE_SITE = /github\.io\/ccs-protected-still-proof\/site/;
+for (const f of readdirSync("tools").filter((x) => /\.m?js$/.test(x))) {
+  if (f !== "walk-site.mjs" && LIVE_SITE.test(code(readFileSync(join("tools", f), "utf8")))) bad.push(`tools/${f}: opens the live test site; only tools/walk-site.mjs (sealed captures) may`);
+}
+const walker = code(readFileSync("tools/walk-site.mjs", "utf8"));
 const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicEncrypt(");
 if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
 

@@ -4,7 +4,7 @@
 // password key, which only unseals the access key and never leaves this browser, and the picture key
 // (derived one-way from it), which encrypts uploads and outputs and rides each job request to GitHub.
 // Nothing here talks to any server but GitHub's own API and this site.
-import { deriveKey, derivePhotoKey, exportKeyHex, importKeyHex, seal, openText, toBase64, fromBase64, toHex, randomBytes } from "./crypto.js";
+import { deriveKey, derivePhotoKey, exportKeyHex, importKeyHex, seal, openText, toBase64, fromBase64, toHex, randomBytes } from "./crypto.js?v=aeb9bfd1fe59";
 
 export const REPO = "oneandroid-max/ccs-protected-still-proof";
 export const API = "https://api.github.com";
@@ -123,14 +123,14 @@ export async function remove(st, id) {
 }
 
 // The combined view (every ready picture in one protected video, site/mosaic/, made by the job after
-// each change): its sealed layout as published on the live site, or null when there is none yet or it
-// was made under another password.
+// each change): its sealed layout as published on the live site; null when there is none yet or it was
+// made under another password; undefined when the site could not be reached (the page keeps what it had).
 export async function mosaicMeta(st) {
-  try {
-    const r = await fetch(`mosaic/meta.json.enc?v=${Date.now()}`, { cache: "no-store" });
-    if (!r.ok) return null;
-    return JSON.parse(await openText(await importKeyHex(st.photoKeyHex), new Uint8Array(await r.arrayBuffer())));
-  } catch { return null; } // a network error, or another password's view: the page treats it as not there yet
+  let r;
+  try { r = await fetch(`mosaic/meta.json.enc?v=${Date.now()}`, { cache: "no-store" }); } catch { return undefined; }
+  if (r.status === 404) return null;
+  if (!r.ok) return undefined;
+  try { return JSON.parse(await openText(await importKeyHex(st.photoKeyHex), new Uint8Array(await r.arrayBuffer()))); } catch { return null; }
 }
 // Whether the combined view holds exactly the pictures that are ready now (left-out ones count as held).
 export function mosaicCurrent(meta, readyIds) {

@@ -104,3 +104,28 @@ test("a combined-view job whose push loses a race refreshes, runs again and push
   const files = remoteFiles(d);
   assert.ok(files.includes("site/mosaic/meta.json.enc") && files.includes("site/other.txt"), files.join(" "));
 });
+
+test("the combined-view job runs the worker ONLY in its combined-view mode, and commits only site/mosaic", async () => {
+  const lines = WF.split("\n");
+  const at = lines.findIndex((l) => l.trim() === "- name: Make the combined view on the current tip of main and commit; refresh and redo if the push races");
+  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
+  assert.ok(lines.slice(at, runAt).some((l) => l.trim() === "WORKER_ACTION: mosaic"), "the step's env sets WORKER_ACTION: mosaic");
+  assert.ok(!/git add -A site\s*$/m.test(MOSAIC) && /git add -A site\/mosaic/.test(MOSAIC), "the job adds site/mosaic only");
+  // a job that (wrongly) touched a picture folder still commits nothing but the combined view
+  const d = await scratch();
+  const r = runJob(d, MOSAIC, { STANDIN: "photo", ID: "zzz" });
+  assert.equal(r.code, 0, r.out); assert.match(r.out, /nothing to commit/);
+  assert.ok(!remoteFiles(d).some((f) => f.startsWith("site/photos/")));
+});
+
+test("when the last picture goes, the combined view's committed folder is removed from the remote", async () => {
+  const d = await scratch();
+  assert.equal(runJob(d, MOSAIC, { STANDIN: "mosaic" }).code, 0);
+  assert.ok(remoteFiles(d).includes("site/mosaic/meta.json.enc"));
+  // the stand-in now writes nothing; the real worker removes the folder first, so the stand-in does too
+  await fs.writeFile(join(d, "remove.mjs"), 'import { promises as fs } from "node:fs"; await fs.rm("site/mosaic", { recursive: true, force: true });');
+  const script = MOSAIC.replace("node site/worker.mjs", `node ${join(d, "remove.mjs")}`);
+  const r = runJob(d, script, { STANDIN: "none" });
+  assert.equal(r.code, 0, r.out); assert.match(r.out, /pushed/);
+  assert.ok(!remoteFiles(d).some((f) => f.startsWith("site/mosaic/")), "the folder is gone from the remote");
+});

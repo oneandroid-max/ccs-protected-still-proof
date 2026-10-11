@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   photo:
-    if: github.event.client_payload.action == 'add' || github.event.client_payload.action == 'delete'
+    if: github.event.client_payload.action != 'mosaic'   # an unknown action fails visibly in the worker
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -86,7 +86,9 @@ jobs:
           for i in 1 2 3 4 5; do
             git fetch -q origin main && git reset -q --hard origin/main
             node site/worker.mjs
-            git add -A site   # the worker touches only site/mosaic here; naming that folder fails when it never existed
+            # only the combined view is ever committed here, even if this job ran the wrong path; the folder
+            # is named only when it exists or was committed before (naming a folder that never existed fails)
+            if [ -e site/mosaic ] || git ls-files --error-unmatch site/mosaic > /dev/null 2>&1; then git add -A site/mosaic; fi
             if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
             git commit -q -m "site: combined view"
             if git push -q origin HEAD:main; then echo "pushed"; exit 0; fi

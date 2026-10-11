@@ -44,13 +44,13 @@
 </section>
 
 <script type="module">
-import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js?v=2026-10-11.2"; // versioned: a cached app.js from before a change must not pair with this page
+import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js?v=89fabf9a7fa1"; // versioned: a cached app.js from before a change must not pair with this page
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
 const ACTIONS = "https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml";
-let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "";
+let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, askError = "", askedAgainAt = 0;
 const MOSAIC_GIVE_UP = 20 * 60 * 1000; // a combined view that has not caught up in twenty minutes is reported, not waited on
 const then = new URLSearchParams(location.search).get("then");
 
@@ -80,7 +80,8 @@ async function load() {
     render(g.photos, pend, pub);
     // the combined view: every ready, published picture in one protected video
     const readyIds = g.photos.filter((p) => p.status === "ready" && pub[p.id] && !deleting.has(p.id)).map((p) => p.id);
-    const meta = readyIds.length ? await mosaicMeta(st) : null;
+    let meta = readyIds.length ? await mosaicMeta(st) : null;
+    if (meta === undefined) meta = lastMeta; else lastMeta = meta; // the site could not be reached: keep what was known
     const current = mosaicCurrent(meta, readyIds);
     // the stale clock restarts whenever the set of ready pictures changes
     const key = readyIds.join(",");
@@ -88,19 +89,21 @@ async function load() {
     if (!readyIds.length || current) staleSince = 0; else if (!staleSince) staleSince = Date.now();
     const staleFor = staleSince ? Date.now() - staleSince : 0;
     // The job remakes it after every change on its own. The page asks only when nothing of this tab's is
-    // still on its way, the newest picture has been ready three minutes (the job's own run had its turn),
-    // and either there is none, it is over five minutes old, or it has stayed out of date three minutes
-    // here; never more than once in eight minutes, and not after the twenty-minute give-up.
+    // still on its way, the gallery's last change is three minutes old (the job's own run had its turn),
+    // and either there is none, it was made before that change, or it has stayed out of date three
+    // minutes here; never more than once in eight minutes, and not after the twenty-minute give-up.
+    // (The gallery records its last change from the job's clock; lists from before that use the newest picture.)
     const newestReady = Math.max(0, ...g.photos.filter((p) => readyIds.includes(p.id)).map((p) => Date.parse(p.readyAt) || 0));
+    const changedAt = Date.parse(g.updatedAt) || newestReady;
     const builtAt = meta && Date.parse(meta.builtAt) || 0;
-    let asked = "";
     if (readyIds.length && !current && pend.length === 0 && staleFor <= MOSAIC_GIVE_UP && Date.now() - mosaicAskedAt() > MOSAIC_ASK_GAP
-      && Date.now() - newestReady > 3 * 60 * 1000 && (!meta || Date.now() - builtAt > 5 * 60 * 1000 || staleFor > 3 * 60 * 1000)) {
-      try { await askMosaic(st); } catch (err) { asked = err.message; }
+      && Date.now() - changedAt > 3 * 60 * 1000 && (!meta || builtAt < changedAt || staleFor > 3 * 60 * 1000)) {
+      try { await askMosaic(st); askError = ""; } catch (err) { askError = err.message; } // a refusal stays shown until a later ask succeeds
     }
-    renderAll(readyIds, meta, current, staleFor > MOSAIC_GIVE_UP, asked);
+    renderAll(readyIds, meta, current, staleFor > MOSAIC_GIVE_UP, askError);
     const waiting = pend.length > 0 || g.photos.some((p) => p.status === "ready" && !pub[p.id] && !deleting.has(p.id))
-      || (readyIds.length > 0 && !current && staleFor <= MOSAIC_GIVE_UP);
+      || (readyIds.length > 0 && !current && staleFor <= MOSAIC_GIVE_UP)
+      || (askedAgainAt && Date.now() - askedAgainAt < 10 * 60 * 1000 && !(meta && Date.parse(meta.builtAt) > askedAgainAt));
     if (waiting) timer = setTimeout(load, 6000);
   } catch (err) {
     $("list").innerHTML = '<p class="bad">' + esc(err.message) + "</p>";
@@ -120,10 +123,11 @@ function renderAll(readyIds, meta, current, gaveUp, askError) {
   else if (meta) html += '<div class="muted">The combined view was made for an earlier set (' + k + " picture" + (k === 1 ? "" : "s") + "); it is being remade with your " + n + " (about two minutes)…</div>" + open("Open the earlier one (" + k + ")");
   else html += '<div class="muted">Combining your ' + n + " picture" + (n === 1 ? "" : "s") + " into one protected view (about two minutes)…</div>";
   if (gaveUp && !(current && meta.skipped && meta.skipped.length)) html += '<div class="warn">The combined view has not caught up after twenty minutes — <a href="' + ACTIONS + '">see the job</a> <button id="ask-all">Ask again</button></div>';
+  if (askedAgainAt && Date.now() - askedAgainAt < 10 * 60 * 1000 && !(meta && Date.parse(meta.builtAt) > askedAgainAt)) html += '<div class="muted">Asked again at ' + new Date(askedAgainAt).toTimeString().slice(0, 5) + "; the combined view is being remade (about two minutes)…</div>";
   if (askError) html += '<div class="bad">GitHub did not take the request: ' + esc(askError) + "</div>";
   box.innerHTML = html;
   const again = $("ask-all");
-  if (again) again.addEventListener("click", async () => { try { await askMosaic(st); staleSince = Date.now(); } catch (err) { alert(err.message); } load(); });
+  if (again) again.addEventListener("click", async () => { try { await askMosaic(st); askError = ""; askedAgainAt = Date.now(); staleSince = Date.now(); } catch (err) { askError = err.message; } load(); });
 }
 
 function render(photos, pend, pub) {

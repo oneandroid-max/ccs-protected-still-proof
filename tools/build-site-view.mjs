@@ -3,18 +3,32 @@
 // (site/view-prelude.js). site/view.html shows one picture; site/all.html shows the combined view of
 // every ready picture (one protected video, built by the site's job). Every substitution must match
 // exactly once or this fails.
-//   node tools/build-site-view.mjs            writes site/view.html and site/all.html
-//   node tools/build-site-view.mjs --check    exits 1 if either is stale
+// It also STAMPS the site's module URLs with a hash of each file's content (crypto.js inside app.js,
+// view-prelude.js and setup.html; app.js inside index.html and setup.html; view-prelude.js inside the two pages), so a
+// browser holding an older copy in its cache (Pages caches for ten minutes) never pairs it with a newer
+// page, and nobody has to remember to bump a version by hand.
+//   node tools/build-site-view.mjs            writes the stamped files and both pages
+//   node tools/build-site-view.mjs --check    exits 1 if any of them is stale
 import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
 const SRC = REPO + "web/research/drm/index.html";
-const OUTS = { one: REPO + "site/view.html", all: REPO + "site/all.html" };
+const OUTS = { one: "site/view.html", all: "site/all.html" };
+const STAMPED = ["site/crypto.js", "site/app.js", "site/view-prelude.js", "site/index.html", "site/setup.html"];
 
-// Bumped whenever view-prelude.js changes, so a browser holding the old one in its cache (Pages caches
-// for ten minutes) never pairs it with a new page.
-export const PRELUDE_VERSION = "2026-10-11.2";
+const short = (t) => createHash("sha256").update(t).digest("hex").slice(0, 12);
+const stamp = (text, file, version) => text.replace(new RegExp(`"\\./${file.replace(".", "\\.")}(\\?v=[0-9a-z.-]+)?"`, "g"), `"./${file}?v=${version}"`);
+// files: { path: text } for STAMPED. Returns the stamped texts and the prelude's version.
+export function stampVersions(files) {
+  const out = { ...files };
+  const c = short(out["site/crypto.js"]);
+  for (const f of ["site/app.js", "site/view-prelude.js", "site/setup.html"]) out[f] = stamp(out[f], "crypto.js", c);
+  const a = short(out["site/app.js"]);
+  for (const f of ["site/index.html", "site/setup.html"]) out[f] = stamp(out[f], "app.js", a);
+  return { files: out, preludeVersion: short(out["site/view-prelude.js"]) };
+}
 
 function once(html, from, to, label) {
   const i = html.indexOf(from);
@@ -22,7 +36,7 @@ function once(html, from, to, label) {
   return html.slice(0, i) + to + html.slice(i + from.length);
 }
 
-export function buildView(indexHtml, mode = "one") {
+export function buildView(indexHtml, mode = "one", preludeVersion = "0") {
   if (mode !== "one" && mode !== "all") throw new Error(`unknown view mode ${mode}`);
   const ALL = mode === "all";
   let t = indexHtml;
@@ -31,7 +45,7 @@ export function buildView(indexHtml, mode = "one") {
   // the player library's tag carries its integrity hash (read from the CDN on a runner, live-check.yml)
   const PLAYER = '<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>';
   t = once(t, PLAYER,
-    '<script>' + (ALL ? 'window.__ccsMode = "all"; ' : "") + 'window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js?v=' + PRELUDE_VERSION + '"></script>', "player script");
+    '<script>' + (ALL ? 'window.__ccsMode = "all"; ' : "") + 'window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>\n' + PLAYER + '\n<script type="module" src="view-prelude.js?v=' + preludeVersion + '"></script>', "player script");
   t = once(t, "<script>\n(async () => {", '<script>\n(async () => {\n  const CTX = await window.__ccsReady; // decrypted in memory by view-prelude.js\n  document.getElementById("title").textContent = CTX.title;', "page script");
   t = once(t, 'name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"',
     'name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid', "photo clip");
@@ -44,9 +58,12 @@ export function buildView(indexHtml, mode = "one") {
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const src = readFileSync(SRC, "utf8");
+  const before = Object.fromEntries(STAMPED.map((f) => [f, readFileSync(REPO + f, "utf8")]));
+  const { files, preludeVersion } = stampVersions(before);
+  const outputs = { ...files, ...Object.fromEntries(Object.entries(OUTS).map(([mode, file]) => [file, buildView(src, mode, preludeVersion)])) };
   let stale = 0;
-  for (const [mode, file] of Object.entries(OUTS)) {
-    const out = buildView(src, mode);
+  for (const [rel, out] of Object.entries(outputs)) {
+    const file = REPO + rel;
     if (process.argv.includes("--check")) {
       let cur = ""; try { cur = readFileSync(file, "utf8"); } catch {}
       if (cur !== out) { console.error(`${file} is stale: run node tools/build-site-view.mjs`); stale++; }

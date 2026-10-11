@@ -65,6 +65,13 @@ const ID2 = "fedcba9876543210fedcba98";
 await fs.mkdir(join(www, "site", "photos", ID2), { recursive: true });
 await fs.writeFile(join(www, "site", "photos", ID2, "widevine.mpd.enc"), await seal(PHOTO, new Uint8Array(10)));
 const twoSealed = await sealText(PHOTO, JSON.stringify({ photos: [...JSON.parse(galleryJson).photos, { id: ID2, name: "second.jpg", bytes: 1000, width: 720, height: 960, status: "ready", readyAt: HOUR_AGO }] }));
+// a third ready picture (the set changing while a page is open), and a gallery whose only picture was ready just now
+const ID3 = "abcabcabcabcabcabcabcabc";
+await fs.mkdir(join(www, "site", "photos", ID3), { recursive: true });
+await fs.writeFile(join(www, "site", "photos", ID3, "widevine.mpd.enc"), await seal(PHOTO, new Uint8Array(10)));
+const threeSealed = await sealText(PHOTO, JSON.stringify({ photos: [...JSON.parse(galleryJson).photos, { id: ID2, name: "second.jpg", status: "ready", readyAt: HOUR_AGO }, { id: ID3, name: "third.jpg", status: "ready", readyAt: HOUR_AGO }] }));
+const JUST_NOW = new Date().toISOString();
+const freshSealed = await sealText(PHOTO, JSON.stringify({ updatedAt: JUST_NOW, photos: [{ ...JSON.parse(galleryJson).photos[0], readyAt: JUST_NOW }] }));
 const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some other password here", cfg.salt, 1000)), galleryJson);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
@@ -99,13 +106,14 @@ async function mockedContext() {
     const req = route.request(); const u = new URL(req.url()); const auth = req.headers()["authorization"];
     if (auth !== `Bearer ${TOKEN}`) return route.fulfill({ status: 401, body: "{}" });
     if (req.method() === "GET" && u.pathname === `/repos/${REPO}`) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ permissions: { push: true } }) });
-    if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/gallery.json.enc`) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from(api.galleryMode === "foreign" ? foreignSealed : api.galleryMode === "two" ? twoSealed : gallerySealed) });
+    if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/gallery.json.enc`) return route.fulfill({ status: 200, contentType: "application/octet-stream", body: Buffer.from({ foreign: foreignSealed, two: twoSealed, three: threeSealed, fresh: freshSealed }[api.galleryMode] || gallerySealed) });
     if (req.method() === "GET" && u.pathname === `/repos/${REPO}/contents/site/config.json`) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ sha: "deadbeef", content: Buffer.from(JSON.stringify({ repo: REPO, salt: REPO_SALT, iterations: 1000, tokenEnc: "x" })).toString("base64") }) });
     if (req.method() === "POST" && u.pathname === `/repos/${REPO}/git/blobs`) { api.blobs.push(JSON.parse(req.postData())); return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ sha: "b".repeat(40) }) }); }
     if (req.method() === "POST" && u.pathname === `/repos/${REPO}/dispatches`) { api.dispatches.push(JSON.parse(req.postData())); return route.fulfill(api.refuseDispatch ? { status: 502, body: "{}" } : { status: 204, body: "" }); }
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
+  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue());
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
@@ -223,7 +231,45 @@ try {
   await p4.clock.fastForward("20:00");
   check(await until(/not caught up after twenty minutes/, 15000) && (await p4.$("#ask-all")) !== null, "after twenty minutes it says so, with the job link and Ask again: " + (await allText()));
   check(asks() === before + 1, "and it does not keep asking after giving up");
-  await sctx.close(); api.galleryMode = "normal";
+  await sctx.close();
+  // the three timing rules, each on its own fresh page and fake clock
+  async function clockPage(mode) {
+    api.galleryMode = mode;
+    const c = await mockedContext(); const pg = await c.newPage();
+    await pg.clock.install(); await pg.goto(BASE + "index.html");
+    await pg.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
+    await pg.goto(BASE + "index.html");
+    await pg.waitForFunction(() => !document.getElementById("all").hidden && document.getElementById("all").textContent.length > 0, null, { timeout: 20000 });
+    await new Promise((r) => setTimeout(r, 1500));
+    return { c, pg };
+  }
+  const settle = async (pg, t) => { await pg.clock.fastForward(t); await new Promise((r) => setTimeout(r, 2500)); };
+  // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
+  api.noMosaic = true;
+  let n0 = asks(), { c: ca, pg: pa } = await clockPage("fresh");
+  check(asks() === n0 && /Combining your 1 picture/.test(await pa.textContent("#all")), "a picture ready just now, no combined view: no request at once (the job's own run is on its way)");
+  await settle(pa, "02:00");
+  check(asks() === n0, "still none two minutes later");
+  await settle(pa, "01:30");
+  check(asks() === n0 + 1, "three minutes after the last change, the page asks");
+  await ca.close(); api.noMosaic = false;
+  // (b) a view made BEFORE the last change (made two hours ago, pictures ready an hour ago): ask at once
+  await publishMosaic(new Date(Date.now() - 2 * 3600 * 1000).toISOString());
+  n0 = asks(); const { c: cb } = await clockPage("two");
+  check(asks() === n0 + 1, "a view made before the last change is asked for at once");
+  await cb.close();
+  // (c) a view made after the last change but out of date here: the three-minute wait restarts when the set changes
+  await publishMosaic();
+  n0 = asks(); const { c: cc, pg: pc } = await clockPage("two");
+  await settle(pc, "02:00");
+  check(asks() === n0, "out of date for two minutes: no request yet");
+  api.galleryMode = "three";
+  await settle(pc, "02:00");
+  check(asks() === n0 && /your 3/.test(await pc.textContent("#all")), "the set changed (a third picture): the wait starts again, still no request after four minutes in all");
+  // the page saw the change at its refresh at four minutes, so its own three minutes run from there
+  await settle(pc, "03:30");
+  check(asks() === n0 + 1, "three minutes after the page saw the set change, it asks");
+  await cc.close(); api.galleryMode = "normal";
   // 5. the view without a session goes to the password; an expired session too
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);

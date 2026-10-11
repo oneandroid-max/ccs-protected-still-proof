@@ -32,6 +32,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { persist-credentials: false }
+      - name: The guard first (tools/check-workflow-links.mjs), so a walk that lost a safeguard never starts
+        shell: bash
+        run: node tools/check-workflow-links.mjs
       - name: Playwright's driver only (no browser download; the walk drives the installed browser)
         shell: bash
         run: |
@@ -63,7 +66,13 @@ jobs:
           if ls walk/clear-* > /dev/null 2>&1; then echo "a clear capture was left behind: refusing to keep anything"; rm -rf walk; exit 1; fi
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: "walk-${{ matrix.browser }}", path: walk/, if-no-files-found: ignore }
+        with:
+          name: "walk-${{ matrix.browser }}"
+          # only sealed captures and step records, by name: a clear file cannot be uploaded in any step order
+          path: |
+            walk/*.sealed.json
+            walk/*-steps.json
+          if-no-files-found: ignore
 
   keep:
     needs: walk

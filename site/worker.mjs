@@ -47,6 +47,7 @@ async function fetchBlob(repo, sha, token) {
 // 1080p, which a device that plays one picture plays too. Of the grids that fit, the one whose cells
 // come out largest on a phone screen held upright (about 400×700 points) wins; then the sharper one.
 export const MOSAIC_MAX = { width: 1080, height: 1920 };
+export const MOSAIC_VERSION = 1; // bumped when the layout or rendering changes, so an older combined view is remade
 export function mosaicLayout(sizes, pad = 6) {
   const n = sizes.length;
   if (!n) throw new Error("no pictures to combine");
@@ -96,7 +97,7 @@ export async function buildMosaic({ siteDir, key, tools }) {
   // combined view already holds exactly these pictures, in this order, with none left out, keep it
   try {
     const cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc")))));
-    if (ready.length && !(cur.skipped || []).length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id))) {
+    if (ready.length && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id))) {
       log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
       return { status: "current", count: ready.length };
     }
@@ -140,7 +141,7 @@ export async function buildMosaic({ siteDir, key, tools }) {
     if (!wv.ok || !pr.ok || !pr.kids.includes(ids.prKid)) throw new Error("a packaged file of the combined view is missing its sample-encryption boxes");
     await fs.mkdir(out, { recursive: true });
     for (const f of OUTPUTS) await fs.writeFile(join(out, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
-    const meta = { kind: "mosaic", width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
+    const meta = { kind: "mosaic", version: MOSAIC_VERSION, width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
       ids: used.map((u) => u.id), tiles: used.map((u, i) => ({ id: u.id, name: u.name, ...layout.tiles[i] })), skipped };
     await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(meta)));
     log(`combined view ready: ${used.length} picture(s) in ${layout.cols}x${layout.rows}, ${layout.width}x${layout.height}${skipped.length ? `, ${skipped.length} left out` : ""}`);
@@ -171,6 +172,7 @@ export async function run({ payload, siteDir, repo, token, tools, action }) {
 
   if (act === "delete") {
     gallery.photos = gallery.photos.filter((x) => x.id !== p.id);
+    gallery.updatedAt = new Date().toISOString(); // the page compares the combined view with this
     await fs.rm(dir, { recursive: true, force: true });
     await writeGallery(siteDir, key, gallery);
     log(`deleted ${p.id}`);
@@ -210,6 +212,7 @@ export async function run({ payload, siteDir, repo, token, tools, action }) {
     await fs.rm(work, { recursive: true, force: true }); // the clear picture is gone with the runner
   }
   gallery.photos.push(entry);
+  gallery.updatedAt = new Date().toISOString(); // the page compares the combined view with this
   await writeGallery(siteDir, key, gallery);
   return { status: entry.status, error: entry.error };
 }
