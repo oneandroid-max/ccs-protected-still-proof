@@ -57,7 +57,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 03:25 UTC — hardware only; errors shown";
+  const PAGE_VERSION = "2026-10-11 03:35 UTC — hardware only (test switch: ?levels=software)";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -70,8 +70,14 @@
   //   Widevine HW_SECURE_ALL / HW_SECURE_DECODE (HW_SECURE_CRYPTO is excluded: it decodes into
   //   ordinary memory). PlayReady SL3000 (hardware), through the "recommendation" key system,
   //   because plain com.microsoft.playready ignores the requested level and stays at SL2000.
-  const HW_WIDEVINE = ["HW_SECURE_ALL", "HW_SECURE_DECODE"];
-  const HW_PLAYREADY = ["3000"];
+  // TEST SWITCH, off unless the link says ?levels=software: asks for SOFTWARE levels only, to measure
+  // whether this browser keeps software-decrypted video out of screenshots. The hold-back rule is
+  // the default and is unchanged; this switch exists only to answer that one question.
+  const TEST_SOFTWARE = new URLSearchParams(location.search).get("levels") === "software";
+  const HW_WIDEVINE = TEST_SOFTWARE ? ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] : ["HW_SECURE_ALL", "HW_SECURE_DECODE"];
+  const HW_PLAYREADY = TEST_SOFTWARE ? ["2000"] : ["3000"];
+  const LEVEL_WORD = TEST_SOFTWARE ? "software" : "hardware";
+  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the photo plays. Normal links hold the photo back here."; document.querySelector("h1").after(b); }
   // How "hardware" is known: the browser can only grant a level that was asked for, and this page
   // asks for hardware levels only, so any grant at all is a hardware grant. (The player library's
   // own drmInfo().videoRobustness is NOT the grant — it echoes the first level requested — so this
@@ -99,7 +105,7 @@
     if (which === "playready") {
       const ks = "com.microsoft.playready.recommendation";
       cfg.drm.keySystemsMapping["com.microsoft.playready"] = ks;
-      cfg.drm.servers[ks] = "https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:3000)";
+      cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:${TEST_SOFTWARE ? 2000 : 3000})`;
       cfg.drm.advanced[ks] = { videoRobustness: HW_PLAYREADY };
     } else {
       cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
@@ -113,7 +119,7 @@
     let lastError = null;
     player.addEventListener("error", (e) => { lastError = errText(e); log(`${which}: player error ${lastError}`); });
     const levels = which === "playready" ? HW_PLAYREADY : HW_WIDEVINE;
-    log(`${which}: asking for hardware protection only (${levels.join(", ")}) …`);
+    log(`${which}: asking for ${LEVEL_WORD} protection only (${levels.join(", ")}) …`);
     try {
       await player.load(manifest);
     } catch (e) {
@@ -124,8 +130,8 @@
     const info = player.drmInfo();
     const ks = info ? info.keySystem : "none";
     set("r-ks", ks);
-    set("r-granted", `hardware — the browser accepted a hardware-only request (${levels.join(" or ")})`, "ok");
-    log(`${which}: the browser accepted the hardware-only request; waiting for the licence and the first frame …`);
+    set("r-granted", `${LEVEL_WORD} — the browser accepted a ${LEVEL_WORD}-only request (${levels.join(" or ")})`, TEST_SOFTWARE ? "bad" : "ok");
+    log(`${which}: the browser accepted the ${LEVEL_WORD}-only request; waiting for the licence and the first frame …`);
     // Count it as shown only when the video is really playing (licence arrived, frames decoded).
     video.style.visibility = "visible";
     const started = await new Promise((resolve) => {
@@ -142,7 +148,7 @@
       return "failed-after-grant";
     }
     msg.hidden = true; window.__photoShown = true;
-    set("r-expect", "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one.", "ok");
+    set("r-expect", TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots" : "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one.", TEST_SOFTWARE ? "bad" : "ok");
     const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
