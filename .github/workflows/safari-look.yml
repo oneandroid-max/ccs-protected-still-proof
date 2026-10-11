@@ -5,9 +5,7 @@
 name: safari look
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/safari-look.yml"]
+  # started by hand or through the API only, so editing this file does not re-run every measurement
   workflow_dispatch:
 
 permissions:
@@ -31,7 +29,10 @@ jobs:
           done
           echo "the live page never showed $EXPECT_VERSION"; exit 1
 
+      # Run 38110969049: a freshly booted simulator timed out opening the link (POSIX error 60); the link
+      # is now opened again once after a pause, and a failure here no longer stops the Mac step or the save.
       - name: iPhone simulator, Safari — open the link and screenshot
+        continue-on-error: true
         run: |
           mkdir -p web/research/drm/results
           UDID=$(xcrun simctl list devices available -j | python3 apple/pick-simulator.py)
@@ -39,11 +40,12 @@ jobs:
           xcrun simctl list devices available | awk -v u="$UDID" 'index($0,u){print}'
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b > /dev/null
-          xcrun simctl openurl "$UDID" "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}#readout"
+          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}#readout"
+          xcrun simctl openurl "$UDID" "$U" || { echo "opening timed out; trying once more"; sleep 20; xcrun simctl openurl "$UDID" "$U"; }
           sleep 40
-          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari.png
+          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari.png && echo iphone-safari.png >> "$RUNNER_TEMP/produced.txt"
           sleep 20
-          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari-later.png
+          xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari-later.png && echo iphone-safari-later.png >> "$RUNNER_TEMP/produced.txt"
           ls -l web/research/drm/results/
 
       # Run 38110515494 lost the iPhone screenshots when this step failed with "could not create image
@@ -56,15 +58,20 @@ jobs:
           sleep 40
           caffeinate -u -t 2
           screencapture -x web/research/drm/results/mac-safari.png || { sleep 5; caffeinate -u -t 2; screencapture -x web/research/drm/results/mac-safari.png; }
+          echo mac-safari.png >> "$RUNNER_TEMP/produced.txt"
           ls -l web/research/drm/results/
 
+      # The record names only the screenshots THIS run produced (run 38110969049 stamped a fresh record
+      # beside screenshots from an earlier run); with none, nothing is saved and the run fails.
       - name: Save the screenshots
         if: always()
         run: |
-          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/safari-look.json
+          test -s "$RUNNER_TEMP/produced.txt" || { echo "no screenshot was produced in this run: nothing saved"; exit 1; }
+          FILES=$(sed 's/.*/"&"/' "$RUNNER_TEMP/produced.txt" | paste -sd, -)
+          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s","content":"test card","files":[%s]}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$FILES" > web/research/drm/results/safari-look.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add web/research/drm/results/
+          git add web/research/drm/results/safari-look.json $(sed 's#^#web/research/drm/results/#' "$RUNNER_TEMP/produced.txt")
           if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
           git commit -m "research(drm): Safari look — iPhone simulator and Mac screenshots (run ${{ github.run_number }})"
           git pull --rebase origin main

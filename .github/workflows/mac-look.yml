@@ -8,9 +8,7 @@
 name: mac look
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/mac-look.yml"]
+  # started by hand or through the API only, so editing this file does not re-run every measurement
   workflow_dispatch:
 
 permissions:
@@ -103,7 +101,10 @@ jobs:
         run: |
           mkdir -p web/research/drm/results
           find dl -name '*.png' -exec cp {} web/research/drm/results/ \;
-          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s","content":"test card"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/mac-look.json
+          # the record names only the screenshots THIS run produced; with none, nothing is saved
+          FILES=$(find dl -name '*.png' -exec basename {} \; | sort | sed 's/.*/"&"/' | paste -sd, -)
+          [ -n "$FILES" ] || { echo "no screenshot was produced in this run: nothing saved"; exit 1; }
+          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s","content":"test card","files":[%s]}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$FILES" > web/research/drm/results/mac-look.json
           ls -l web/research/drm/results/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
