@@ -15,6 +15,7 @@ import { checkFairPlay, checkFairPlayBytes, verifyFairPlayBytes, readTrack, pack
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
 import { run as worker, readGallery, fairPlayCurrent, TOKEN_RENEW_DAYS } from "../worker.mjs";
+import { mosaicCurrent } from "../app.js";
 import { run as exec, redactKeys } from "../../service/lib/util.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
@@ -125,6 +126,9 @@ test("the token check accepts only Axinom's answers about the request, never one
   // each try is cut at its time limit (a server that never answers), and a 429 or a 500 is tried again, never taken
   // as an answer
   assert.equal(TOKEN_CHECK_TIMEOUT_MS, 20000);
+  const limits = [];
+  await checkTokenWithAxinom("h.p.s", OWN_LICENSE, reply("Invalid license request. Supported versions are 1, 2 or 3, but used version is 0."), { signalFor: (ms) => { limits.push(ms); return AbortSignal.timeout(ms); } });
+  assert.deepEqual(limits, [20000], "each try, by default, is limited to 20 seconds");
   let started = 0; const t0 = Date.now();
   const silent = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, (url, init) => { started++; return new Promise((_, reject) => { const hold = setTimeout(() => {}, 10000); init.signal.addEventListener("abort", () => { clearTimeout(hold); reject(init.signal.reason); }); }); } /* a silent server holds its connection open; here a timer does */, { pause: async () => {}, timeoutMs: 60 });
   const took = Date.now() - t0;
@@ -738,6 +742,13 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   // a view of other pictures (C added) is rebuilt: its form is new; Axinom refusing the key, the new view has none
   const rebuilt = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: refuse, com: value2 });
   assert.equal(rebuilt.status, "ready", JSON.stringify(rebuilt)); assert.equal((await mosaicMeta()).fairplay, null, "refused: no form for the new view");
+  // asked again with Axinom refusing: a view of the same pictures, with no form, is kept as it is (nothing rebuilt)
+  const refusedAgain = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: refuse, com: value2 });
+  assert.deepEqual([refusedAgain.status, refusedAgain.fairplay, (await mosaicMeta()).fairplay], ["current", "kept", null], JSON.stringify(refusedAgain));
+  // asked again while Axinom is out of reach: its first form is made from the view's own output (it replaces
+  // nothing), recorded as made without Axinom's acceptance
+  const firstForm = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: unreachable, com: value2 });
+  assert.deepEqual([firstForm.status, firstForm.fairplay, (await mosaicMeta()).fairplay.verified], ["current", "renewed", false], JSON.stringify(firstForm));
   // the worker's own default question (the one its command and the backfill's use) goes to Axinom, here a
   // stand-in fetch: refused there, a new picture gets no form
   const realFetch = globalThis.fetch, sent = [], D = "d".repeat(24);
@@ -746,6 +757,10 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   finally { globalThis.fetch = realFetch; }
   assert.deepEqual(sent, [AXINOM_FAIRPLAY_LICENSE], "Axinom asked once, at the key's address");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === D).fairplay, false, "refused by the default question: no form");
+  // a view of other pictures (D added) rebuilt while Axinom is out of reach: its new form recorded as made without
+  // Axinom's acceptance (its old one goes with its old content)
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: unreachable, com: value2 })).status, "ready");
+  assert.equal((await mosaicMeta()).fairplay.verified, false, "rebuilt while Axinom could not be asked: unverified");
   // a question that cannot even be put (it throws), and a key that cannot make a token (the worker's own default
   // question, which fails before sending anything): no new form, said plainly, the picture readied all the same
   for (const [id, checkKey, comX, re] of [
@@ -764,28 +779,54 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   const metaC = await metaOf(C);
   assert.equal(metaC.fairplay.verified, false, "C's form was made while Axinom could not be asked");
   assert.equal(await fairPlayCurrent(join(siteDir, "photos", C), metaC.fairplay, COM), false, "so it is not current");
-  // THE RULE, on the combined view: a rebuild of the SAME pictures (here: one left out, tried again) would delete
-  // its working form; refused, or Axinom out of reach, the view is kept as it is; accepted, it is rebuilt
+  // THE RULE on the combined view, with a picture REALLY left out: its key id damaged in the list, as
+  // site/test/site.test.mjs does, so the view draws the others and names it as left out (the ninth review: the test
+  // before this one faked that state, and the code it passed failed the real case)
+  const F = "f".repeat(24), readyIds = async () => (await readGallery(siteDir, KEY)).photos.filter((x) => x.status === "ready").map((x) => x.id);
+  const g0 = await readGallery(siteDir, KEY);
+  g0.photos.find((x) => x.id === F).prKidGuid = "00000000-0000-0000-0000-000000000000";
+  await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g0)));
   const value3 = { ...COM, key: nodeRandom(32) }, accept = answer(true, "Invalid license request. (a test)");
-  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value3 })).status, "ready", "other pictures: rebuilt with its form");
+  const made = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value3 });
+  assert.deepEqual([made.status, made.skipped], ["ready", 1], JSON.stringify(made));
   const withForm = await mosaicMeta();
-  assert.ok(withForm.fairplay && withForm.fairplay.master && withForm.fairplay.verified === true, JSON.stringify(withForm.fairplay));
-  await fs.writeFile(join(siteDir, "mosaic", "meta.json.enc"), await sealText(KEY, JSON.stringify({ ...withForm, skipped: [{ id: "z".repeat(24), name: "z.png", reason: "a test" }] })));
+  assert.deepEqual(withForm.skipped.map((x) => x.id), [F]); assert.ok(withForm.fairplay && withForm.fairplay.verified === true, JSON.stringify(withForm.fairplay));
+  assert.equal(mosaicCurrent(withForm, await readyIds()), true, "the page counts it as current");
+  // the page's "Try again" with another key value: refused, out of reach, or no usable key at all: kept as it is
   const value4 = { ...COM, key: nodeRandom(32) };
-  for (const gate of [refuse, unreachable]) {
-    const m = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: gate, com: value4 });
+  for (const [gate, comX] of [[refuse, value4], [unreachable, value4], [null, null]]) {
+    const m = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, ...(gate ? { checkKey: gate } : {}), com: comX });
     assert.deepEqual([m.status, m.fairplay], ["current", "kept"], JSON.stringify(m));
     assert.deepEqual((await mosaicMeta()).fairplay, withForm.fairplay, "its working form kept");
     assert.ok((await fs.readdir(join(siteDir, "mosaic"))).includes(withForm.fairplay.master.split("/")[0]), "and its folder");
   }
-  const rebuiltSame = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value4 });
-  assert.equal(rebuiltSame.status, "ready", JSON.stringify(rebuiltSame));
+  // accepted: rebuilt (F still damaged, so still left out), with a new form
+  const retried = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value4 });
+  assert.deepEqual([retried.status, retried.skipped], ["ready", 1], JSON.stringify(retried));
+  const afterRetry = await mosaicMeta();
+  assert.ok(afterRetry.fairplay.verified === true && afterRetry.fairplay.master !== withForm.fairplay.master, "accepted: a new form");
+  // the left-out picture deleted by the owner: the view draws exactly the ready pictures; the stale entry is dropped
+  // from its record, nothing rebuilt, its form kept, Axinom not asked; the page then counts it as current
+  await worker({ payload: { action: "delete", id: F, key: KEY_HEX }, siteDir, tools });
+  asked.length = 0;
+  const cleaned = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: refuse, com: value4 });
+  assert.equal(cleaned.status, "current", JSON.stringify(cleaned));
+  const afterClean = await mosaicMeta();
+  assert.deepEqual([afterClean.skipped, afterClean.fairplay.master, asked.length], [[], afterRetry.fairplay.master, 0]);
+  assert.equal(mosaicCurrent(afterClean, await readyIds()), true, "the page counts it as current");
+  // its own output unreadable and its form for another key value: refused, kept; accepted, rebuilt
+  await fs.writeFile(join(siteDir, "mosaic", "video-playready.mp4.enc"), Buffer.from("not a sealed file"));
+  const value5 = { ...COM, key: nodeRandom(32) };
+  const keptBroken = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: refuse, com: value5 });
+  assert.deepEqual([keptBroken.status, keptBroken.fairplay, (await mosaicMeta()).fairplay.master], ["current", "kept", afterRetry.fairplay.master], JSON.stringify(keptBroken));
+  const repairedWithForm = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value5 });
+  assert.equal(repairedWithForm.status, "ready", JSON.stringify(repairedWithForm));
   const after = await mosaicMeta();
-  assert.deepEqual([after.skipped, after.fairplay.verified], [[], true]); assert.notEqual(after.fairplay.master, withForm.fairplay.master, "accepted: rebuilt, with a new form");
+  assert.ok(after.fairplay.master !== afterRetry.fairplay.master && after.fairplay.verified === true, "accepted: rebuilt, with a new form");
   // a view with no form whose own output cannot be read back is rebuilt (it has no form to lose)
   await fs.writeFile(join(siteDir, "mosaic", "meta.json.enc"), await sealText(KEY, JSON.stringify({ ...after, fairplay: null })));
   await fs.writeFile(join(siteDir, "mosaic", "video-playready.mp4.enc"), Buffer.from("not a sealed file"));
-  const repaired = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value4 });
+  const repaired = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value5 });
   assert.equal(repaired.status, "ready", JSON.stringify(repaired)); assert.ok((await mosaicMeta()).fairplay.master, "rebuilt, with its form");
   // the backfill making a missing combined view while Axinom refuses the key: counted, not "done"
   await fs.rm(join(siteDir, "mosaic"), { recursive: true, force: true });

@@ -30,11 +30,13 @@ const FP_FILES = ["master.m3u8", "video.m3u8", "video.mp4", "token.enc"];
 export const TOKEN_RENEW_DAYS = 14; // a token with less than this left is renewed (the weekly backfill run does it)
 
 // Whether Axinom accepts our key, asked at most once per run and only when an Apple form is about to be made
-// (checkKeyWithAxinom: a token for a throwaway key). THE RULE: a working form is never deleted or replaced unless
-// Axinom has accepted the key in that run; when it refuses the key, or cannot be asked, the backfill stops before
-// replacing anything and the combined view is kept as it is. A NEW form (a new picture, a view of other pictures)
-// replaces nothing, so it is made unless Axinom refuses the key or the key cannot be used at all; one made without
-// Axinom's acceptance is recorded as such, and renewed once Axinom accepts the key (fairPlayCurrent).
+// (checkKeyWithAxinom: a token for a throwaway key). THE RULE: a form is never deleted or replaced unless Axinom
+// has accepted the key in that run, except where its pictures themselves go (the owner deletes or re-sends a
+// picture, the password changes, a picture the combined view draws is deleted or a new one joins it). When Axinom
+// refuses the key, or cannot be asked, the backfill stops before replacing anything and the combined view is kept
+// as it is. A NEW form (a new picture, a view of other pictures) replaces nothing, so it is made unless Axinom
+// refuses the key or the key cannot be used at all; one made without Axinom's acceptance is recorded as such, and
+// renewed once Axinom accepts the key (fairPlayCurrent).
 export function keyGate(com, checkKey = checkKeyWithAxinom) {
   let answer = null;
   return async () => {
@@ -170,32 +172,42 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
   let cur = null;
   try { cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc"))))); } catch {}
-  // the view's own pictures, and whether it holds an Apple form: one a rebuild would delete
-  const samePictures = !!cur && !!ready.length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id));
+  // the view's pictures, counted as the page counts them (site/app.js, mosaicCurrent): the SAME pictures when every
+  // picture it draws is still ready and every ready picture is drawn or left out. A left-out picture since deleted
+  // is only a stale entry in its record: dropped there, nothing rebuilt.
+  const readyIds = ready.map((x) => x.id);
+  const drawn = cur && Array.isArray(cur.ids) ? cur.ids : [], leftOut = cur ? (cur.skipped || []).map((x) => x.id) : [];
+  const samePictures = !!cur && !!ready.length && drawn.every((id) => readyIds.includes(id)) && readyIds.every((id) => drawn.includes(id) || leftOut.includes(id));
+  if (samePictures && leftOut.some((id) => !readyIds.includes(id))) {
+    cur.skipped = (cur.skipped || []).filter((x) => readyIds.includes(x.id));
+    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur)));
+    log("the combined view's record no longer names left-out pictures that were since deleted");
+  }
   const hasForm = !!(cur && cur.fairplay && cur.fairplay.master);
-  const upToDate = samePictures && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length;
+  const upToDate = samePictures && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length && JSON.stringify(drawn) === JSON.stringify(readyIds); // in the list's order
   // a repeated request (the page asking while the job's own run is on its way) changes nothing: when the
-  // combined view already holds exactly these pictures, in this order, with none left out, and a good form, keep it
+  // combined view already holds exactly these pictures, none left out, and a good form, keep it
   if (upToDate && (!com || await fairPlayCurrent(out, cur.fairplay, com))) {
     log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
     return { status: "current", count: ready.length };
   }
   // the same pictures, only the Apple form to make or renew: that form alone, from the view's own output, the old
-  // one kept unless the new one is made. A view whose own output cannot be read back, with no form to lose, is
-  // rebuilt instead.
+  // one kept unless the new one is made. If the view's own output cannot be read back, it is rebuilt below (where
+  // a view with a form is rebuilt only once Axinom accepts the key).
   if (upToDate) {
     try { const r = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }); log(`the combined view's Apple form: ${r}`); return { status: "current", count: ready.length, fairplay: r }; }
     catch (e) {
-      if (e.gate || hasForm) { log(`the combined view kept as it is${hasForm ? ", with its current Apple form" : " (it has no Apple form)"}: its form NOT renewed — ${String(e.message || e).slice(0, 300)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
-      log(`the combined view's own output could not be read back for its Apple form (${String(e.message || e).slice(0, 200)}): it is rebuilt`);
+      if (e.gate) { log(`the combined view kept as it is${hasForm ? ", with its current Apple form" : " (it has no Apple form)"}: its form NOT renewed — ${String(e.message || e).slice(0, 300)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
+      log(`the combined view's own output could not be read back for its Apple form (${String(e.message || e).slice(0, 200)}): a rebuild`);
     }
   }
-  // a rebuild of the SAME pictures (a left-out one tried again, a new layout version) would delete its working
-  // form: only once Axinom accepts the key; otherwise the view is kept as it is. A view of OTHER pictures is
-  // rebuilt whatever Axinom says: its old content, and its form, must go.
-  if (samePictures && hasForm && com) {
-    const answer = await keyOk();
-    if (!mayReplace(answer)) { log(`the combined view kept as it is, with its current Apple form (a rebuild would replace it) — ${refusal(com, answer)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
+  // THE RULE on the view: a rebuild of the SAME pictures (a left-out one tried again, a new layout version, its
+  // own output unreadable) would delete its form, so a view with a form is rebuilt only once Axinom accepts the key
+  // (without a usable key, never); otherwise it is kept as it is. A view of OTHER pictures (one added, or one it
+  // draws deleted) is rebuilt whatever Axinom says: its old content, and its form, must go.
+  if (samePictures && hasForm) {
+    const answer = com ? await keyOk() : null;
+    if (!answer || !mayReplace(answer)) { log(`the combined view kept as it is, with its current Apple form (a rebuild would replace it) — ${answer ? refusal(com, answer) : "no usable Axinom key"}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
   }
   await fs.rm(out, { recursive: true, force: true }); // never a combined view from an older set left beside a new one
   if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }

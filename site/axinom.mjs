@@ -53,13 +53,13 @@ export const TOKEN_CHECK_BODY_BYTES = 176;
 export const TOKEN_CHECK_TIMEOUT_MS = 20000;
 export const TOKEN_ACCEPTED = /^Invalid license request\. (The request body is missing\.|License request total size is less than the expected header size\.|Supported versions are 1, 2 or 3, but used version is 0\.)$/;
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
-export async function checkTokenWithAxinom(token, license, fetchFn = fetch, { tries = 3, pause = (ms) => new Promise((r) => setTimeout(r, ms)), timeoutMs = TOKEN_CHECK_TIMEOUT_MS } = {}) {
+export async function checkTokenWithAxinom(token, license, fetchFn = fetch, { tries = 3, pause = (ms) => new Promise((r) => setTimeout(r, ms)), timeoutMs = TOKEN_CHECK_TIMEOUT_MS, signalFor = (ms) => AbortSignal.timeout(ms) } = {}) {
   if (!FAIRPLAY_LICENSE_ADDRESS.test(String(license))) throw new Error("the FairPlay licence address is not one of Axinom's");
   if (!TOKEN_SHAPE.test(String(token))) return { accepted: false, reached: false, status: 0, message: "that is not a licence token: nothing was sent" };
   let last = null;
   for (let i = 0; i < tries; i++) {
     try {
-      const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES), signal: AbortSignal.timeout(timeoutMs) });
+      const r = await fetchFn(license, { method: "POST", headers: { "X-AxDRM-Message": token, "Content-Type": "application/octet-stream" }, body: new Uint8Array(TOKEN_CHECK_BODY_BYTES), signal: signalFor(timeoutMs) });
       if (r.status >= 500 || r.status === 429) throw new Error(`Axinom answered HTTP ${r.status}`);
       const message = String(r.headers.get("x-axdrm-errormessage") || "").trim();
       return { accepted: TOKEN_ACCEPTED.test(message), reached: true, status: r.status, message: message || `no message (HTTP ${r.status})` };
