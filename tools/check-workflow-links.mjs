@@ -30,7 +30,7 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
 if (bad.length) {
   console.error(`FAIL: ${bad.length} of ${checked} workflow links could open the page with the owner's photo:`);
   for (const b of bad) console.error("  " + b);
-  console.error("Add clip=card (or levels=software) as the FIRST parameter of each link's query.");
+  console.error("Add clip=card, levels=software or levels=clearkey as the FIRST parameter of each link's query.");
   process.exit(1);
 }
 console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card`);
