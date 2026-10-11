@@ -93,7 +93,7 @@ for (const f of toolFiles) {
 // change, which forces whoever changes them to re-read the safeguards above, and a reviewer to see it.
 const PINNED = {
   ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
-  "tools/walk-site.mjs": "f0d59d4fd0daf62b6fba16fe5d2eba78d14e336d5b959bf5688d9d85140c426d",
+  "tools/walk-site.mjs": "4b2222eaa660a66bd8aa75eaf46f9821063cfa20f6f374b78e0250cf0bf1e5ce",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");

@@ -64,6 +64,12 @@ const readout = async () => Object.fromEntries(await Promise.all(["r-rule", "r-k
 // The video element itself, not the readout's text (a page handed back from memory brings its old text
 // with it): not paused, a decoded frame, and its time moving over a second and a half.
 async function videoAdvancing() {
+  for (let i = 0; ; i++) {
+    try { return await videoOnce(); }
+    catch (e) { if (i >= 3 || !/context was destroyed|navigation/i.test(String(e.message))) throw e; await page.waitForTimeout(1000); }
+  }
+}
+async function videoOnce() {
   return page.evaluate(async () => {
     const v = document.getElementById("v"); if (!v) return { ok: false, why: "no video element" };
     const t0 = v.currentTime; await new Promise((r) => setTimeout(r, 1500));
@@ -155,7 +161,7 @@ try {
   await capture("all-list");
   // 5. tap a picture (the second, or the first if there is one); first note, in this tab, how the page
   // comes back later (handed back from the browser's memory, or loaded afresh)
-  await page.evaluate(() => addEventListener("pageshow", (e) => sessionStorage.setItem("walk-pageshow", e.persisted ? "from memory" : "loaded")));
+  await page.evaluate(() => { window.__walkMark = 1; addEventListener("pageshow", (e) => sessionStorage.setItem("walk-pageshow", e.persisted ? "from memory" : "loaded")); });
   await page.locator("#v").scrollIntoViewIfNeeded();
   const pick = n > 1 ? 1 : 0;
   const spot = await page.evaluate((i) => {
@@ -179,6 +185,10 @@ try {
   await page.goBack({ waitUntil: "commit", timeout: 15000 });
   // the address alone, polled (waitForURL also waits for a "load" event, which a page handed back from memory never fires)
   for (let i = 0; i < 60 && !/all\.html/.test(page.url()); i++) await page.waitForTimeout(250);
+  // then a FRESH document (the marked one, handed back from memory, reloads itself): never judge the old one
+  let fresh = false;
+  for (let i = 0; i < 80 && !fresh; i++) { fresh = await page.evaluate(() => !window.__walkMark).catch(() => false); if (!fresh) await page.waitForTimeout(250); }
+  step(fresh, "after Back the combined view is a freshly loaded page (not the one held in memory)");
   const r4 = await waitPlaying("all again");
   const how = await page.evaluate(() => `${sessionStorage.getItem("walk-pageshow")}, then ${(performance.getEntriesByType("navigation")[0] || {}).type}`).catch(() => "?");
   step(/all\.html/.test(page.url()), `back returns to the combined view (${how})`);
