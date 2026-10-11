@@ -138,6 +138,13 @@ test("the guard keeps the CI drive to a local copy: no secret, no write access, 
     [[W, (t) => t.replace("node tools/drive-site.mjs 2>&1", "node tools/walk-site.mjs 2>&1")], /the drive lost a safeguard: it runs no tool but the drive and this guard/],
     [[W, (t) => t.replace("        with: { persist-credentials: false }\n", "")], /the drive lost a safeguard: checkout leaves no token behind/],
     [["tools/drive-site.mjs", (t) => t + "\n// a change\n"], /tools\/drive-site\.mjs changed .* update PINNED/],
+    // the rules read as they claim, not only through the pin (the third review's cases): a secret read with
+    // brackets, a command or an action before the guard, a tool named with ./
+    [[W, (t) => t.replace("PLAYWRIGHT_PKG=", "X=${{ secrets['A'] }} PLAYWRIGHT_PKG=")], /the drive lost a safeguard: no secret at all/],
+    [[W, (t) => t.replace("      - name: The guard first", "      - run: echo first\n      - name: The guard first")], /the drive lost a safeguard: this guard runs first/],
+    [[W, (t) => t.replace("      - name: The guard first", "      - uses: someone/action@v1\n      - name: The guard first")], /the drive lost a safeguard: this guard runs first/],
+    [[W, (t) => t.replace("node tools/drive-site.mjs 2>&1", "node ./tools/walk-site.mjs 2>&1")], /the drive lost a safeguard: it runs no tool but the drive and this guard/],
+    [[".github/workflows/site-walk.yml", (t) => t.replace("      - uses: actions/checkout@v4", "      - run: echo first\n      - uses: actions/checkout@v4")], /the walk lost a safeguard: the walk job runs this guard before anything else/],
   ];
   for (const [edit, re] of cases) { const r = await guardWith(null, edit); assert.equal(r.code, 1, `${edit[0]} edited: refused`); assert.match(r.out, re, r.out); }
 });

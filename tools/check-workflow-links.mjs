@@ -60,19 +60,27 @@ const SITE_ALLOWED = {
   "site-walk.yml": "THE WALK: a real browser on the live site; every capture sealed (safeguards required below)",
   "site-drive.yml": "THE DRIVE: a browser on a LOCAL copy with synthetic pictures and a mocked GitHub API, never the live site (safeguards required below; the drive pinned)",
 };
+// "This guard runs first", read literally: the workflow's first command is this guard, and nothing but the
+// checkout comes before it (an action can run code as surely as a command can).
+const guardFirst = (t) => {
+  const at = t.search(/^\s*(?:-\s+)?run: node tools\/check-workflow-links\.mjs\s*$/m);
+  if (at < 0) return false;
+  const before = t.slice(0, at);
+  return !/^\s*(?:-\s+)?run:/m.test(before) && (before.match(/uses:\s*\S+/g) || []).every((u) => /^uses:\s*actions\/checkout@/.test(u));
+};
 const DRIVE_SAFEGUARDS = [
   [/^permissions:\s*\n\s+contents: read\s*$/m, "read-only"],
   [(t) => !/contents: write|id-token: write/.test(t), "no write access anywhere"],
-  [(t) => !/secrets\.|SITE_PASSWORD/.test(t), "no secret at all"],
+  [(t) => !/secrets\s*[.[]|SITE_PASSWORD/.test(t), "no secret at all"],
   [/persist-credentials: false/, "checkout leaves no token behind"],
-  [/run: node tools\/check-workflow-links\.mjs/, "this guard runs first"],
+  [guardFirst, "this guard runs first"],
   [(t) => !/upload-artifact|screenshot|screencapture|CopyFromScreen|import -window/i.test(t), "nothing uploaded and no screen capture"],
-  [(t) => (t.match(/node\s+tools\/[\w./-]+/g) || []).every((x) => /^node\s+tools\/(drive-site|check-workflow-links)\.mjs$/.test(x)), "it runs no tool but the drive and this guard"],
+  [(t) => (t.match(/node\s+(?:\.\/)?tools\/[\w./-]+/g) || []).every((x) => /^node\s+(?:\.\/)?tools\/(drive-site|check-workflow-links)\.mjs$/.test(x)), "it runs no tool but the drive and this guard"],
 ];
 const WALK_SAFEGUARDS = [
   [/^permissions:\s*\n\s+contents: read/m, "read-only by default (only the keep job may write)"],
   [(t) => (t.match(/contents: write/g) || []).length === 1 && t.indexOf("contents: write") > t.indexOf("\n  keep:"), "write access only inside the keep job"],
-  [/run: node tools\/check-workflow-links\.mjs/, "the walk job runs this guard before anything else"],
+  [guardFirst, "the walk job runs this guard before anything else"],
   [/path: \|\s*\n\s+walk\/\*\.sealed\.json\s*\n\s+walk\/\*-steps\.json\s*\n/, "the upload names only sealed captures and step records"],
   [/persist-credentials: false/, "checkout leaves no token behind"],
   [/os\.tmpdir\(\).*\^clear-.*rmSync\("walk".*process\.exit\(1\)/, "a clear capture left behind (in the temporary folder) is deleted, everything is refused, and the run fails"],

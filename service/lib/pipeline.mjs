@@ -85,12 +85,17 @@ export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }, {
 // What a FairPlay output must carry before it is published: the playlist's key line with this key
 // address and Apple's key format; in the file the 'cbcs' scheme with this key id and this constant IV (so
 // the licence's IV matches the encryption); and, fragment by fragment, the sample table ('trun': each
-// sample's size and whether it is a keyframe) matched record for record with the sample-encryption records
-// ('senc': each sample's clear and protected byte counts): every sample recorded, its record adding up to
-// its size (no byte of it outside the record), with a protected range, and EVERY KEYFRAME with at least
-// one encrypted block. Under 'cbcs' a protected range shorter than one 16-byte block encrypts nothing:
-// normal for the near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a
-// solid colour), never acceptable for a keyframe, which carries the picture.
+// sample's size and whether it is a keyframe, and where the samples lie) matched record for record with
+// the sample-encryption records ('senc': per sample, each slice's clear and protected byte counts):
+// - every sample recorded, its record adding up to its size (no byte of it outside the record), with a
+//   protected range, and its bytes inside the file;
+// - EVERY SLICE OF EVERY KEYFRAME with at least one encrypted block. Under 'cbcs' each slice is encrypted
+//   on its own, and a protected range shorter than one 16-byte block encrypts nothing: normal for the
+//   near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a solid colour),
+//   never for a keyframe's slice, which a decoder can show on its own;
+// - no slice anywhere leaving more than MAX_CLEAR bytes in the clear before its protected range (the
+//   longest clear run in a real output: 697 to 706 bytes, the encoder's settings note and the headers
+//   before the first slice; between keyframes, 19 bytes or fewer).
 export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   const problems = [];
   const keyLine = playlist.split("\n").find((l) => l.startsWith("#EXT-X-KEY:")) || "";
@@ -99,46 +104,60 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   if (!/KEYFORMAT="com\.apple\.streamingkeydelivery"/.test(keyLine)) problems.push("the playlist does not name Apple's key format");
   let scheme = null, tencKid = null, constIv = null, ivSize = 0;
   const trex = new Map(); // per track: the movie's default sample size and flags
-  const n = { samples: 0, samplesMarked: 0, samplesEncrypted: 0, keyframes: 0, keyframesEncrypted: 0, protectedBytes: 0, mismatched: 0, uncovered: 0 };
+  const n = { samples: 0, samplesMarked: 0, samplesEncrypted: 0, keyframes: 0, keyframesEncrypted: 0, protectedBytes: 0, mismatched: 0, uncovered: 0, longClear: 0 };
   const NOT_KEYFRAME = 0x10000; // sample_is_non_sync_sample, in a sample's flags
+  const MAX_CLEAR = 1024;
   const header = (off, end) => { let s = data.readUInt32BE(off); if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off; return [s, data.toString("latin1", off + 4, off + 8)]; };
   const cut = (what) => { throw new Error(`a fragment's ${what} is cut short`); };
   const sane = (count) => { if (count > 1e6) throw new Error(`a fragment lists ${count} samples`); return count; };
-  // one fragment of the track: its defaults ('tfhd', else the movie's 'trex'), its samples ('trun') and
-  // their records ('senc'), in the order the standard gives them
-  const fragment = (off, end) => {
-    let dflt = { size: 0, flags: 0 }, p = off; const table = [], records = [], limit = Math.min(end, data.length);
+  // one fragment of the track (inside the 'moof' at `moof`): its defaults ('tfhd', else the movie's
+  // 'trex'), its samples ('trun') and their records ('senc'), in the order the standard gives them
+  const fragment = (off, end, moof) => {
+    let dflt = { size: 0, flags: 0 }, base = moof, next = null, p = off; const table = [], records = [], limit = Math.min(end, data.length);
     for (; p + 8 <= limit;) {
       const [s, t] = header(p, limit); if (s < 8 || p + s > limit) cut("box");
       if (t === "tfhd") {
-        const f = data.readUIntBE(p + 9, 3); let q = p + 16;
+        const f = s >= 12 ? data.readUIntBE(p + 9, 3) : 0;
+        if (16 + (f & 0x1 ? 8 : 0) + (f & 0x2 ? 4 : 0) + (f & 0x8 ? 4 : 0) + (f & 0x10 ? 4 : 0) + (f & 0x20 ? 4 : 0) > s) cut("fragment header");
+        let q = p + 16;
         dflt = { ...(trex.get(data.readUInt32BE(p + 12)) || { size: 0, flags: 0 }) };
-        if (f & 0x1) q += 8; if (f & 0x2) q += 4; if (f & 0x8) q += 4;
+        if (f & 0x1) { base = Number(data.readBigUInt64BE(q)); q += 8; } if (f & 0x2) q += 4; if (f & 0x8) q += 4;
         if (f & 0x10) { dflt.size = data.readUInt32BE(q); q += 4; }
         if (f & 0x20) dflt.flags = data.readUInt32BE(q);
       }
       if (t === "trun") {
-        const f = data.readUIntBE(p + 9, 3), count = sane(data.readUInt32BE(p + 12)); let q = p + 16, first = null;
-        if (f & 0x1) q += 4; if (f & 0x4) { first = data.readUInt32BE(q); q += 4; }
+        if (s < 16) cut("sample table");
+        const f = data.readUIntBE(p + 9, 3), count = sane(data.readUInt32BE(p + 12)); let q = p + 16, first = null, offset = null;
         const row = 4 * [0x100, 0x200, 0x400, 0x800].filter((b) => f & b).length;
-        if (q + count * row > p + s) cut("sample table");
+        if (16 + (f & 0x1 ? 4 : 0) + (f & 0x4 ? 4 : 0) + count * row > s) cut("sample table");
+        if (f & 0x1) { offset = data.readInt32BE(q); q += 4; } if (f & 0x4) { first = data.readUInt32BE(q); q += 4; }
+        let bytes = 0;
         for (let i = 0; i < count; i++) {
           const r = { size: dflt.size, flags: i === 0 && first !== null ? first : dflt.flags };
           if (f & 0x100) q += 4; if (f & 0x200) { r.size = data.readUInt32BE(q); q += 4; } if (f & 0x400) { r.flags = data.readUInt32BE(q); q += 4; } if (f & 0x800) q += 4;
-          table.push(r);
+          table.push(r); bytes += r.size;
         }
+        // where the samples lie: from the data offset (counted from the fragment's base, which is the 'moof'
+        // unless the fragment names one), or straight after the previous run's samples
+        const at = offset !== null ? base + offset : next !== null ? next : base;
+        next = at + bytes;
+        if (at < 0 || next > data.length) cut("media data");
       }
       if (t === "senc") { // full box: version and flags, the sample count, then per sample its IV and, with flag 2, its subsamples
+        if (s < 16) cut("encryption record");
         const f = data.readUIntBE(p + 9, 3), count = sane(data.readUInt32BE(p + 12)); let q = p + 16;
         for (let i = 0; i < count; i++) {
           q += ivSize;
           if (!(f & 2)) { if (q > p + s) cut("encryption record"); records.push(null); continue; } // no subsamples: the whole sample is protected
           if (q + 2 > p + s) cut("encryption record");
-          const k = data.readUInt16BE(q); q += 2; let clear = 0, prot = 0;
+          const k = data.readUInt16BE(q); q += 2; const subs = [];
           if (q + 6 * k > p + s) cut("encryption record");
-          for (let j = 0; j < k; j++) { clear += data.readUInt16BE(q); prot += data.readUInt32BE(q + 2); q += 6; }
-          records.push({ clear, prot });
+          for (let j = 0; j < k; j++) { subs.push([data.readUInt16BE(q), data.readUInt32BE(q + 2)]); q += 6; }
+          records.push(subs);
         }
+        // the records fill their box exactly: a box read as something else (a flag cleared, a count changed)
+        // leaves bytes over, or runs short
+        if (q !== p + s) throw new Error("a fragment's encryption records do not fill their box exactly");
       }
       p += s;
     }
@@ -148,14 +167,17 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
       const keyframe = !(r.flags & NOT_KEYFRAME), rec = records[i];
       n.samples++; if (keyframe) n.keyframes++;
       if (rec === undefined) return; // no record: neither protected nor encrypted
-      const prot = rec === null ? r.size : rec.prot;
-      if (rec !== null && rec.clear + rec.prot !== r.size) n.uncovered++;
+      const subs = rec === null ? [[0, r.size]] : rec; // per slice: clear bytes, then protected bytes
+      const clear = subs.reduce((a, x) => a + x[0], 0), prot = subs.reduce((a, x) => a + x[1], 0);
+      if (clear + prot !== r.size) n.uncovered++;
+      if (subs.some((x) => x[0] > MAX_CLEAR)) n.longClear++;
       n.protectedBytes += prot;
       if (prot > 0) n.samplesMarked++;
-      if (prot >= 16) { n.samplesEncrypted++; if (keyframe) n.keyframesEncrypted++; }
+      if (subs.some((x) => x[1] >= 16)) n.samplesEncrypted++;
+      if (keyframe && subs.length && subs.every((x) => x[1] >= 16)) n.keyframesEncrypted++;
     });
   };
-  const walk = (off, end) => {
+  const walk = (off, end, moof = 0) => {
     end = Math.min(end, data.length);
     while (off + 8 <= end) {
       const [s, t] = header(off, end);
@@ -166,11 +188,12 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
         ivSize = data[off + 15];
         if (ivSize === 0) { const len = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + len); }
       }
-      if (t === "trex") trex.set(data.readUInt32BE(off + 12), { size: data.readUInt32BE(off + 24), flags: data.readUInt32BE(off + 28) });
-      if (t === "traf") fragment(off + 8, off + s);
-      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "mvex", "moof"].includes(t)) walk(off + 8, off + s);
-      if (t === "stsd") walk(off + 16, off + s);
-      if (t === "encv") walk(off + 8 + 78, off + s);
+      if (t === "trex") { if (s < 32) throw new Error("the movie's sample defaults are cut short"); trex.set(data.readUInt32BE(off + 12), { size: data.readUInt32BE(off + 24), flags: data.readUInt32BE(off + 28) }); }
+      if (t === "traf") fragment(off + 8, off + s, moof);
+      if (t === "moof") walk(off + 8, off + s, off);
+      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "mvex"].includes(t)) walk(off + 8, off + s, moof);
+      if (t === "stsd") walk(off + 16, off + s, moof);
+      if (t === "encv") walk(off + 8 + 78, off + s, moof);
       off += s;
     }
   };
@@ -184,9 +207,10 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   if (n.mismatched) problems.push(`${n.mismatched} fragment(s) list a different number of encryption records than samples`);
   if (n.samples && n.samplesMarked !== n.samples) problems.push(`${n.samples - n.samplesMarked} of ${n.samples} samples have no protected bytes`);
   if (n.uncovered) problems.push(`${n.uncovered} of ${n.samples} samples are not covered whole by their encryption records`);
+  if (n.longClear) problems.push(`${n.longClear} of ${n.samples} samples leave more than ${MAX_CLEAR} bytes in the clear in one run`);
   if (n.samples && !n.keyframes) problems.push("no sample is marked as a keyframe");
-  if (n.keyframesEncrypted !== n.keyframes) problems.push(`${n.keyframes - n.keyframesEncrypted} of ${n.keyframes} keyframes have no encrypted block`);
-  const { mismatched, uncovered, ...counts } = n;
+  if (n.keyframesEncrypted !== n.keyframes) problems.push(`${n.keyframes - n.keyframesEncrypted} of ${n.keyframes} keyframes have a slice with no encrypted block`);
+  const { mismatched, uncovered, longClear, ...counts } = n;
   return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, ...counts };
 }
 

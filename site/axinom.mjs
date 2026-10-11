@@ -52,14 +52,16 @@ export function encryptContentKey(comKey, kidHex, keyHex) {
 // One licence token for one content key, shaped exactly as Axinom's quick start shapes it (envelope:
 // version, com_key_id, message, begin_date, expiration_date; the key naming "Policy A" and the policy
 // defined), with its values hardened where the quick start relaxes them "as permissive as possible for
-// the scope of this guide": licences are not kept on the device (allow_persistence false), and PlayReady
-// gets hardware clients only (min_device_security_level 3000, no play enabler for virtual machines)
-// instead of any client (150). The SHAPE is the one every Axinom example in reach uses (the 13 tokens of
-// its public test vectors and quick start all name and define "Policy A"); only the values differ.
-// Axinom honours one token on all of its licence services, so a holder of a picture's token (only a
-// password holder: it is sealed) could still ask Axinom's Widevine service for the key under Widevine's
-// defaults; restricting the key to FairPlay needs Axinom's entitlement-message reference, not yet read
-// (its documentation host is blocked from this sandbox).
+// the scope of this guide": licences are not kept on the device (allow_persistence false), PlayReady gets
+// hardware clients only (min_device_security_level 3000, no play enabler for virtual machines) instead of
+// any client (150), and Widevine hardware clients only (device_security_level HW_SECURE_ALL: the decoding
+// in protected hardware), so a software client of either can never be handed the key. The SHAPE is the one
+// every Axinom example in reach uses (the 13 tokens of its public test vectors and quick start all name and
+// define "Policy A"); only the values differ. Axinom honours one token on all of its licence services, which
+// is why the other two are restricted; the FairPlay section is left at Axinom's defaults (HDCP type 0 on
+// cable outputs, AirPlay and cable adapters allowed) until a device measurement and the owner decide it
+// (docs.axinom.com/services/drm/license-service/entitlement-message/content-key-usage-policies, read on a
+// runner by apple-probe.yml).
 // Valid from a day before `now` (clock drift) for `days` days; the job renews it before it runs out.
 export function mintToken(com, kidHex, keyHex, { now = new Date(), days = 60 } = {}) {
   const from = new Date(now.getTime() - 24 * 3600 * 1000), to = new Date(now.getTime() + days * 24 * 3600 * 1000);
@@ -73,7 +75,7 @@ export function mintToken(com, kidHex, keyHex, { now = new Date(), days = 60 } =
       version: 2,
       license: { start_datetime: from.toISOString(), expiration_datetime: to.toISOString(), allow_persistence: false },
       content_keys_source: { inline: [{ id: kidToUuid(kidHex), encrypted_key: encryptContentKey(com.key, kidHex, keyHex), usage_policy: "Policy A" }] },
-      content_key_usage_policies: [{ name: "Policy A", playready: { min_device_security_level: 3000 } }],
+      content_key_usage_policies: [{ name: "Policy A", playready: { min_device_security_level: 3000 }, widevine: { device_security_level: "HW_SECURE_ALL" } }],
     },
   };
   const head = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" })), body = b64url(JSON.stringify(payload));

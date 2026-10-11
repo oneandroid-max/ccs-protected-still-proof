@@ -68,7 +68,7 @@ test("a minted token: HS256 under the communication key, the content key encrypt
   assert.equal(k.length, 1); assert.equal(k[0].id, kidToUuid(ids.kid));
   assert.equal(unwrapKey(COM.key, ids.kid, k[0].encrypted_key), ids.key, "the encrypted key opens, with an independent decryptor, to the content key");
   assert.equal(k[0].usage_policy, "Policy A", "the policy reference every Axinom example carries");
-  assert.deepEqual(p.message.content_key_usage_policies, [{ name: "Policy A", playready: { min_device_security_level: 3000 } }], "the same shape, hardened: PlayReady hardware clients only");
+  assert.deepEqual(p.message.content_key_usage_policies, [{ name: "Policy A", playready: { min_device_security_level: 3000 }, widevine: { device_security_level: "HW_SECURE_ALL" } }], "the same shape, hardened: PlayReady and Widevine hardware clients only");
   assert.ok(!JSON.stringify(p).includes("786627D8"), "no virtual-machine play enabler");
   assert.equal(encryptContentKey(COM.key, ids.kid, ids.key), k[0].encrypted_key);
   assert.throws(() => encryptContentKey(COM.key, "zz", ids.key), /32 hex/);
@@ -87,6 +87,43 @@ test("the pages use Axinom's licence service, certificate and PUBLIC token, the 
   for (const [page, lic, cert] of [[route1, /const AXINOM_LICENSE = "([^"]+)"/, /const AXINOM_CERT = "([^"]+)"/], [apple, /const LICENSE = "([^"]+)"/, /const CERT = "([^"]+)"/]]) {
     assert.equal(page.match(lic)[1], AXINOM_FAIRPLAY_LICENSE); assert.equal(page.match(cert)[1], AXINOM_FAIRPLAY_CERT);
   }
+});
+
+// The Apple check page's own lines for our account's card (read from the page, never copied): the card is
+// played only through the folder current.json names (8 hex characters, nothing else) and that folder's own
+// token; with nothing made yet, or a folder name of any other shape, or no token there, nothing is played.
+test("the Apple check page plays our account's card only from the folder current.json names, with that folder's token", async () => {
+  const page = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
+  const from = page.indexOf("  let ownToken = null, ownBase = null;"), to = page.indexOf("\n})();", from);
+  assert.ok(from > 0 && to > from, "the page's own-card lines are where this test reads them");
+  const lines = page.slice(from, to), OWN = page.match(/const OWN = "([^"]+)";/)[1];
+  assert.equal(OWN, "../drm/card-fairplay-own/");
+  const runWith = async (files) => {
+    const seen = [], calls = [];
+    const fetch = async (url) => { seen.push(url); const k = url.replace(/\?v=\d+$/, ""); const body = files[k];
+      return body === undefined ? { ok: false, json: async () => { throw new Error("404"); }, text: async () => "" } : { ok: true, json: async () => JSON.parse(body), text: async () => body }; };
+    const protectedPlay = async (...a) => { calls.push(a); };
+    const set = (id, text) => calls.push(["set", id, text]);
+    await new Function("fetch", "OWN", "protectedPlay", "set", "log", `return (async () => {${lines}\n})();`)(fetch, OWN, protectedPlay, set, () => {});
+    return { plays: calls.filter((c) => c[0] !== "set"), sets: calls.filter((c) => c[0] === "set"), seen };
+  };
+  // nothing made yet: the cell says so, nothing is played
+  let r = await runWith({});
+  assert.deepEqual(r.plays, []); assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /not made yet/.test(text)), JSON.stringify(r.sets));
+  assert.ok(/^\.\.\/drm\/card-fairplay-own\/current\.json\?v=\d+$/.test(r.seen[0]), "current.json is asked for fresh: " + r.seen[0]);
+  // a folder and its token: the card in that folder, with that token
+  r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
+  assert.deepEqual(r.plays.map((a) => [a[0], a[1], a[2], a[4]]), [["vo", "o", OWN + "1a2b3c4d/master.m3u8", "TOKEN-1"]]);
+  // any other folder name is never followed; a folder without a token plays nothing
+  for (const folder of ["../../site", "1a2b3c4", "1A2B3C4D", "1a2b3c4d/..", "1a2b3c4d0", "", null]) {
+    r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder }), [OWN + folder + "/token.txt"]: "TOKEN-X" });
+    assert.deepEqual(r.plays, [], `folder ${JSON.stringify(folder)} is not followed`);
+    assert.ok(!r.seen.some((u) => /token\.txt/.test(u)), `no token is fetched for ${JSON.stringify(folder)}`);
+  }
+  r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }) });
+  assert.deepEqual(r.plays, [], "no token there: nothing played");
+  r = await runWith({ [OWN + "current.json"]: "not json" });
+  assert.deepEqual(r.plays, [], "an unreadable current.json: nothing played");
 });
 
 test("every test value the workflow guard accepts makes the route-1 page play the TEST CARD; the Apple switch holds only dates", async () => {
@@ -108,31 +145,35 @@ test("every test value the workflow guard accepts makes the route-1 page play th
 });
 
 // A minimal fragmented MP4 with the boxes checkFairPlay and checkBoxes read: an encrypted sample entry
-// whose 'tenc' carries the key id and (for 'cbcs') a constant IV, and fragments, each with its sample
-// table ('trun': sizes, and flags saying which samples are keyframes) and its sample-encryption box
-// ('senc': per sample one subsample, 10 clear bytes, then `prot` protected ones). The keyframe flags are
-// written the three ways the standard allows: per sample (as shaka-packager writes them), or as the first
-// sample's flags with the rest from the fragment's defaults ('tfhd') or from the movie's ('trex').
+// whose 'tenc' carries the key id and (for 'cbcs') a constant IV, and fragments, each a 'moof' with its
+// sample table ('trun': sizes, flags saying which samples are keyframes, and the offset of the samples)
+// and its sample-encryption box ('senc': per sample, per slice, clear bytes then protected ones; by
+// default one slice of 10 clear bytes and `prot` protected), then the samples' bytes ('mdat'). The keyframe
+// flags are written the three ways the standard allows: per sample (as shaka-packager writes them), or as
+// the first sample's flags with the rest from the fragment's defaults ('tfhd') or from the movie's ('trex').
 const box = (type, ...parts) => { const body = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p))); const h = Buffer.alloc(8); h.writeUInt32BE(8 + body.length); h.write(type, 4, "latin1"); return Buffer.concat([h, body]); };
 const u16 = (n) => { const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; }, u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
 const NOT_KEY = 0x10000; // sample_is_non_sync_sample
-const senc = (prot, ivSize, count = prot.length) => box("senc", Buffer.from([0, 0, 0, 2]), u32(count), ...prot.flatMap((p) => [Buffer.alloc(ivSize), u16(1), u16(10), u32(p)]));
-function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1, prot = [900, 700], sizes = prot.map((p) => 10 + p), flags = [0, NOT_KEY], defaults = "per-sample", sencCount = prot.length }) {
+const senc = (slices, ivSize, count = slices.length, flags = 2) => box("senc", Buffer.from([0, 0, 0, flags]), u32(count), ...slices.flatMap((ss) => [Buffer.alloc(ivSize), u16(ss.length), ...ss.flatMap(([c, p]) => [u16(c), u32(p)])]));
+function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1, prot = [900, 700], slices = prot.map((p) => [[10, p]]), sizes = slices.map((ss) => ss.reduce((a, [c, p]) => a + c + p, 0)), flags = [0, NOT_KEY], defaults = "per-sample", sencCount = slices.length, sencFlags = 2, trafTail = Buffer.alloc(0) }) {
   const tenc = box("tenc", Buffer.from([1, 0, 0, 0, 0, 0x19, 1, perSampleIvSize]), Buffer.from(kid, "hex"), perSampleIvSize ? Buffer.alloc(0) : Buffer.concat([Buffer.from([16]), Buffer.from(iv, "hex")]));
   const sinf = box("sinf", box("frma", "avc1"), box("schm", Buffer.from([0, 0, 0, 0]), scheme, Buffer.from([0, 1, 0, 0])), box("schi", tenc));
   const encv = box("encv", Buffer.alloc(78), sinf);
   const stsd = box("stsd", Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]), encv);
   const trex = box("trex", Buffer.from([0, 0, 0, 0]), u32(1), u32(1), u32(0), u32(0), u32(defaults === "trex" ? flags[1] : 0));
   const moov = box("moov", box("trak", box("mdia", box("minf", box("stbl", stsd)))), box("mvex", trex));
-  const table = defaults === "per-sample"
-    ? [box("tfhd", Buffer.from([0, 2, 0, 0]), u32(1)), box("trun", Buffer.from([0, 0, 0x06, 0x01]), u32(sizes.length), u32(0), ...sizes.flatMap((s, i) => [u32(s), u32(flags[i])]))]
+  const table = (offset) => defaults === "per-sample"
+    ? [box("tfhd", Buffer.from([0, 2, 0, 0]), u32(1)), box("trun", Buffer.from([0, 0, 0x06, 0x01]), u32(sizes.length), u32(offset), ...sizes.flatMap((s, i) => [u32(s), u32(flags[i])]))]
     : [defaults === "tfhd" ? box("tfhd", Buffer.from([0, 2, 0, 0x20]), u32(1), u32(flags[1])) : box("tfhd", Buffer.from([0, 2, 0, 0]), u32(1)),
-       box("trun", Buffer.from([0, 0, 0x02, 0x05]), u32(sizes.length), u32(0), u32(flags[0]), ...sizes.map(u32))];
-  const frags = Array.from({ length: fragments }, () => box("moof", box("traf", ...table, senc(prot, perSampleIvSize, sencCount), box("saiz", Buffer.alloc(9)), box("saio", Buffer.alloc(12)))));
+       box("trun", Buffer.from([0, 0, 0x02, 0x05]), u32(sizes.length), u32(offset), u32(flags[0]), ...sizes.map(u32))];
+  // the samples follow their 'moof' in an 'mdat', the data offset counted from the start of the 'moof'
+  const moofAt = (offset) => box("moof", box("traf", ...table(offset), senc(slices, perSampleIvSize, sencCount, sencFlags), box("saiz", Buffer.alloc(9)), box("saio", Buffer.alloc(12)), trafTail));
+  const moof = moofAt(moofAt(0).length + 8), mdat = box("mdat", Buffer.alloc(sizes.reduce((a, b) => a + b, 0)));
+  const frags = Array.from({ length: fragments }, () => Buffer.concat([moof, mdat]));
   return Buffer.concat([moov, ...frags]);
 }
 
-test("the check every FairPlay form must pass: Apple's key line with this address, 'cbcs', this key id, this IV, every sample recorded whole and protected, every keyframe encrypted", () => {
+test("the check every FairPlay form must pass: Apple's key line with this address, 'cbcs', this key id, this IV, every sample recorded whole and protected, every slice of every keyframe encrypted, no long clear run", () => {
   const ids = newFairPlayIds();
   const playlist = `#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="${ids.keyUri}",KEYFORMATVERSIONS="1",KEYFORMAT="com.apple.streamingkeydelivery"\n#EXTINF:2,\nvideo.mp4\n`;
   const good = checkFairPlay(playlist, fakeFile(ids), ids);
@@ -149,8 +190,12 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     const r = checkFairPlay(playlist, fakeFile({ ...ids, prot: [104, 13, 10], flags: [0, NOT_KEY, NOT_KEY], defaults }), ids);
     assert.deepEqual([r.problems, r.keyframes, r.keyframesEncrypted], [[], 1, 1], `keyframes from the ${defaults} defaults`);
     const bad = checkFairPlay(playlist, fakeFile({ ...ids, prot: [13, 104, 10], flags: [0, NOT_KEY, NOT_KEY], defaults }), ids);
-    assert.ok(bad.problems.some((p) => /1 of 1 keyframes have no encrypted block/.test(p)), `${defaults}: ${JSON.stringify(bad.problems)}`);
+    assert.ok(bad.problems.some((p) => /1 of 1 keyframes have a slice with no encrypted block/.test(p)), `${defaults}: ${JSON.stringify(bad.problems)}`);
   }
+  // a keyframe of several slices (measured from shaka-packager with four slices: [706,6343] [12,3904]
+  // [13,13486] [13,13370]): every slice is encrypted on its own and can be decoded on its own
+  const four = [[[706, 6343], [12, 3904], [13, 13486], [13, 13370]], [[10, 13]]];
+  assert.deepEqual(checkFairPlay(playlist, fakeFile({ ...ids, slices: four }), ids).problems, [], "four slices, each encrypted");
   // each way it can be wrong is named
   const other = newFairPlayIds();
   const cases = [
@@ -167,8 +212,15 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 0] }), ids), /1 of 2 samples have no protected bytes/],
     [checkFairPlay(playlist, fakeFile({ ...ids, prot: [0, 0] }), ids), /2 of 2 samples have no protected bytes/],
     // the keyframe carries the picture: under one block there, nothing of the picture is encrypted
-    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [15, 900] }), ids), /1 of 1 keyframes have no encrypted block/],
-    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 13, 15], flags: [0, NOT_KEY, 0] }), ids), /1 of 2 keyframes have no encrypted block/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [15, 900] }), ids), /1 of 1 keyframes have a slice with no encrypted block/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 13, 15], flags: [0, NOT_KEY, 0] }), ids), /1 of 2 keyframes have a slice with no encrypted block/],
+    // ONE slice of a keyframe left out of the encryption, while the frame as a whole has plenty: that slice
+    // of the picture decodes without the key (the review's case: slice 2 of 4 put back in the clear)
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[706, 6343], [12, 0], [13, 13486], [13, 13370]], [[10, 13]]] }), ids), /1 of 1 keyframes have a slice with no encrypted block/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[706, 6343], [12, 15], [13, 13486]], [[10, 13]]] }), ids), /1 of 1 keyframes have a slice with no encrypted block/],
+    // a long clear run anywhere, in a keyframe or between keyframes: bytes a decoder may show without the key
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[706, 6343], [3916, 16]], [[10, 13]]] }), ids), /1 of 2 samples leave more than 1024 bytes in the clear in one run/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, slices: [[[706, 6343]], [[1500, 13]]] }), ids), /1 of 2 samples leave more than 1024 bytes in the clear in one run/],
     [checkFairPlay(playlist, fakeFile({ ...ids, flags: [NOT_KEY, NOT_KEY] }), ids), /no sample is marked as a keyframe/],
     // bytes of a sample outside its record would be in the clear
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910, 2710] }), ids), /1 of 2 samples are not covered whole/],
@@ -176,12 +228,22 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910, 710, 500], flags: [0, NOT_KEY, 0] }), ids), /different number of encryption records/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910, 710, 500], flags: [0, NOT_KEY, 0] }), ids), /1 of 3 samples have no protected bytes/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sizes: [910], flags: [0] }), ids), /different number of encryption records/],
-    // a file or a record cut short is named, never read past: the file ending inside the last box's body, inside
-    // an earlier box, or inside a box's header
-    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 4); })(), ids), /cannot be read: a fragment's box is cut short/],
-    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 30); })(), ids), /cannot be read: a fragment's box is cut short/],
-    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 33); })(), ids), /cannot be read: a fragment's box is cut short/],
+    // a file or a record cut short is named, never read past: the samples' bytes ('mdat') cut, or missing
+    // altogether, or the file ending inside the fragment's first box (before its sample table is read)
+    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.length - 4); })(), ids), /cannot be read: a fragment's media data is cut short/],
+    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.indexOf("mdat") - 4); })(), ids), /cannot be read: a fragment's media data is cut short/],
+    [checkFairPlay(playlist, (() => { const f = fakeFile(ids); return f.subarray(0, f.indexOf("tfhd") + 6); })(), ids), /cannot be read: a fragment's box is cut short/],
+    // in a whole file, a box of the fragment running past the fragment's end, and bytes left over at its end
+    [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("saio"); f.writeUInt32BE(f.readUInt32BE(at - 4) + 4, at - 4); return f; })(), ids), /cannot be read: a fragment's box is cut short/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, trafTail: Buffer.alloc(4) }), ids), /cannot be read: a fragment's box is cut short/],
     [checkFairPlay(playlist, fakeFile({ ...ids, sencCount: 3 }), ids), /cannot be read: a fragment's encryption record is cut short/],
+    // the records' box read as something else: its subsample flag cleared (every sample would read as wholly
+    // protected), or a count one short (a record left over)
+    [checkFairPlay(playlist, fakeFile({ ...ids, sencFlags: 0 }), ids), /cannot be read: a fragment's encryption records do not fill their box exactly/],
+    [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("senc"); f.writeUInt32BE(1, at + 8); return f; })(), ids), /cannot be read: a fragment's encryption records do not fill their box exactly/],
+    // a fragment header or the movie's defaults too short for the fields their flags announce
+    [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("tfhd"); f[at + 7] = 0x3b; return f; })(), ids), /cannot be read: a fragment's fragment header is cut short/],
+    [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("trex"); f.writeUInt32BE(28, at - 4); return f; })(), ids), /cannot be read: the movie's sample defaults are cut short/],
     // a sample count no file could hold is refused, not looped over (records and table entries of no bytes)
     [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("senc"); f[at + 7] = 0; f.writeUInt32BE(0xffffffff, at + 8); return f; })(), ids), /cannot be read: a fragment lists 4294967295 samples/],
     [checkFairPlay(playlist, (() => { const f = Buffer.from(fakeFile(ids)), at = f.indexOf("trun"); f[at + 6] = 0; f.writeUInt32BE(0xffffffff, at + 8); return f; })(), ids), /cannot be read: a fragment lists 4294967295 samples/],
@@ -226,6 +288,36 @@ test("packaged for FairPlay with the real packager: Apple's playlist, 'cbcs' und
   let wrong = null; try { wrong = await frame(join(dir, "fp", "video.mp4"), ["-decryption_key", newFairPlayIds().key]); } catch {}
   assert.ok(!wrong || !wrong.equals(clear), "another key does not give the picture back");
   notice("FairPlay packaging", `checkFairPlay ok (scheme ${check.scheme}, kid ${check.kid}, iv ${check.iv}; ${check.samples} samples, every one recorded whole and protected, ${check.keyframesEncrypted} of ${check.keyframes} keyframes encrypted, ${check.samplesEncrypted} samples with an encrypted block); ${data.length} bytes; key line: ${media.split("\n").find((l) => l.startsWith("#EXT-X-KEY"))}; decrypted by ffmpeg with our key: first frame identical to the clear clip, centre ${centre(back, 640, 480)}; another key: ${wrong ? "a different frame" : "decoding refused"}`);
+});
+
+// A keyframe of several slices: renderClip's own settings (service/lib/pipeline.mjs), plus four slices per
+// frame, packaged by packageFairPlay. Every slice of a keyframe must carry an encrypted block (a decoder
+// shows each slice on its own); one slice's record marked clear (the review's case, which then decoded to
+// part of the picture without the key) is refused.
+test("a keyframe of four slices with the real packager: every slice encrypted; one slice's record marked clear is refused (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const dir = await fs.mkdtemp(join(tmp, "slices-"));
+  const pic = join(dir, "pic.png");
+  await exec("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=960x1280:d=1", "-frames:v", "1", pic]);
+  await exec("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-noautorotate", "-i", pic, "-vf", "loop=loop=29:size=1:start=0,setpts=N/(15*TB),scale=960:1280,format=yuv420p",
+    "-r", "15", "-t", "2", "-c:v", "libx264", "-profile:v", "main", "-level", "4.0", "-pix_fmt", "yuv420p", "-g", "15", "-x264-params", "slices=4", "-movflags", "+faststart", join(dir, "clip.mp4")]);
+  const ids = newFairPlayIds();
+  await packageFairPlay(tools.packager, dir, ids);
+  const media = await fs.readFile(join(dir, "fp", "video.m3u8"), "utf8"), data = await fs.readFile(join(dir, "fp", "video.mp4"));
+  const good = checkFairPlay(media, data, ids);
+  assert.deepEqual(good.problems, [], "the packaged form passes");
+  // the first keyframe's record (constant IV, so no IV bytes): four slices, each with an encrypted block
+  const at = data.indexOf("senc") - 4, k = data.readUInt16BE(at + 16);
+  const slices = Array.from({ length: k }, (_, j) => [data.readUInt16BE(at + 18 + 6 * j), data.readUInt32BE(at + 20 + 6 * j)]);
+  assert.equal(k, 4, "four slices: " + JSON.stringify(slices));
+  assert.ok(slices.every(([, p]) => p >= 16), "each with an encrypted block: " + JSON.stringify(slices));
+  // slice 2 marked clear in its record: all its bytes counted clear, none protected
+  const bad = Buffer.from(data), e = at + 18 + 6;
+  bad.writeUInt16BE(slices[1][0] + slices[1][1], e); bad.writeUInt32BE(0, e + 2);
+  const r = checkFairPlay(media, bad, ids);
+  assert.equal(r.ok, false, "one slice in the clear is refused");
+  assert.ok(r.problems.some((p) => /1 of 2 keyframes have a slice with no encrypted block/.test(p)), JSON.stringify(r.problems));
+  notice("FairPlay slices", `a keyframe of ${k} slices ${JSON.stringify(slices)}: checkFairPlay ok (${good.keyframesEncrypted} of ${good.keyframes} keyframes); with slice 2 marked clear: ${r.problems.join("; ")}`);
 });
 
 test("the worker with the Axinom key: a new picture gets its Apple form, its token (sealed) carries the key that decrypts it; the combined view too; a backfill adds the form to an older picture (needs shaka-packager)", async (t) => {
