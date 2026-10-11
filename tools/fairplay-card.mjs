@@ -58,7 +58,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     await run(tools.packager, [`in=${join(work, "fp", "video.mp4")},stream=video,output=${join(work, "decrypted.mp4")}`, "--enable_raw_key_decryption", "--keys", `key_id=${ids.kid}:key=${ids.key}`]);
     const byPackager = await firstFrame(tools, join(work, "decrypted.mp4"));
     let undecrypted = "decoding refused";
-    try { undecrypted = largestDifference(await firstFrame(tools, join(work, "fp", "video.mp4")), clear); } catch {}
+    try { const f = await firstFrame(tools, join(work, "fp", "video.mp4")); undecrypted = f.length === clear.length ? largestDifference(f, clear) : `a frame of another size (${f.length} bytes, the card's is ${clear.length})`; } catch {}
     const decryptCheck = { ffmpeg: largestDifference(byFfmpeg, clear), shakaPackager: largestDifference(byPackager, clear), undecrypted };
     if (decryptCheck.ffmpeg !== 0 || decryptCheck.shakaPackager !== 0) throw new Error(`decrypted, the FairPlay form is not the clear card (largest difference: ffmpeg ${decryptCheck.ffmpeg}, shaka-packager ${decryptCheck.shakaPackager})`);
     if (typeof undecrypted === "number" && undecrypted < 40) throw new Error(`undecrypted, the FairPlay form still shows the card (largest difference ${undecrypted}): its samples are not encrypted`);

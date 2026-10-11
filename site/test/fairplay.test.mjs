@@ -235,7 +235,8 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   const info = await buildFairPlayCard({ tools, outDir: out });
   assert.deepEqual((await fs.readdir(out)).sort(), ["info.json", "master.m3u8", "video.m3u8", "video.mp4"]);
   assert.deepEqual(info.decryptCheck.ffmpeg, 0); assert.deepEqual(info.decryptCheck.shakaPackager, 0);
-  assert.ok(info.decryptCheck.undecrypted === "decoding refused" || info.decryptCheck.undecrypted >= 40, "undecrypted it is not the card");
+  const u = info.decryptCheck.undecrypted;
+  assert.ok(u === "decoding refused" || /^a frame of another size/.test(u) || (typeof u === "number" && u >= 40), "undecrypted it is not the card: " + u);
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);

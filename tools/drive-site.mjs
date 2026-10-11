@@ -352,7 +352,7 @@ try {
   const jwtKid = (t) => { try { return JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).message.content_keys_source.inline[0].id; } catch { return null; } };
   // (1) unmeasured: the picture is held back, and never reaches the player
   let { c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID);
-  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/held back — Apple FairPlay is not yet measured on iPhone\/iPad/.test(await ap.textContent("#r-ks")) && /Apple FairPlay is not yet measured here/.test(await ap.textContent("#r-rule")), "an iPhone, Apple unmeasured: the picture is held back, and the readout says why: " + (await ap.textContent("#r-ks")));
   check((await ap.evaluate(() => window.__manifests.length)) === 0 && !(await ap.evaluate(() => window.__photoShown)), "and nothing was given to the player");
   check(/Apple devices aren't confirmed yet/.test(await ap.textContent("#msg")), "the picture's box says so");
@@ -388,12 +388,12 @@ try {
   await ac.close(); api.noPictureToken = false; api.appleMeasured = false;
   // (6) an iPad asks for desktop sites (it reports itself as a Mac); its touch screen gives it away
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID, () => Object.defineProperty(Navigator.prototype, "maxTouchPoints", { get: () => 5 })));
-  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/on iPhone\/iPad/.test(await ap.textContent("#r-rule")), "an iPad reporting itself as a Mac is treated as an iPad: " + (await ap.textContent("#r-rule")));
   await ac.close();
   // (7) a Mac in Safari: Apple's path too (held back while unmeasured); Chrome on a Mac keeps its old rule
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
-  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 });
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/held back — Apple FairPlay is not yet measured on Mac/.test(await ap.textContent("#r-ks")), "a Mac in Safari: held back until Apple is measured on a Mac: " + (await ap.textContent("#r-ks")));
   await ac.close();
 

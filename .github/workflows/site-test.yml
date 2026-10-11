@@ -25,4 +25,8 @@ jobs:
         run: node tools/build-site-view.mjs --check
       - name: node --test (the worker's packager test must run)
         env: { REQUIRE_PACKAGER: "1", PACKAGER_BIN: /usr/local/bin/packager }
-        run: node --version && node --test --test-reporter spec "site/test/*.test.mjs"
+        run: |
+          node --version
+          set +e; node --test --test-reporter spec "site/test/*.test.mjs" 2>&1 | tee "$RUNNER_TEMP/tests.log"; rc=${PIPESTATUS[0]}; set -e
+          echo "::notice title=site tests::$(grep -E '^ℹ (tests|pass|fail|skipped) ' "$RUNNER_TEMP/tests.log" | tr '\n' ' ')"
+          exit $rc
