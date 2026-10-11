@@ -108,13 +108,14 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 
 // The guard, run in a copy of the repository's workflows and tools with one extra workflow, or with one
 // file changed (edit: [relative path, function from its text to the new text])
-async function guardWith(extra, edit) {
+async function guardWith(extra, edit, files = {}) {
   const d = await fs.mkdtemp(join(tmpdir(), "guard-"));
   await fs.cp(join(REPO, ".github"), join(d, ".github"), { recursive: true });
   await fs.cp(join(REPO, "tools"), join(d, "tools"), { recursive: true, filter: (src) => !src.includes("node_modules") });
   await fs.mkdir(join(d, "service"), { recursive: true }); await fs.copyFile(join(REPO, "service", "Dockerfile"), join(d, "service", "Dockerfile"));
   if (extra) await fs.writeFile(join(d, ".github", "workflows", "zz-extra.yml"), `name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: curl -sS "${extra}"\n`);
   if (edit) { const f = join(d, edit[0]); const before = await fs.readFile(f, "utf8"); const after = edit[1](before); assert.notEqual(after, before, "the edit changes " + edit[0]); await fs.writeFile(f, after); }
+  for (const [rel, text] of Object.entries(files)) { await fs.mkdir(join(d, rel, ".."), { recursive: true }); await fs.writeFile(join(d, rel), text); }
   const r = spawnSync(process.execPath, [join(d, "tools", "check-workflow-links.mjs")], { cwd: d, encoding: "utf8" });
   await fs.rm(d, { recursive: true, force: true });
   return { code: r.status, out: (r.stdout || "") + (r.stderr || "") };
@@ -136,12 +137,37 @@ test("the guard holds every shaka-packager download to the pinned release, check
     [["service/Dockerfile", (t) => t.replace(/\n  && echo ("[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c -) \\/, "\n#  && echo $1 \\")], /service\/Dockerfile:\d+: the downloaded packager must be checked against its SHA-256/],
     [[".github/workflows/site-fairplay.yml", (t) => t.replace(/sha256sum -c - \|\| exit 1/, "sha256sum -c - || true")], /site-fairplay\.yml:\d+: the downloaded packager must be checked/],
     [[".github/workflows/card-fairplay.yml", (t) => t.replace(/(\n\s+)(echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c - \|\| exit 1)/, "$1if false; then $2; fi")], /card-fairplay\.yml:\d+: the downloaded packager must be checked/],
-    [[".github/workflows/service-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    continue-on-error: true")], /service-test\.yml: downloads shaka-packager and lets a step fail on \(continue-on-error\)/],
-    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - run: docker run --rm google/shaka-packager packager --version\n      - name: The generated view page is current")], /site-test\.yml:\d+: runs shaka-packager from an image or an action/],
+    [[".github/workflows/service-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    continue-on-error: true")], /service-test\.yml: downloads shaka-packager and lets a failure pass \(continue-on-error\)/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - run: docker run --rm google/shaka-packager packager --version\n      - name: The generated view page is current")], /site-test\.yml:\d+: uses a shaka-packager image or action/],
   ];
   for (const [edit, re] of cases) { const r = await guardWith(null, edit); assert.equal(r.code, 1, `${edit[0]}: ${r.out}`); assert.match(r.out, re); }
   const r = await guardWith(LATEST); // a new workflow fetching it any other way
   assert.equal(r.code, 1, r.out); assert.match(r.out, /zz-extra\.yml:\d+: shaka-packager must come from the pinned release/);
+  // the eighth review's careless edits that the second version let through
+  const H = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
+  const refused = [
+    [[".github/workflows/site-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container: google/shaka-packager:v3.9.3")], /site-test\.yml:\d+: uses a shaka-packager image or action/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    container:\n      image: google/shaka-packager:v3.9.3")], /site-test\.yml:\d+: uses a shaka-packager image or action/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - run: docker container run --rm google/shaka-packager packager --version\n      - name: The generated view page is current")], /uses a shaka-packager image or action/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - run: podman run --rm google/shaka-packager packager --version\n      - name: The generated view page is current")], /uses a shaka-packager image or action/],
+    [["service/Dockerfile", (t) => t.replace(/RUN curl -sSL -o \/usr\/local\/bin\/packager [^\n]*\n  && echo [^\n]*\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "COPY --from=google/shaka-packager:v3.9.3 /usr/bin/packager /usr/local/bin/packager")], /service\/Dockerfile:\d+: uses a shaka-packager image or action/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - continue-on-error: true\n        run: echo x\n      - name: The generated view page is current")], /site-test\.yml: downloads shaka-packager and lets a failure pass/],
+    [[".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - { name: x, run: echo x, continue-on-error: true }\n      - name: The generated view page is current")], /site-test\.yml: downloads shaka-packager and lets a failure pass/],
+    [["service/Dockerfile", (t) => t.replace("  && chmod +x /usr/local/bin/packager", "  ; chmod +x /usr/local/bin/packager")], /service\/Dockerfile:\d+: after the packager's check, this instruction may not go on with ';' or '\|\|'/],
+  ];
+  for (const [edit, re] of refused) { const g = await guardWith(null, edit); assert.equal(g.code, 1, `${edit[0]}: ${g.out}`); assert.match(g.out, re); }
+  // the download moved into a composite action, unchecked: read and refused
+  const action = await guardWith(null, null, { ".github/actions/get-packager/action.yml": `name: get packager\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: |\n        curl -sSL -o /usr/local/bin/packager ${PIN}\n        chmod +x /usr/local/bin/packager\n` });
+  assert.equal(action.code, 1, action.out); assert.match(action.out, /\.github\/actions\/get-packager\/action\.yml:\d+: the downloaded packager must be checked/);
+  // legitimate text the second version refused: accepted
+  const accepted = [
+    [".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - name: Show which build (packager-linux-x64) is used\n        run: packager --version\n      - name: The generated view page is current")],
+    [".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - run: packager --version # https://github.com/shaka-project/shaka-packager/releases/tag/v3.9.3\n      - name: The generated view page is current")],
+    [".github/workflows/site-test.yml", (t) => t.replace("      - name: The generated view page is current", "      - name: x\n        continue-on-error: false\n        run: echo x\n      - name: The generated view page is current")],
+    ["service/Dockerfile", (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager")],
+  ];
+  for (const edit of accepted) { const g = await guardWith(null, edit); assert.equal(g.code, 0, `${edit[0]} accepted: ${g.out}`); assert.match(g.out, /all 9 shaka-packager downloads/); }
+  assert.ok(H.length === 64);
 });
 
 test("the guard accepts a link only when its FIRST parameter is a safe value and it names no other levels= or clip=", async () => {

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
-import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, checkKeyWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
+import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, checkKeyWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, TOKEN_CHECK_TIMEOUT_MS, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
 import { checkFairPlay, checkFairPlayBytes, verifyFairPlayBytes, readTrack, packageFairPlay, renderClip, SAMPLE_OPEN_MAX } from "../../service/lib/pipeline.mjs";
 import { spawnSync } from "node:child_process";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
@@ -122,6 +122,17 @@ test("the token check accepts only Axinom's answers about the request, never one
   let signals = 0, served = 0;
   const busy = await checkTokenWithAxinom("a.b.c", OWN_LICENSE, async (url, init) => { if (init.signal instanceof AbortSignal) signals++; served++; return { status: 503, headers: new Headers() }; }, { pause: async () => {} });
   assert.deepEqual([busy.accepted, busy.reached, served, signals], [false, false, 3, 3]); assert.match(busy.message, /^Axinom could not be reached \(3 tries\): Axinom answered HTTP 503$/);
+  // each try is cut at its time limit (a server that never answers), and a 429 or a 500 is tried again, never taken
+  // as an answer
+  assert.equal(TOKEN_CHECK_TIMEOUT_MS, 20000);
+  let started = 0; const t0 = Date.now();
+  const silent = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, (url, init) => { started++; return new Promise((_, reject) => { const hold = setTimeout(() => {}, 10000); init.signal.addEventListener("abort", () => { clearTimeout(hold); reject(init.signal.reason); }); }); } /* a silent server holds its connection open; here a timer does */, { pause: async () => {}, timeoutMs: 60 });
+  const took = Date.now() - t0;
+  assert.deepEqual([silent.accepted, silent.reached, started], [false, false, 3]); assert.ok(took >= 150 && took < 3000, `three tries cut at 60 ms each: ${took} ms`);
+  assert.match(silent.message, /^Axinom could not be reached \(3 tries\): .*(timeout|aborted)/i);
+  const codes = [429, 500];
+  const third = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, async () => { const c = codes.shift(); return c ? { status: c, headers: new Headers() } : { status: 400, headers: new Headers({ "X-AxDRM-ErrorMessage": "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0." }) }; }, { pause: async () => {} });
+  assert.deepEqual([third.accepted, third.reached, codes.length], [true, true, 0], "a 429 and a 500 tried again; the third answer counts");
   // Axinom out of reach: three tries, then said so plainly (never taken as accepted)
   let tries = 0; const pauses = [];
   const down = await checkTokenWithAxinom("h.p.s", OWN_LICENSE, async () => { tries++; throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED (a test)") }); }, { pause: async (ms) => { pauses.push(ms); } });
@@ -735,6 +746,56 @@ test("the worker asks Axinom before making or replacing any Apple form: a refusa
   finally { globalThis.fetch = realFetch; }
   assert.deepEqual(sent, [AXINOM_FAIRPLAY_LICENSE], "Axinom asked once, at the key's address");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === D).fairplay, false, "refused by the default question: no form");
+  // a question that cannot even be put (it throws), and a key that cannot make a token (the worker's own default
+  // question, which fails before sending anything): no new form, said plainly, the picture readied all the same
+  for (const [id, checkKey, comX, re] of [
+    ["e".repeat(24), async () => { throw new Error("boom (a test)"); }, COM, /no FairPlay form for e{24}: our key \(key id [0-9a-f-]{36}\) could not be used: boom \(a test\)/],
+    ["f".repeat(24), undefined, { ...COM, key: Buffer.alloc(31) }, /no FairPlay form for f{24}: our key \(key id [0-9a-f-]{36}\) could not be used: Invalid key length/],
+  ]) {
+    logged.length = 0; console.log = (...a) => { logged.push(a.join(" ")); };
+    let r; try { process.env.WORKER_BLOB_FILE = await upload(await solid(`gate-${id[0]}.png`, 320, 240, "0x95a5a6")); r = await worker({ payload: { action: "add", id, name: id + ".png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools, ...(checkKey ? { checkKey } : {}), com: comX }); }
+    finally { console.log = consoleLog; }
+    assert.equal(r.status, "ready", JSON.stringify(r));
+    assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === id).fairplay, false);
+    assert.ok(logged.some((l) => re.test(l)), logged.join(" | ")); assert.ok(!logged.some((l) => /made all the same/.test(l)), "never said to be made");
+  }
+  // a form made while Axinom could not be asked is recorded as such, and is not current: it is renewed once Axinom
+  // can be asked, so a wrong key value is found out (the backfill stops, red) instead of passing as current
+  const metaC = await metaOf(C);
+  assert.equal(metaC.fairplay.verified, false, "C's form was made while Axinom could not be asked");
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", C), metaC.fairplay, COM), false, "so it is not current");
+  // THE RULE, on the combined view: a rebuild of the SAME pictures (here: one left out, tried again) would delete
+  // its working form; refused, or Axinom out of reach, the view is kept as it is; accepted, it is rebuilt
+  const value3 = { ...COM, key: nodeRandom(32) }, accept = answer(true, "Invalid license request. (a test)");
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value3 })).status, "ready", "other pictures: rebuilt with its form");
+  const withForm = await mosaicMeta();
+  assert.ok(withForm.fairplay && withForm.fairplay.master && withForm.fairplay.verified === true, JSON.stringify(withForm.fairplay));
+  await fs.writeFile(join(siteDir, "mosaic", "meta.json.enc"), await sealText(KEY, JSON.stringify({ ...withForm, skipped: [{ id: "z".repeat(24), name: "z.png", reason: "a test" }] })));
+  const value4 = { ...COM, key: nodeRandom(32) };
+  for (const gate of [refuse, unreachable]) {
+    const m = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: gate, com: value4 });
+    assert.deepEqual([m.status, m.fairplay], ["current", "kept"], JSON.stringify(m));
+    assert.deepEqual((await mosaicMeta()).fairplay, withForm.fairplay, "its working form kept");
+    assert.ok((await fs.readdir(join(siteDir, "mosaic"))).includes(withForm.fairplay.master.split("/")[0]), "and its folder");
+  }
+  const rebuiltSame = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value4 });
+  assert.equal(rebuiltSame.status, "ready", JSON.stringify(rebuiltSame));
+  const after = await mosaicMeta();
+  assert.deepEqual([after.skipped, after.fairplay.verified], [[], true]); assert.notEqual(after.fairplay.master, withForm.fairplay.master, "accepted: rebuilt, with a new form");
+  // a view with no form whose own output cannot be read back is rebuilt (it has no form to lose)
+  await fs.writeFile(join(siteDir, "mosaic", "meta.json.enc"), await sealText(KEY, JSON.stringify({ ...after, fairplay: null })));
+  await fs.writeFile(join(siteDir, "mosaic", "video-playready.mp4.enc"), Buffer.from("not a sealed file"));
+  const repaired = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools, checkKey: accept, com: value4 });
+  assert.equal(repaired.status, "ready", JSON.stringify(repaired)); assert.ok((await mosaicMeta()).fairplay.master, "rebuilt, with its form");
+  // the backfill making a missing combined view while Axinom refuses the key: counted, not "done"
+  await fs.rm(join(siteDir, "mosaic"), { recursive: true, force: true });
+  const fresh = await fs.mkdtemp(join(tmp, "gate2-"));
+  for (const f of ["gallery.json.enc"]) await fs.copyFile(join(siteDir, f), join(fresh, f));
+  const g = await readGallery(fresh, KEY); g.photos = g.photos.filter((x) => x.id === A); await fs.writeFile(join(fresh, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g)));
+  await fs.cp(join(siteDir, "photos", A), join(fresh, "photos", A), { recursive: true });
+  const aNow = await metaOf(A), keyA = aNow.fairplay.comKeyCheck === comKeyCheck(value2) ? value2 : corrected;
+  const bf = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir: fresh, tools, checkKey: refuse, com: keyA });
+  assert.deepEqual([bf.already, bf.failed, bf.mosaic, bf.status], [1, 1, "ready without its Apple form", "partial"], JSON.stringify(bf));
 });
 
 // The card job's command, run as the job runs it (a child process of tools/fairplay-card.mjs with the Axinom key

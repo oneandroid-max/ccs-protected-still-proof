@@ -20,8 +20,9 @@
 // no secret, nothing uploaded, no capture, running no tool but itself and this guard, and the drive file
 // pinned by content below (2026-10-11: the second review asked for the drive's checks in CI).
 //
-// THIRD RULE (2026-10-11, the sixth and seventh reviews): every shaka-packager download, in every workflow and
-// in service/Dockerfile, is the pinned release, checked against its SHA-256 by the exact line that follows it.
+// THIRD RULE (2026-10-11, the sixth, seventh and eighth reviews): every shaka-packager download, in any YAML
+// file under .github/ and any Dockerfile, is the pinned release, checked against its SHA-256 by the exact line
+// that follows it; no packager image or action; no failure allowed to pass.
 //
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
@@ -140,33 +141,37 @@ const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicE
 if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
 
 // THIRD RULE (2026-10-11, the sixth review: three of nine downloads were left unpinned while the plan said all
-// were pinned; tightened after the seventh, which stepped around the first version nine ways): shaka-packager is
-// the one program the workflows fetch and run, on pictures among other things. Every line that names its releases,
-// in every workflow and in service/Dockerfile, must download the pinned release, and the very next line must be,
-// exactly, the check of that file against its SHA-256: in a workflow `echo "<sha256>  <file>" | sha256sum -c - ||
-// exit 1` (it stops the step even under `set +e`; a trailing comment allowed), in the Dockerfile `&& echo
-// "<sha256>  <file>" | sha256sum -c - \`. A workflow that downloads it may not let a step fail on
-// (`continue-on-error`), and nothing may run the packager from an image or an action. This catches mistakes; an
-// author set on getting around it (a URL built from parts, say) can, and review is what catches that.
+// were pinned; tightened after the seventh and the eighth, which stepped around earlier versions): shaka-packager
+// is the one program the jobs fetch and run, on pictures among other things. Read: every YAML file under .github/
+// (workflows and actions) and every Dockerfile in the repository, comments left out. Every line that downloads
+// from its releases must download the pinned release, and the very next line must be, exactly, the check of that
+// file against its SHA-256: in YAML `echo "<sha256>  <file>" | sha256sum -c - || exit 1` (it stops the step even
+// under `set +e`; a trailing comment allowed), in a Dockerfile `&& echo "<sha256>  <file>" | sha256sum -c - \` with
+// nothing after it in that instruction that could swallow its failure (`;`, `||`). A file that downloads it may not
+// let a failure pass (`continue-on-error` anything but false); nothing may use a packager image or action (docker,
+// podman, `container:`, `uses:`, FROM, COPY --from). This catches mistakes; an author set on getting around it (a
+// URL built from parts, say) can, and review is what catches that.
 const PACKAGER_URL = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
 const PACKAGER_SHA256 = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const filesUnder = (d, keep) => { let names = []; try { names = readdirSync(d); } catch { return []; } return names.flatMap((x) => { const p = join(d, x); if (x === "node_modules" || x === ".git") return []; const st = lstatSync(p); return st.isDirectory() ? filesUnder(p, keep) : keep(x) ? [p] : []; }); };
+const packagerFiles = [...filesUnder(".github", (x) => /\.ya?ml$/.test(x)), ...filesUnder(".", (x) => /^Dockerfile/.test(x)).map((p) => p.replace(/^\.\//, ""))];
 let downloads = 0;
-for (const f of [...readdirSync(DIR).filter((x) => /\.ya?ml$/.test(x)).map((x) => join(DIR, x)), "service/Dockerfile"]) {
-  let text; try { text = read(f); } catch { continue; } // no Dockerfile, no download in it
-  const lines = text.split("\n"), docker = f.endsWith("Dockerfile");
+for (const f of [...new Set(packagerFiles)]) {
+  const lines = read(f).split("\n"), docker = /(^|\/)Dockerfile[^/]*$/.test(f);
+  const code = lines.map((l) => (/^\s*#/.test(l) ? "" : l.replace(/\s#.*$/, ""))); // comments left out
   let fetches = 0;
-  lines.forEach((line, i) => {
-    if (/^\s*#/.test(line)) return;
-    if (/docker\s+(run|pull|create)\b[^\n]*packager|^\s*FROM\s[^\n]*packager|uses:\s*[^\n]*packager/i.test(line)) bad.push(`${f}:${i + 1}: runs shaka-packager from an image or an action; only the pinned, checked download may be run`);
-    if (!/shaka-packager\/releases|packager-(linux|mac|win)/i.test(line)) return;
+  code.forEach((line, i) => {
+    if (/google\/shaka-packager|shaka-project\/shaka-packager@/i.test(line)) bad.push(`${f}:${i + 1}: uses a shaka-packager image or action; only the pinned, checked download may be run`);
+    if (!/github\.com\/shaka-project\/shaka-packager\/releases\//i.test(line)) return;
     downloads++; fetches++;
     const out = (line.match(/\s-o\s+(\S+)/) || [])[1];
     if (!line.includes(PACKAGER_URL)) bad.push(`${f}:${i + 1}: shaka-packager must come from the pinned release (${PACKAGER_URL})`);
     const want = out && (docker ? new RegExp(`^\\s*&& echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c - \\\\$`) : new RegExp(`^\\s*echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c - \\|\\| exit 1(\\s+#.*)?$`));
     if (!want || !want.test(lines[i + 1] || "")) bad.push(`${f}:${i + 1}: the downloaded packager must be checked against its SHA-256 on the very next line, exactly: ${docker ? "&& " : ""}echo "${PACKAGER_SHA256.slice(0, 12)}…  <file>" | sha256sum -c - ${docker ? "\\" : "|| exit 1"}`);
+    else if (docker) for (let j = i + 2; j < lines.length && /\\\s*$/.test(lines[j - 1]); j++) if (/;|\|\|/.test(code[j])) bad.push(`${f}:${j + 1}: after the packager's check, this instruction may not go on with ';' or '||' (they would swallow a failed check)`);
   });
-  if (fetches && /^\s*continue-on-error:/m.test(text)) bad.push(`${f}: downloads shaka-packager and lets a step fail on (continue-on-error)`);
+  if (fetches && code.some((l) => /continue-on-error\s*:(?!\s*false\b)/.test(l))) bad.push(`${f}: downloads shaka-packager and lets a failure pass (continue-on-error)`);
 }
 
 if (bad.length) {

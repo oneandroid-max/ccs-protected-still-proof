@@ -30,20 +30,22 @@ const FP_FILES = ["master.m3u8", "video.m3u8", "video.mp4", "token.enc"];
 export const TOKEN_RENEW_DAYS = 14; // a token with less than this left is renewed (the weekly backfill run does it)
 
 // Whether Axinom accepts our key, asked at most once per run and only when an Apple form is about to be made
-// (checkKeyWithAxinom: a token for a throwaway key). A working form is REPLACED only when Axinom accepts the key:
-// the backfill stops before replacing anything, and the combined view keeps its form, when Axinom refuses the
-// key or cannot be asked. A NEW form (a new picture, a view of other pictures) replaces nothing, so it is made
-// unless Axinom refuses the key: Axinom out of reach does not cost a new picture its Apple form.
+// (checkKeyWithAxinom: a token for a throwaway key). THE RULE: a working form is never deleted or replaced unless
+// Axinom has accepted the key in that run; when it refuses the key, or cannot be asked, the backfill stops before
+// replacing anything and the combined view is kept as it is. A NEW form (a new picture, a view of other pictures)
+// replaces nothing, so it is made unless Axinom refuses the key or the key cannot be used at all; one made without
+// Axinom's acceptance is recorded as such, and renewed once Axinom accepts the key (fairPlayCurrent).
 export function keyGate(com, checkKey = checkKeyWithAxinom) {
   let answer = null;
   return async () => {
-    if (!answer) { try { answer = await checkKey(com); } catch (e) { answer = { accepted: false, reached: false, status: 0, message: `our key could not be used: ${String(e.message || e).slice(0, 200)}` }; } }
+    if (!answer) { try { answer = await checkKey(com); } catch (e) { answer = { accepted: false, reached: false, unusable: true, status: 0, message: String(e.message || e).slice(0, 200) }; } }
     return answer;
   };
 }
 const mayReplace = (answer) => answer.accepted;
-const mayMake = (answer) => answer.accepted || !answer.reached; // only a refusal stops a new form
-const refusal = (com, answer) => answer.reached ? `Axinom does not accept our key (key id ${com.id}): ${answer.message}` : `Axinom could not be asked about our key (key id ${com.id}): ${answer.message}`;
+const mayMake = (answer) => answer.accepted || (!answer.reached && !answer.unusable); // a refusal, or a key that cannot be used, stops a new form
+const refusal = (com, answer) => answer.unusable ? `our key (key id ${com.id}) could not be used: ${answer.message}`
+  : answer.reached ? `Axinom does not accept our key (key id ${com.id}): ${answer.message}` : `Axinom could not be asked about our key (key id ${com.id}): ${answer.message}`;
 
 // Apple's FairPlay form of the clip in `work` (work/clip.mp4), checked, then written to `outDir` as ONE
 // folder, fp-<8 hex>/: the HLS files as they are (their samples are encrypted under a key that only the
@@ -54,7 +56,7 @@ const refusal = (com, answer) => answer.reached ? `Axinom does not accept our ke
 // Older forms are removed by the caller, once the meta points to the new one. Throws when the packaged
 // form fails its check: nothing is written then. Returns what the meta records, the account's licence
 // address with it (the page sends the token there and nowhere else).
-async function addFairPlay({ tools, work, outDir, key, com }) {
+async function addFairPlay({ tools, work, outDir, key, com, verified }) {
   const ids = newFairPlayIds();
   await fs.rm(join(work, "fp"), { recursive: true, force: true });
   await packageFairPlay(tools.packager, work, ids);
@@ -71,7 +73,7 @@ async function addFairPlay({ tools, work, outDir, key, com }) {
   await fs.mkdir(part, { recursive: true });
   for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
   await fs.rename(part, join(outDir, folder));
-  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, comKeyCheck: comKeyCheck(com), expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
+  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, comKeyCheck: comKeyCheck(com), verified: !!verified, expires, license: com.license || AXINOM_FAIRPLAY_LICENSE };
 }
 // Removes every Apple form in `dir` but the one the meta now records (and anything half-made).
 async function removeOtherFairPlay(dir, fairplay) {
@@ -81,13 +83,15 @@ async function removeOtherFairPlay(dir, fairplay) {
 }
 // Whether a recorded Apple form is there and still good: all four files, its token made with THIS Axinom
 // key (one made with another cannot be licensed: the same key id with a corrected key value counts as
-// another, by the key's check value) for THIS licence address, and more than TOKEN_RENEW_DAYS left on it.
+// another, by the key's check value) for THIS licence address, made with Axinom's acceptance of the key (one
+// made while Axinom could not be asked is renewed once it accepts), and more than TOKEN_RENEW_DAYS left on it.
 export async function fairPlayCurrent(dir, fairplay, com, now = Date.now()) {
   if (!fairplay || !/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(fairplay.master))) return false;
   const folder = fairplay.master.split("/")[0];
   try { for (const f of FP_FILES) await fs.access(join(dir, folder, f)); } catch { return false; }
   if (com && String(fairplay.comKeyId || "").toLowerCase() !== com.id.toLowerCase()) return false;
   if (com && fairplay.comKeyCheck !== comKeyCheck(com)) return false;
+  if (com && fairplay.verified === false) return false;
   if (com && (fairplay.license || AXINOM_FAIRPLAY_LICENSE) !== (com.license || AXINOM_FAIRPLAY_LICENSE)) return false;
   return Date.parse(fairplay.expires) > now + TOKEN_RENEW_DAYS * 86400000;
 }
@@ -164,22 +168,34 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   const gallery = await readGallery(siteDir, key);
   const out = join(siteDir, "mosaic");
   const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
+  let cur = null;
+  try { cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc"))))); } catch {}
+  // the view's own pictures, and whether it holds an Apple form: one a rebuild would delete
+  const samePictures = !!cur && !!ready.length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id));
+  const hasForm = !!(cur && cur.fairplay && cur.fairplay.master);
+  const upToDate = samePictures && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length;
   // a repeated request (the page asking while the job's own run is on its way) changes nothing: when the
-  // combined view already holds exactly these pictures, in this order, with none left out, keep it
-  let samePictures = false;
-  try {
-    const cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc")))));
-    samePictures = !!ready.length && cur.version === MOSAIC_VERSION && !(cur.skipped || []).length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id));
-    if (samePictures && (!com || await fairPlayCurrent(out, cur.fairplay, com))) {
-      log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
-      return { status: "current", count: ready.length };
-    }
-  } catch {}
-  // the same pictures, only the Apple form to make or renew: that form alone, from the view's own output; the old
-  // one is kept unless the new one is made (never the whole view rebuilt, its working form deleted first)
-  if (samePictures) {
+  // combined view already holds exactly these pictures, in this order, with none left out, and a good form, keep it
+  if (upToDate && (!com || await fairPlayCurrent(out, cur.fairplay, com))) {
+    log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
+    return { status: "current", count: ready.length };
+  }
+  // the same pictures, only the Apple form to make or renew: that form alone, from the view's own output, the old
+  // one kept unless the new one is made. A view whose own output cannot be read back, with no form to lose, is
+  // rebuilt instead.
+  if (upToDate) {
     try { const r = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }); log(`the combined view's Apple form: ${r}`); return { status: "current", count: ready.length, fairplay: r }; }
-    catch (e) { log(`the combined view's Apple form NOT renewed, the view and its current form kept — ${String(e.message || e).slice(0, 300)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
+    catch (e) {
+      if (e.gate || hasForm) { log(`the combined view kept as it is${hasForm ? ", with its current Apple form" : " (it has no Apple form)"}: its form NOT renewed — ${String(e.message || e).slice(0, 300)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
+      log(`the combined view's own output could not be read back for its Apple form (${String(e.message || e).slice(0, 200)}): it is rebuilt`);
+    }
+  }
+  // a rebuild of the SAME pictures (a left-out one tried again, a new layout version) would delete its working
+  // form: only once Axinom accepts the key; otherwise the view is kept as it is. A view of OTHER pictures is
+  // rebuilt whatever Axinom says: its old content, and its form, must go.
+  if (samePictures && hasForm && com) {
+    const answer = await keyOk();
+    if (!mayReplace(answer)) { log(`the combined view kept as it is, with its current Apple form (a rebuild would replace it) — ${refusal(com, answer)}`); return { status: "current", count: ready.length, fairplay: "kept" }; }
   }
   await fs.rm(out, { recursive: true, force: true }); // never a combined view from an older set left beside a new one
   if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }
@@ -225,14 +241,14 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
       try {
         const answer = await keyOk();
         if (!mayMake(answer)) log(`combined view: no FairPlay form — ${refusal(com, answer)}`);
-        else { if (!answer.accepted) log(`combined view: ${refusal(com, answer)}; its form is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: out, key, com }); log("combined view: FairPlay form added"); }
+        else { if (!answer.accepted) log(`combined view: ${refusal(com, answer)}; its form is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: out, key, com, verified: answer.accepted }); log("combined view: FairPlay form added"); }
       } catch (e) { log(`combined view: no FairPlay form — ${String(e.message || e).slice(0, 300)}`); }
     }
     const meta = { kind: "mosaic", version: MOSAIC_VERSION, width: layout.width, height: layout.height, cols: layout.cols, rows: layout.rows, prKidGuid: ids.prKidGuid, builtAt: new Date().toISOString(),
       ids: used.map((u) => u.id), tiles: used.map((u, i) => ({ id: u.id, name: u.name, ...layout.tiles[i] })), skipped, fairplay };
     await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(meta)));
     log(`combined view ready: ${used.length} picture(s) in ${layout.cols}x${layout.rows}, ${layout.width}x${layout.height}${skipped.length ? `, ${skipped.length} left out` : ""}`);
-    return { status: "ready", count: used.length, skipped: skipped.length };
+    return { status: "ready", count: used.length, skipped: skipped.length, fairplay: !!fairplay };
   } finally {
     await fs.rm(work, { recursive: true, force: true }); // the clear stills are gone with the runner
   }
@@ -246,12 +262,12 @@ async function refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk }) {
   let meta; try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); } catch { return "none"; }
   if (await fairPlayCurrent(out, meta.fairplay, com)) return "current";
   const answer = await keyOk(), replacing = !!(meta.fairplay && meta.fairplay.master);
-  if (!(replacing ? mayReplace(answer) : mayMake(answer))) throw new Error(refusal(com, answer) + "; the combined view's Apple form was left as it was");
+  if (!(replacing ? mayReplace(answer) : mayMake(answer))) throw Object.assign(new Error(refusal(com, answer) + "; the combined view's Apple form was left as it was"), { gate: true });
   const work = await fs.mkdtemp(join(tmpdir(), "site-fp-mosaic-"));
   try {
     const s = await stillFromOutput(tools, key, out, String(meta.prKidGuid || "").replace(/-/g, "").toLowerCase(), work, 0);
     await renderClip(tools, s.still, join(work, "clip.mp4"), { maxSide: Math.max(MOSAIC_MAX.width, MOSAIC_MAX.height) });
-    meta.fairplay = await addFairPlay({ tools, work, outDir: out, key, com });
+    meta.fairplay = await addFairPlay({ tools, work, outDir: out, key, com, verified: answer.accepted });
     await fs.writeFile(metaPath, await sealText(key, JSON.stringify(meta)));
     await removeOtherFairPlay(out, meta.fairplay); // only now: the meta points to the new form
     return "renewed";
@@ -282,7 +298,7 @@ export async function backfillFairPlay({ siteDir, key, tools, com, keyOk = com ?
       const kidHex = String(x.prKidGuid || meta.prKidGuid || "").replace(/-/g, "").toLowerCase();
       const s = await stillFromOutput(tools, key, dir, kidHex, work, i);
       await renderClip(tools, s.still, join(work, "clip.mp4"));
-      meta.fairplay = await addFairPlay({ tools, work, outDir: dir, key, com });
+      meta.fairplay = await addFairPlay({ tools, work, outDir: dir, key, com, verified: true });
       await fs.writeFile(metaPath, await sealText(key, JSON.stringify(meta)));
       await removeOtherFairPlay(dir, meta.fairplay); // only now: the meta points to the new form
       added++; addedIds.push(x.id); log(`FairPlay form added: ${x.id}`);
@@ -299,7 +315,11 @@ export async function backfillFairPlay({ siteDir, key, tools, com, keyOk = com ?
   let mosaic;
   try {
     mosaic = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk });
-    if (mosaic === "none" && ready.length) mosaic = (await buildMosaic({ siteDir, key, tools, com, keyOk })).status;
+    if (mosaic === "none" && ready.length) {
+      const b = await buildMosaic({ siteDir, key, tools, com, keyOk });
+      mosaic = b.status;
+      if (b.status === "ready" && !b.fairplay) { failed++; mosaic = "ready without its Apple form"; log("the combined view was made without its Apple form (see above)"); }
+    }
   } catch (e) { failed++; mosaic = "failed"; log(`the combined view's Apple form NOT renewed — ${String(e.message || e).slice(0, 300)}`); }
   log(`FairPlay backfill: ${added} added, ${already} already had it, ${failed} failed; combined view ${mosaic}`);
   return { status: failed ? "partial" : "done", added, already, failed, mosaic, count: ready.length };
@@ -366,7 +386,7 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
       try {
         const answer = await keyOk();
         if (!mayMake(answer)) log(`no FairPlay form for ${p.id}: ${refusal(com, answer)}`);
-        else { if (!answer.accepted) log(`${refusal(com, answer)}; the form for ${p.id} is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: dir, key, com }); }
+        else { if (!answer.accepted) log(`${refusal(com, answer)}; the form for ${p.id} is made all the same (it replaces nothing)`); fairplay = await addFairPlay({ tools, work, outDir: dir, key, com, verified: answer.accepted }); }
       } catch (e) { log(`no FairPlay form for ${p.id}: ${String(e.message || e).slice(0, 300)}`); }
     }
     Object.assign(entry, { status: "ready", width: clip.width, height: clip.height, readyAt: new Date().toISOString(), prKidGuid: ids.prKidGuid, fairplay: !!fairplay });
