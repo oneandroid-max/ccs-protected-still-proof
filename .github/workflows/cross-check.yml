@@ -15,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Every workflow link to the route-1 page asks for the test card, never the photo
+        run: node tools/check-workflow-links.mjs
+
       - name: Read the vector inputs
         id: v
         run: |

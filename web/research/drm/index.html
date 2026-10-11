@@ -36,6 +36,7 @@
 <dl>
   <dt>Page version</dt><dd id="r-ver">—</dd>
   <dt>Rule here</dt><dd id="r-rule">—</dd>
+  <dt>Content</dt><dd id="r-content">—</dd>
   <dt>Key system</dt><dd id="r-ks">starting…</dd>
   <dt>Granted</dt><dd id="r-granted">—</dd>
   <dt>Expected capture</dt><dd id="r-expect">loading…</dd>
@@ -58,7 +59,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 03:45 UTC — hardware; software in Chrome/Edge on Windows & Android";
+  const PAGE_VERSION = "2026-10-11 04:05 UTC — test mode plays a test card, never the photo";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -82,7 +83,17 @@
   const SOFTWARE_MEASURED = (PLATFORM === "Windows" || PLATFORM === "Android") && (BROWSER === "Chrome" || BROWSER === "Edge");
   // TEST SWITCH, off unless the link says ?levels=software: software levels only, on any platform, to
   // measure whether a browser keeps software-decrypted video out of screenshots.
-  const TEST_SOFTWARE = new URLSearchParams(location.search).get("levels") === "software";
+  const params = new URLSearchParams(location.search);
+  const TEST_SOFTWARE = params.get("levels") === "software";
+  // THE CONTENT. Test mode ALWAYS plays the test card, never the owner's photo, because a test can show
+  // the picture to a screenshot (that is what it measures). ?clip=card selects the card in normal mode:
+  // every runner workflow uses it (tools/check-workflow-links.mjs fails CI otherwise). The card has its
+  // own keys (drm-card.yml), so its licence never unlocks the photo.
+  const CARD = TEST_SOFTWARE || params.get("clip") === "card";
+  const CLIP = CARD
+    ? { name: "the test card (not the photo)", widevine: "card-widevine.mpd", playready: "card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }
+    : { name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A" };
+  set("r-content", CLIP.name);
   const TIERS = {
     "widevine-hardware":  { system: "widevine",  word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
     "widevine-software":  { system: "widevine",  word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
@@ -92,10 +103,13 @@
   const ORDER = TEST_SOFTWARE ? ["widevine-software", "playready-software"]
     : SOFTWARE_MEASURED ? ["widevine-hardware", "widevine-software", "playready-hardware"]
     : ["widevine-hardware", "playready-hardware"];
-  set("r-rule", TEST_SOFTWARE ? "TEST: software only, on any platform (measurement)"
-    : SOFTWARE_MEASURED ? `${BROWSER} on ${PLATFORM}: hardware protection, or software protection (screenshots measured black here)`
-    : `${BROWSER === "other" ? "this browser" : BROWSER} on ${PLATFORM}: hardware protection only (software not yet measured here)`);
-  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the photo plays."; document.querySelector("h1").after(b); }
+  // The platform and browser come from what the browser says about itself, which can be wrong (a tablet
+  // asking for desktop sites reports Linux) or changed by the person using it; the line says so.
+  const SAYS = `${BROWSER === "other" ? "this browser" : BROWSER} on ${PLATFORM} (as the browser reports itself)`;
+  set("r-rule", TEST_SOFTWARE ? "TEST: software only, on any platform (measurement, test card)"
+    : SOFTWARE_MEASURED ? `${SAYS}: hardware protection, or software protection (screenshots measured black there)`
+    : `${SAYS}: hardware protection only (software not yet measured there)`);
+  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
   const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; return `${d.code || "?"}${inner}`; };
 
   shaka.polyfill.installAll();
@@ -112,7 +126,7 @@
   async function tryOne(tierName) {
     const t = TIERS[tierName];
     hidePhoto();
-    const manifest = t.system === "playready" ? "playready.mpd" : "widevine.mpd";
+    const manifest = t.system === "playready" ? CLIP.playready : CLIP.widevine;
     if (current) { try { await current.destroy(); } catch (e) {} current = null; }
     const player = new shaka.Player(); current = player;
     await player.attach(video);
@@ -120,7 +134,7 @@
     if (t.system === "playready") {
       const ks = "com.microsoft.playready.recommendation";
       cfg.drm.keySystemsMapping["com.microsoft.playready"] = ks;
-      cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A,sl:${t.sl})`;
+      cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${CLIP.prKid},sl:${t.sl})`;
       cfg.drm.advanced[ks] = { videoRobustness: t.levels };
     } else {
       cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";

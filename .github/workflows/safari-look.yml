@@ -1,7 +1,7 @@
 # Opens the route-1 page the way a person would — tap the link, look at the screen — in Safari on an
 # iPhone simulator and in Safari on the Mac runner, and saves a screenshot of each to
 # web/research/drm/results/. It first waits until the live page carries the expected version, so it
-# never photographs an old copy.
+# never photographs an old copy. Every link asks for the test card (?clip=card), never the owner's photo.
 name: safari look
 
 on:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "03:05 UTC"
+  EXPECT_VERSION: "04:05 UTC"
 
 jobs:
   look:
@@ -24,7 +24,7 @@ jobs:
 
       - name: Wait for the live page to carry the expected version
         run: |
-          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}"
+          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}"
           for i in $(seq 1 45); do
             if curl -sS -m 15 "$U" | grep -q "$EXPECT_VERSION"; then echo "live page has version $EXPECT_VERSION"; exit 0; fi
             sleep 8
@@ -39,7 +39,7 @@ jobs:
           xcrun simctl list devices available | awk -v u="$UDID" 'index($0,u){print}'
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b > /dev/null
-          xcrun simctl openurl "$UDID" "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}#readout"
+          xcrun simctl openurl "$UDID" "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}#readout"
           sleep 40
           xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari.png
           sleep 20
@@ -48,7 +48,7 @@ jobs:
 
       - name: Mac, Safari — open the link and screenshot
         run: |
-          open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?v=${{ github.run_number }}m#readout"
+          open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}m#readout"
           sleep 40
           screencapture -x web/research/drm/results/mac-safari.png
           ls -l web/research/drm/results/

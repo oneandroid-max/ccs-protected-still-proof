@@ -1,9 +1,13 @@
 # Measures whether a browser keeps SOFTWARE-decrypted video out of screenshots, the way the owner
 # measured Chrome and Edge on Windows and Chrome on Android: open the route-1 page with the test switch
-# (?levels=software), let the photo play, take a screenshot of the screen, save it. One job per
-# browser and platform the owner's devices cannot cover: Chrome on Linux, Chrome on Mac, Firefox on
-# Windows. Each first waits until the live page carries the expected version. Runners are virtual
-# machines: a black capture here is strong evidence, a visible one may differ on a real machine.
+# (?levels=software, which plays the TEST CARD, never the owner's photo), let the card play, take a
+# screenshot of the screen, save it. One job per browser and platform the owner's devices cannot cover,
+# plus two CONTROLS: Chrome and Edge on the Windows runner, which the owner measured BLACK on his real PC.
+# If the runner shows them, the runner does not reproduce a real Windows PC, and its Firefox result
+# decides nothing. Runners are virtual machines without a real graphics card: a black capture here is
+# strong evidence, a visible one may differ on a real machine. Each job first waits until the live page
+# carries the expected version. Every link asks for the card (tools/check-workflow-links.mjs, which the
+# save job runs again before it publishes anything).
 name: software look
 
 on:
@@ -16,17 +20,20 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "03:45 UTC"
+  EXPECT_VERSION: "04:05 UTC"
   PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/"
+  FIREFOX_POLICIES: '{"policies":{"SkipTermsOfUse":true,"DontCheckDefaultBrowser":true,"OverrideFirstRunPage":"","OverridePostUpdatePage":"","DisableTelemetry":true,"UserMessaging":{"SkipOnboarding":true,"WhatsNew":false,"FeatureRecommendations":false,"ExtensionRecommendations":false,"MoreFromMozilla":false}}}'
 
 jobs:
   linux-chrome:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - name: Wait for the live page version
         run: |
-          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
       - name: Chrome on Linux — open the test link and screenshot
+        timeout-minutes: 5
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq xvfb imagemagick > /dev/null
           google-chrome --version
@@ -40,40 +47,85 @@ jobs:
           '
           ls -l shots
       - uses: actions/upload-artifact@v4
-        with: { name: linux-chrome, path: shots/ }
+        if: always()
+        with: { name: linux-chrome, path: shots/, if-no-files-found: ignore }
 
   mac-chrome:
     runs-on: macos-latest
+    timeout-minutes: 12
     steps:
       - name: Wait for the live page version
         run: |
-          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
       - name: Chrome on Mac — open the test link and screenshot
+        timeout-minutes: 5
         run: |
-          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
+          APP="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          "$APP" --version
           mkdir -p shots
-          open -na "Google Chrome" --args --no-first-run --no-default-browser-check --user-data-dir=/tmp/prof \
-            --autoplay-policy=no-user-gesture-required "$PAGE?levels=software&v=${{ github.run_number }}m#readout"
+          # Started directly in the background: on the previous run, `open -na` never returned.
+          date -u +"%T starting Chrome"
+          "$APP" --no-first-run --no-default-browser-check --use-mock-keychain --user-data-dir=/tmp/prof \
+            --autoplay-policy=no-user-gesture-required --window-position=0,0 --window-size=1280,1000 \
+            "$PAGE?levels=software&v=${{ github.run_number }}m#readout" > /tmp/chrome.log 2>&1 &
           sleep 50
+          date -u +"%T capturing the screen"
           screencapture -x shots/mac-chrome.png
+          date -u +"%T captured"
+          ls -l shots
+      - name: The browser's own log
+        if: always()
+        run: tail -n 25 /tmp/chrome.log || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: mac-chrome, path: shots/, if-no-files-found: ignore }
+
+  mac-firefox:
+    runs-on: macos-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for the live page version
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+      - name: Firefox on Mac — open the test link and screenshot
+        timeout-minutes: 5
+        run: |
+          FF="/Applications/Firefox.app/Contents/MacOS/firefox"
+          "$FF" --version
+          # skip the first-run terms and onboarding screens, which covered the page on the Windows run
+          sudo mkdir -p "/Applications/Firefox.app/Contents/Resources/distribution"
+          printf '%s' "$FIREFOX_POLICIES" | sudo tee "/Applications/Firefox.app/Contents/Resources/distribution/policies.json" > /dev/null
+          mkdir -p shots /tmp/ffprof
+          date -u +"%T starting Firefox"
+          "$FF" -no-remote -profile /tmp/ffprof "$PAGE?levels=software&v=${{ github.run_number }}x#readout" > /tmp/ff.log 2>&1 &
+          sleep 70
+          date -u +"%T capturing the screen"
+          screencapture -x shots/mac-firefox.png
+          date -u +"%T captured"
           ls -l shots
       - uses: actions/upload-artifact@v4
-        with: { name: mac-chrome, path: shots/ }
+        if: always()
+        with: { name: mac-firefox, path: shots/, if-no-files-found: ignore }
 
   windows-firefox:
     runs-on: windows-latest
+    timeout-minutes: 12
     steps:
       - name: Wait for the live page version
         shell: bash
         run: |
-          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
       - name: Firefox on Windows — open the test link and screenshot
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $ff = "C:\Program Files\Mozilla Firefox\firefox.exe"
           & $ff --version | Out-Host
-          New-Item -ItemType Directory -Force shots | Out-Null
-          Start-Process $ff -ArgumentList "-new-window", "$env:PAGE`?levels=software&v=${{ github.run_number }}f#readout"
+          # skip the first-run terms and onboarding screens, which covered the page on the previous run
+          New-Item -ItemType Directory -Force "C:\Program Files\Mozilla Firefox\distribution" | Out-Null
+          Set-Content -Path "C:\Program Files\Mozilla Firefox\distribution\policies.json" -Value $env:FIREFOX_POLICIES
+          New-Item -ItemType Directory -Force shots, "$env:RUNNER_TEMP\ffprof" | Out-Null
+          Start-Process $ff -ArgumentList "-no-remote", "-profile", "$env:RUNNER_TEMP\ffprof", "$env:PAGE`?levels=software&v=${{ github.run_number }}f#readout"
           Start-Sleep -Seconds 70
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -82,26 +134,83 @@ jobs:
           $bmp.Save("shots\windows-firefox.png", [System.Drawing.Imaging.ImageFormat]::Png)
           Get-ChildItem shots | Out-Host
       - uses: actions/upload-artifact@v4
-        with: { name: windows-firefox, path: shots/ }
+        if: always()
+        with: { name: windows-firefox, path: shots/, if-no-files-found: ignore }
+
+  windows-chrome:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for the live page version
+        shell: bash
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+      - name: Chrome on Windows (CONTROL, black on the owner's PC) — open the test link and screenshot
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $exe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          "Google Chrome " + (Get-Item $exe).VersionInfo.ProductVersion | Out-Host
+          New-Item -ItemType Directory -Force shots | Out-Null
+          Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:RUNNER_TEMP\chprof", "--autoplay-policy=no-user-gesture-required", "--start-maximized", "$env:PAGE`?levels=software&v=${{ github.run_number }}c#readout"
+          Start-Sleep -Seconds 50
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("shots\windows-chrome.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Get-ChildItem shots | Out-Host
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: windows-chrome, path: shots/, if-no-files-found: ignore }
+
+  windows-edge:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Wait for the live page version
+        shell: bash
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?clip=card&v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live: $EXPECT_VERSION"; exit 0; }; sleep 8; done; exit 1
+      - name: Edge on Windows (CONTROL, black on the owner's PC) — open the test link and screenshot
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $exe = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+          "Microsoft Edge " + (Get-Item $exe).VersionInfo.ProductVersion | Out-Host
+          New-Item -ItemType Directory -Force shots | Out-Null
+          Start-Process $exe -ArgumentList "--no-first-run", "--no-default-browser-check", "--user-data-dir=$env:RUNNER_TEMP\edprof", "--autoplay-policy=no-user-gesture-required", "--start-maximized", "$env:PAGE`?levels=software&v=${{ github.run_number }}e#readout"
+          Start-Sleep -Seconds 50
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("shots\windows-edge.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Get-ChildItem shots | Out-Host
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: windows-edge, path: shots/, if-no-files-found: ignore }
 
   save:
-    needs: [linux-chrome, mac-chrome, windows-firefox]
+    needs: [linux-chrome, mac-chrome, mac-firefox, windows-firefox, windows-chrome, windows-edge]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { path: dl }
+      - name: Refuse to publish unless every link asked for the test card
+        run: node tools/check-workflow-links.mjs
       - name: Commit the screenshots
         run: |
           mkdir -p web/research/drm/results
           find dl -name '*.png' -exec cp {} web/research/drm/results/ \;
-          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/software-look.json
+          printf '{"run":%s,"expectVersion":"%s","takenAt":"%s","content":"test card"}\n' "${{ github.run_number }}" "$EXPECT_VERSION" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > web/research/drm/results/software-look.json
           ls -l web/research/drm/results/
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add web/research/drm/results/
           if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
-          git commit -m "research(drm): software look — Linux Chrome, Mac Chrome, Windows Firefox screenshots (run ${{ github.run_number }})"
+          git commit -m "research(drm): software look, test card — Linux Chrome, Mac Chrome and Firefox, Windows Firefox, Chrome and Edge (run ${{ github.run_number }})"
           git pull --rebase origin main
           git push origin HEAD:main
