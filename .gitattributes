@@ -4,3 +4,9 @@ tests/vectors/inputs.txt text eol=lf
 *.enc binary
 *.apk binary
 *.keystore binary
+# the site, its tools and workflows are judged byte for byte (content pins, version stamps): LF everywhere
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.js text eol=lf
+*.yml text eol=lf
+*.html text eol=lf

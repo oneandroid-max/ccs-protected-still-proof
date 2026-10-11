@@ -15,8 +15,12 @@
 // that seals its captures; and the walker itself must delete each clear capture before sealing it.
 //
 //   node tools/check-workflow-links.mjs        exit 0 when every link asks for the card, 1 otherwise
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
+
+// every file is read with Windows line endings removed, so a Windows checkout judges exactly as Linux CI
+const read = (f) => readFileSync(f, "utf8").replace(/\r\n/g, "\n");
 
 const DIR = ".github/workflows";
 const SAFE = /(^|[?&])(clip=card|levels=software|levels=clearkey)(&|$)/;
@@ -24,7 +28,7 @@ const LINK = /(https:\/\/[^\s"'`]*\/research\/drm\/|\$\{PAGE\}|\$env:PAGE|\$PAGE
 let checked = 0;
 const bad = [];
 for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
-  readFileSync(join(DIR, file), "utf8").split("\n").forEach((line, i) => {
+  read(join(DIR, file)).split("\n").forEach((line, i) => {
     if (/^\s*#/.test(line) || /^\s*PAGE:\s/.test(line) || /^\s*echo\s/.test(line)) return;
     for (const m of line.matchAll(LINK)) {
       checked++;
@@ -50,12 +54,13 @@ const WALK_SAFEGUARDS = [
   [/path: \|\s*\n\s+walk\/\*\.sealed\.json\s*\n\s+walk\/\*-steps\.json\s*\n/, "the upload names only sealed captures and step records"],
   [/persist-credentials: false/, "checkout leaves no token behind"],
   [/ls walk\/clear-\*.*rm -rf walk; exit 1/, "a clear capture left behind deletes everything and fails"],
+  [/if: always\(\)\s*\n\s+shell: bash\s*\n\s+run: \|\s*\n\s+ls -l walk/, "the clear-capture check runs even after a failed walk"],
   [/find dl -type f ! -name '\*\.sealed\.json' ! -name '\*-steps\.json'/, "the keep job refuses any file that is not sealed or a step record"],
   [/HEAD:walk-evidence/, "kept only on the walk-evidence branch"],
 ];
 let siteFiles = 0;
 for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
-  const text = readFileSync(join(DIR, file), "utf8");
+  const text = read(join(DIR, file));
   const live = text.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
   if (!SITE.test(live)) continue;
   siteFiles++;
@@ -66,12 +71,27 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
 }
 // code only: comments removed, so a comment cannot stand in for the real line
 const code = (t) => t.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").map((l) => l.replace(/(^|[^:"'`])\/\/.*$/, "$1")).join("\n");
-// a tool that opens the LIVE site can be started from a workflow that never names it: only the walker may
-const LIVE_SITE = /github\.io\/ccs-protected-still-proof\/site/;
-for (const f of readdirSync("tools").filter((x) => /\.m?js$/.test(x))) {
-  if (f !== "walk-site.mjs" && LIVE_SITE.test(code(readFileSync(join("tools", f), "utf8")))) bad.push(`tools/${f}: opens the live test site; only tools/walk-site.mjs (sealed captures) may`);
+// A tool can open the live site from a workflow that never names it, and can build the address from
+// parts, so EVERY file under tools/ (any extension, any depth; installed packages aside) that names the
+// Pages host at all must be the walker.
+const HOST = /github\.io/i;
+const walk = (d) => readdirSync(d).flatMap((x) => { const p = join(d, x); return x === "node_modules" ? [] : statSync(p).isDirectory() ? walk(p) : [p]; });
+for (const f of walk("tools")) {
+  if (f.replace(/\\/g, "/") === "tools/walk-site.mjs") continue;
+  if (HOST.test(readFileSync(f, "latin1"))) bad.push(`${f}: names the live Pages host; only tools/walk-site.mjs (sealed captures) may`);
 }
-const walker = code(readFileSync("tools/walk-site.mjs", "utf8"));
+// THE PIN. Rules about text can always be stepped around (a review found ten ways), so the walk's two
+// files are pinned by content: ANY change to them fails here until this pin is updated in the same
+// change, which forces whoever changes them to re-read the safeguards above, and a reviewer to see it.
+const PINNED = {
+  ".github/workflows/site-walk.yml": "396394d4fd20a02f571868c6f919c5b7e93c5b96f7abccf12d6726aea3d22e43",
+  "tools/walk-site.mjs": "b2078e95d41111bb5f55febdf5c9bd0dbcbeaf1734b53960c93b749fc41098ed",
+};
+for (const [f, want] of Object.entries(PINNED)) {
+  const got = createHash("sha256").update(read(f)).digest("hex");
+  if (got !== want) bad.push(`${f} changed (sha256 ${got.slice(0, 16)}…, pinned ${want.slice(0, 16)}…): re-read its sealing safeguards, then update PINNED in tools/check-workflow-links.mjs in the same change`);
+}
+const walker = code(read("tools/walk-site.mjs"));
 const rmAt = walker.indexOf("await fs.rm(png"), sealAt = walker.indexOf("publicEncrypt(");
 if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each clear capture must be deleted (await fs.rm(png ...)) before it is sealed (publicEncrypt)");
 

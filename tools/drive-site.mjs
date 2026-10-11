@@ -46,7 +46,7 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
 await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic(builtAt = new Date().toISOString()) {
+async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID]) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
@@ -54,7 +54,7 @@ async function publishMosaic(builtAt = new Date().toISOString()) {
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
-    ids: [ID], tiles: [{ id: ID, name: "Cotton <Bowl>.jpg", x: 6, y: 8, w: 1068, h: 1424 }], skipped: [] })));
+    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped: [] })));
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
@@ -113,7 +113,7 @@ async function mockedContext() {
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
-  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue());
+  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue());
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
@@ -227,11 +227,41 @@ try {
   check(await until(/did not take the request/, 15000), "a refused request is shown: " + (await allText()));
   await p4.clock.fastForward("00:30"); await new Promise((r) => setTimeout(r, 2500));
   check(asks() === before + 1, "a refused request is not repeated at the next refresh (it waits the full gap)");
+  check(/did not take the request/.test(await allText()), "and the refusal stays on screen at that refresh");
   api.refuseDispatch = false;
-  await p4.clock.fastForward("20:00");
-  check(await until(/not caught up after twenty minutes/, 15000) && (await p4.$("#ask-all")) !== null, "after twenty minutes it says so, with the job link and Ask again: " + (await allText()));
-  check(asks() === before + 1, "and it does not keep asking after giving up");
+  // the site cannot be reached for a refresh: the page keeps the view it knew instead of "Combining…"
+  api.metaAbort = true;
+  await p4.clock.fastForward("00:30"); await new Promise((r) => setTimeout(r, 2500));
+  check(/made for an earlier set \(1 picture\)/.test(await allText()) && !/Combining/.test(await allText()), "a network error keeps the view it knew: " + (await allText()));
+  api.metaAbort = false;
+  // the job's own run makes it current: the page offers all of them, and the old refusal is gone
+  await publishMosaic(undefined, [ID, ID2]);
+  await p4.clock.fastForward("00:30");
+  check(await until(/All 2 in one protected view/, 15000) && !/did not take the request/.test(await allText()), "once current, it offers all 2 and the refusal is gone: " + (await allText()));
   await sctx.close();
+  // 4d. out of date for twenty minutes: it gives up visibly and stops asking; "Ask again" asks, says so,
+  // and keeps the page refreshing until the remade view arrives
+  await publishMosaic();
+  api.galleryMode = "two";
+  const dctx = await mockedContext(); const p5 = await dctx.newPage();
+  await p5.clock.install(); await p5.goto(BASE + "index.html");
+  await p5.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
+  await p5.goto(BASE + "index.html");
+  const t5 = async () => (await p5.textContent("#all").catch(() => "")) || "";
+  const until5 = async (re, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (re.test(await t5())) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
+  await until5(/made for an earlier set/, 20000);
+  const b5 = asks();
+  await p5.clock.fastForward("03:30"); await new Promise((r) => setTimeout(r, 2500));
+  check(asks() === b5 + 1, "asked once after three minutes");
+  await p5.clock.fastForward("20:00");
+  check(await until5(/not caught up after twenty minutes/, 15000) && (await p5.$("#ask-all")) !== null, "after twenty minutes it says so, with the job link and Ask again: " + (await t5()));
+  check(asks() === b5 + 1, "and it does not keep asking after giving up");
+  await p5.click("#ask-all");
+  check(await until5(/Asked again at/, 15000) && asks() === b5 + 2, "Ask again asks and says so: " + (await t5()));
+  await publishMosaic(undefined, [ID, ID2]);
+  await p5.clock.fastForward("00:30");
+  check(await until5(/All 2 in one protected view/, 15000), "and the page keeps refreshing until the remade view arrives: " + (await t5()));
+  await dctx.close();
   // the three timing rules, each on its own fresh page and fake clock
   async function clockPage(mode) {
     api.galleryMode = mode;
@@ -244,6 +274,17 @@ try {
     return { c, pg };
   }
   const settle = async (pg, t) => { await pg.clock.fastForward(t); await new Promise((r) => setTimeout(r, 2500)); };
+  // (0) the very first look at the combined view fails (the site cannot be reached): no request while
+  // its state is unknown; once the site answers that there is none, the page asks
+  api.metaAbort = true; api.noMosaic = true;
+  let { c: c0, pg: p0 } = await clockPage("normal");
+  const k0 = asks();
+  await settle(p0, "00:30");
+  check(asks() === k0, "the combined view's state unknown (the site unreachable): no request");
+  api.metaAbort = false;
+  await settle(p0, "00:30");
+  check(asks() === k0 + 1, "once the site answers that there is none, the page asks");
+  await c0.close(); api.noMosaic = false;
   // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
   api.noMosaic = true;
   let n0 = asks(), { c: ca, pg: pa } = await clockPage("fresh");

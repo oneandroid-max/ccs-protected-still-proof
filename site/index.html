@@ -50,7 +50,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
 const ACTIONS = "https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml";
-let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, askError = "", askedAgainAt = 0;
+let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, metaKnown = false, askError = "", askedAgainAt = 0;
 const MOSAIC_GIVE_UP = 20 * 60 * 1000; // a combined view that has not caught up in twenty minutes is reported, not waited on
 const then = new URLSearchParams(location.search).get("then");
 
@@ -81,7 +81,7 @@ async function load() {
     // the combined view: every ready, published picture in one protected video
     const readyIds = g.photos.filter((p) => p.status === "ready" && pub[p.id] && !deleting.has(p.id)).map((p) => p.id);
     let meta = readyIds.length ? await mosaicMeta(st) : null;
-    if (meta === undefined) meta = lastMeta; else lastMeta = meta; // the site could not be reached: keep what was known
+    if (meta === undefined) meta = lastMeta; else { lastMeta = meta; metaKnown = true; } // the site could not be reached: keep what was known
     const current = mosaicCurrent(meta, readyIds);
     // the stale clock restarts whenever the set of ready pictures changes
     const key = readyIds.join(",");
@@ -94,9 +94,10 @@ async function load() {
     // minutes here; never more than once in eight minutes, and not after the twenty-minute give-up.
     // (The gallery records its last change from the job's clock; lists from before that use the newest picture.)
     const newestReady = Math.max(0, ...g.photos.filter((p) => readyIds.includes(p.id)).map((p) => Date.parse(p.readyAt) || 0));
-    const changedAt = Date.parse(g.updatedAt) || newestReady;
+    const changedAt = Math.max(Date.parse(g.updatedAt) || 0, newestReady);
+    if (current) askError = ""; // a refusal is history once the view is current
     const builtAt = meta && Date.parse(meta.builtAt) || 0;
-    if (readyIds.length && !current && pend.length === 0 && staleFor <= MOSAIC_GIVE_UP && Date.now() - mosaicAskedAt() > MOSAIC_ASK_GAP
+    if (metaKnown && readyIds.length && !current && pend.length === 0 && staleFor <= MOSAIC_GIVE_UP && Date.now() - mosaicAskedAt() > MOSAIC_ASK_GAP
       && Date.now() - changedAt > 3 * 60 * 1000 && (!meta || builtAt < changedAt || staleFor > 3 * 60 * 1000)) {
       try { await askMosaic(st); askError = ""; } catch (err) { askError = err.message; } // a refusal stays shown until a later ask succeeds
     }

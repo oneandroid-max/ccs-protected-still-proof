@@ -5,11 +5,13 @@
 // the operating system (what a person would see), and every capture is SEALED at once to a public key
 // whose private half never leaves the reader's machine, because these captures show the owner's
 // pictures (a runner has no protected video path, so its captures are not black). The clear capture
-// is deleted the moment it is sealed. The log prints statuses and counts only: no names, no password.
+// is written OUTSIDE the workspace (the system's temporary folder, which no upload step names) and
+// deleted the moment it has been read, before it is sealed. The log prints statuses and counts only: no names, no password.
 //   node tools/walk-site.mjs   env: WALK_CDP, WALK_NAME, WALK_OUT, WALK_PUBKEY (base64 DER SPKI),
 //                                   SITE_PASSWORD, PLAYWRIGHT_DIR (a folder with playwright-core)
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { createPublicKey, publicEncrypt, randomBytes, createCipheriv, constants } from "node:crypto";
@@ -32,7 +34,7 @@ await fs.mkdir(OUT, { recursive: true });
 // wrapped with RSA-OAEP-SHA256 to the reader's public key.
 let shot = 0;
 async function capture(label) {
-  const png = join(OUT, `clear-${NAME}-${++shot}.png`);
+  const png = join(tmpdir(), `clear-${NAME}-${++shot}.png`);
   const ps = `Add-Type -AssemblyName System.Windows.Forms, System.Drawing; $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height; $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size); $bmp.Save('${png}', [System.Drawing.Imaging.ImageFormat]::Png)`;
   try { execFileSync("powershell", ["-NoProfile", "-Command", ps], { stdio: "pipe" }); }
   catch (e) { say(`capture ${label} failed: ${String(e.stderr || e.message).slice(0, 200)}`); return; }

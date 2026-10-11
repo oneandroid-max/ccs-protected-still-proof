@@ -65,6 +65,12 @@ test("site/view.html and site/all.html are generated from the route-1 page and a
   const files = Object.fromEntries(await Promise.all(names.map(async (f) => [f, await fs.readFile(join(REPO, f), "utf8")])));
   const { files: stamped, preludeVersion } = stampVersions(files);
   for (const f of names) assert.equal(files[f], stamped[f], `${f} carries current version stamps: run node tools/build-site-view.mjs`);
+  // and NO served file names a site module without a version, in any quote form (the stamper knows one form)
+  for (const f of (await fs.readdir(join(REPO, "site"))).filter((x) => /\.(html|js)$/.test(x))) {
+    const t = await fs.readFile(join(REPO, "site", f), "utf8");
+    const loose = t.match(/["'`](\.\/)?(crypto|app|view-prelude)\.js["'`]/g);
+    assert.equal(loose, null, `site/${f} names a module without a version stamp: ${loose}`);
+  }
   for (const [f, re] of [["site/app.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/view-prelude.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/setup.html", /"\.\/crypto\.js\?v=[0-9a-f]{12}"[\s\S]*"\.\/app\.js\?v=[0-9a-f]{12}"/], ["site/index.html", /"\.\/app\.js\?v=[0-9a-f]{12}"/]]) assert.match(files[f], re, f + " imports by versioned URL");
   const out = buildView(index, "one", preludeVersion), all = buildView(index, "all", preludeVersion);
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
@@ -124,6 +130,7 @@ test("worker: bad payloads are refused; without a packager a picture fails visib
   assert.equal(r.status, "failed"); assert.match(r.error, /packager/);
   const g = await readGallery(siteDir, KEY);
   assert.equal(g.photos.length, 1); assert.equal(g.photos[0].id, ID); assert.equal(g.photos[0].status, "failed"); assert.equal(g.photos[0].name, "sideways.jpg");
+  assert.ok(Date.now() - Date.parse(g.updatedAt) < 60000, "an add records when the list last changed (the page compares the combined view with it)");
   await assert.rejects(fs.stat(join(siteDir, "photos", ID)), "no folder for a failed picture");
   // a gallery written under another key reads as a fresh list, never as a crash, and the next job clears the old folders
   const otherKey = await deriveKey("yet another password", SALT, 1000);
@@ -157,6 +164,24 @@ test("worker: bad payloads are refused; without a packager a picture fails visib
   assert.equal(del.status, "deleted");
   const after = await worker({ payload: payload({ id: "f".repeat(24) }), siteDir, tools: noPackager });
   assert.match(after.error, /packager/, "with a slot free the upload is attempted again (and fails here only for want of the packager)");
+});
+
+test("worker: a repeated request leaves a current combined view alone; an older version, another order or a left-out picture is remade", async () => {
+  const { MOSAIC_VERSION } = await import("../worker.mjs");
+  const siteDir = await freshSite();
+  const a = "1".repeat(24), b = "2".repeat(24);
+  await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify({ photos: [{ id: a, name: "a", status: "ready" }, { id: b, name: "b", status: "ready" }] })));
+  const dir = join(siteDir, "mosaic");
+  const meta = async (m) => { await fs.mkdir(dir, { recursive: true }); await fs.writeFile(join(dir, "meta.json.enc"), await sealText(KEY, JSON.stringify(m))); };
+  const ask = () => worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools: noPackager });
+  await meta({ version: MOSAIC_VERSION, ids: [a, b], skipped: [] });
+  assert.deepEqual(await ask(), { status: "current", count: 2 });
+  // each of these must be remade (here the remake fails for want of the pictures' files, which is the point: it was attempted)
+  for (const [m, why] of [[{ version: MOSAIC_VERSION - 1, ids: [a, b], skipped: [] }, "an older version"], [{ version: MOSAIC_VERSION, ids: [b, a], skipped: [] }, "another order"],
+    [{ version: MOSAIC_VERSION, ids: [a, b], skipped: [{ id: "3".repeat(24), name: "c", reason: "x" }] }, "a picture left out"], [{ version: MOSAIC_VERSION, ids: [a], skipped: [] }, "a different set"]]) {
+    await meta(m);
+    await assert.rejects(ask(), /no picture could be read back/, why + " is remade, not kept");
+  }
 });
 
 test("worker with the real packager: a sideways upload becomes encrypted protected files and an encrypted gallery entry (needs shaka-packager)", async (t) => {
@@ -251,6 +276,10 @@ test("worker with the real packager: the combined view holds every ready picture
   const again = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools });
   assert.equal(again.status, "current"); assert.equal(again.count, 2);
   for (const [i, n] of names.entries()) assert.ok((await fs.readFile(join(dir, n))).equals(snap[i]), n + " untouched");
+  // a view made by an older layout version is remade even for the same pictures
+  const oldMeta = JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(dir, "meta.json.enc")))));
+  await fs.writeFile(join(dir, "meta.json.enc"), await sealText(KEY, JSON.stringify({ ...oldMeta, version: 0 })));
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "ready", "an older version is remade");
   // the mosaic is remade from the list each time: deleting a picture removes it from the next one
   await worker({ payload: { action: "delete", id: "b".repeat(24), key: KEY_HEX }, siteDir, tools });
   const r2 = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools });
