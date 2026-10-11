@@ -25,6 +25,7 @@
 <tr><td>5</td><td>A WebGL canvas with <code>preserveDrawingBuffer: false</code></td><td>On <a href="bench/">the bench</a>, tap candidate 5, take a screenshot.</td><td>No refusal: the composited frame is what the system captures.</td><td>not yet</td></tr>
 <tr><td>6</td><td>120 Hz alternation on a high-refresh phone</td><td>Open <a href="../../trace/">trace/</a> on a 120 Hz phone; the readout prints the measured rate.</td><td>Noisier capture, still recognisable; not black.</td><td>not yet</td></tr>
 <tr><td>7</td><td>Browser private modes</td><td>Open <a href="../../trace/">trace/</a> in Chrome Incognito on Android, show the photo, take a screenshot.</td><td>Android refuses ("Can't take screenshot") because the browser's private tab sets the system's secure flag. That is the viewer's choice and the browser's, not ours: a normal tab captures. Logged as "not ours".</td><td>not yet</td></tr>
+<tr><td>8</td><td><strong>Above white: the photo placed entirely in the brightness range a screenshot file cannot hold</strong></td><td>Open <a href="hdr/">the above-white page</a> with the key in the link: screenshot the test card, then type the PIN, show the photo, screenshot again.</td><td>Unknown. If the phone clips, every band above 203 nits and the whole photo come out flat white: a capture with nothing in it. If the phone squeezes, the bands stay distinct and the idea dies on that phone.</td><td>not yet</td></tr>
 </tbody>
 </table>
 <h2>Why none of these is expected to pass</h2>

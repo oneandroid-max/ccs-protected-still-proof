@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Above white</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; max-width: 920px; margin: 0 auto; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  @media (prefers-color-scheme: dark) { body { color: #ecece6; background: #15171a; } }
+  h1 { font-size: 1.2rem; } h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; margin: 20px 0 8px; } p { max-width: 65ch; }
+  video, img { display: block; width: 100%; max-width: 420px; background: #000; border-radius: 10px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  input { font: inherit; font-size: 1.1rem; letter-spacing: 0.2em; width: 10ch; padding: 6px 10px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid #8a857a; background: transparent; color: inherit; cursor: pointer; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.85rem; }
+  dt { opacity: 0.7; } dd { margin: 0; word-break: break-word; }
+</style>
+</head>
+<body>
+<h1>Above white: does a screenshot keep what the screen shows beyond ordinary white?</h1>
+<p>A screenshot file holds the screen's ordinary range. The screen can show more, and the eye sees it. Here that extra range is used on purpose. <strong>Take one screenshot of this whole page</strong> with the card playing, then one with the photo showing, and send both back.</p>
+
+<h2>1. The test card (public, no PIN)</h2>
+<p>Thirteen bands, each at the brightness it names, from 50 to 2000 nits. The labels are at ordinary white. If the phone clips, every band above ordinary white is flat white in the screenshot and the labels on them vanish into it. If the phone squeezes, the bands stay distinguishable.</p>
+<video id="card" autoplay muted loop playsinline>
+  <source src="card.webm" type='video/webm; codecs="vp09.02.10.10.01.09.16.09.01"'>
+  <source src="card.mp4" type='video/mp4; codecs="hvc1.2.4.L120.B0"'>
+</video>
+<p style="font-size:0.85rem;opacity:0.8">The same card as a still image (AVIF), for the phone's image path:</p>
+<img id="cardimg" src="card.avif" alt="HDR test card as an image">
+
+<h2>2. The photo above white (PIN)</h2>
+<p>Every pixel of the photo sits between 250 and 1000 nits, above ordinary white. On an HDR screen it looks like a bright, slightly washed photo. In a clipping screenshot it is a flat white rectangle.</p>
+<div class="row"><input id="pin" type="text" inputmode="numeric" maxlength="6" placeholder="PIN" aria-label="PIN"><button id="show">Show the photo above white</button></div>
+<video id="photo" muted loop playsinline hidden></video>
+<img id="photoimg" hidden alt="">
+
+<h2>What this phone reports</h2>
+<dl>
+  <dt>Screen HDR</dt><dd id="r-dr">—</dd>
+  <dt>Video HDR</dt><dd id="r-vdr">—</dd>
+  <dt>Can play VP9 HDR</dt><dd id="r-vp9">—</dd>
+  <dt>Can play HEVC HDR</dt><dd id="r-hevc">—</dd>
+  <dt>AVIF image</dt><dd id="r-avif">—</dd>
+  <dt>Card video</dt><dd id="r-card">—</dd>
+  <dt>Photo</dt><dd id="r-photo">not shown</dd>
+  <dt>Colour depth</dt><dd id="r-depth">—</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+<p style="font-size:0.85rem;opacity:0.8">Built by tools/build-hdr.mjs: PQ transfer, BT.2020, 10-bit; VP9 profile 2, HEVC Main 10, AV1 still. The photo files are encrypted with the link key and the PIN like everything else here. <a href="../">Back to the candidates</a>.</p>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id), set = (id, t) => { $(id).textContent = t; };
+  set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+  const mm = (q) => (matchMedia(q).matches ? "yes" : "no") + " (" + q + ")";
+  set("r-dr", mm("(dynamic-range: high)"));
+  set("r-vdr", mm("(video-dynamic-range: high)"));
+  const probe = document.createElement("video");
+  set("r-vp9", probe.canPlayType('video/webm; codecs="vp09.02.10.10.01.09.16.09.01"') || "no");
+  set("r-hevc", probe.canPlayType('video/mp4; codecs="hvc1.2.4.L120.B0"') || "no");
+  set("r-depth", screen.colorDepth + " bits per pixel reported, device pixel ratio " + devicePixelRatio);
+  const cardimg = $("cardimg");
+  cardimg.addEventListener("load", () => set("r-avif", `decoded ${cardimg.naturalWidth}x${cardimg.naturalHeight}`));
+  cardimg.addEventListener("error", () => set("r-avif", "not decodable in this browser"));
+  const card = $("card");
+  const cardState = () => set("r-card", card.videoWidth ? `${card.videoWidth}x${card.videoHeight}, ${card.paused ? "paused" : "playing"}, source ${card.currentSrc.split("/").pop()}` : (card.error ? "error " + card.error.code : "no video yet"));
+  card.addEventListener("playing", cardState); card.addEventListener("error", cardState); setTimeout(cardState, 1500);
+  card.play().catch(() => set("r-card", "tap the card to start it"));
+
+  const secret = new URLSearchParams(location.hash.replace(/^#/, "")).get("k") || "";
+  async function decrypt(name, pin) {
+    const file = new Uint8Array(await (await fetch(name, { cache: "force-cache" })).arrayBuffer());
+    if (String.fromCharCode(...file.subarray(0, 5)) !== "CCSP1") throw new Error("not a CCSP1 file");
+    const dv = new DataView(file.buffer, file.byteOffset, file.byteLength);
+    const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(`${secret}:${pin}`), "PBKDF2", false, ["deriveKey"]);
+    const key = await crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: file.subarray(10, 26), iterations: dv.getUint32(6) }, material, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+    return crypto.subtle.decrypt({ name: "AES-GCM", iv: file.subarray(26, 38) }, key, file.subarray(38));
+  }
+  $("show").addEventListener("click", async () => {
+    const pin = $("pin").value.trim();
+    if (!/^\d{6}$/.test(pin) || !secret) { set("r-photo", "type the 6-digit PIN; the key must be in the link"); return; }
+    try {
+      const useWebm = probe.canPlayType('video/webm; codecs="vp09.02.10.10.01.09.16.09.01"') !== "";
+      const name = useWebm ? "photo-hdr.webm.enc" : "photo-hdr.mp4.enc", type = useWebm ? "video/webm" : "video/mp4";
+      const plain = await decrypt(name, pin);
+      const v = $("photo"); v.src = URL.createObjectURL(new Blob([plain], { type })); v.hidden = false;
+      await v.play();
+      setTimeout(() => set("r-photo", `${v.videoWidth}x${v.videoHeight}, ${v.paused ? "paused" : "playing"} (${name}). Take a screenshot now.`), 1200);
+      try { const img = await decrypt("photo-hdr.avif.enc", pin); const i = $("photoimg"); i.src = URL.createObjectURL(new Blob([img], { type: "image/avif" })); i.hidden = false; } catch {}
+    } catch (e) { set("r-photo", "refused or failed: " + e.message); }
+  });
+})();
+</script>
+</body>
+</html>

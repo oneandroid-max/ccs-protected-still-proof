@@ -1,0 +1,55 @@
+{
+  "card": {
+    "webm": 30047,
+    "mp4": 41819,
+    "avif": 6186,
+    "webm_probe": {
+      "codec_name": "vp9",
+      "profile": "Profile 2",
+      "width": 720,
+      "height": 1280,
+      "pix_fmt": "yuv420p10le",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020"
+    },
+    "mp4_probe": {
+      "codec_name": "hevc",
+      "profile": "Main 10",
+      "width": 720,
+      "height": 1280,
+      "pix_fmt": "yuv420p10le",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020"
+    },
+    "avif_probe": {
+      "codec_name": "av1",
+      "profile": "Main",
+      "width": 720,
+      "height": 1280,
+      "pix_fmt": "yuv420p10le",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020"
+    }
+  },
+  "photo": {
+    "webm": {
+      "plain": 20578,
+      "encrypted": 20632
+    },
+    "mp4": {
+      "plain": 32112,
+      "encrypted": 32166
+    },
+    "avif": {
+      "plain": 7280,
+      "encrypted": 7334
+    }
+  },
+  "mapping": {
+    "card": "bands at 50, 100, 150, 203, 250, 300, 400, 500, 600, 800, 1000, 1500, 2000 nits; labels at 203 nits",
+    "photo": "250–1000 nits, every pixel above ordinary white"
+  }
+}
