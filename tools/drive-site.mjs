@@ -103,8 +103,10 @@ window.shaka = { polyfill: { installAll(){} },
         const seg = await window.__scheme.fn("mem://photo/video-widevine.mp4", { headers: { Range: "bytes=100-199" } }).promise; window.__got.push(["range", seg.data.byteLength, new Uint8Array(seg.data)[0]]);
         const nope = await window.__scheme.fn("mem://photo/missing.mp4", { headers: {} }).promise.then(() => "resolved", () => "rejected"); window.__got.push(["missing", nope]); }
       this.ks = Object.keys(this.cfg.drm.advanced)[0];
-      // a decoded 720x960 frame and moving time, as a real protected video reports them (the page needs both)
+      // a decoded 720x960 frame and moving time, as a real protected video reports them (the page needs both);
+      // window.__noFrames: "playing" with no frame at all, as a Mac without a working FairPlay did
       const v = this.v, t0 = performance.now();
+      if (window.__noFrames) { setTimeout(() => v.dispatchEvent(new Event("playing")), 50); return; }
       Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 720 });
       Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 960 });
       Object.defineProperty(v, "paused", { configurable: true, get: () => false });
@@ -402,6 +404,12 @@ try {
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/held back — Apple FairPlay is not yet measured on Mac/.test(await ap.textContent("#r-ks")), "a Mac in Safari: held back until Apple is measured on a Mac: " + (await ap.textContent("#r-ks")));
+  await ac.close();
+
+  // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing)
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay", () => { window.__noFrames = true; }));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 30000 });
+  check(!(await ap.evaluate(() => window.__photoShown)) && /no licence or no decoded frame \(size 0x0\)/.test(await ap.textContent("#log")), "\"playing\" with no frame is not counted as shown: " + (await ap.textContent("#r-ks")));
   await ac.close();
 
   // 5. the view without a session goes to the password; an expired session too
