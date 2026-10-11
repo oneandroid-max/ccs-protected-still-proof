@@ -234,7 +234,16 @@ device for it; no outside service is in the chain.
     - The packager's download is pinned to its SHA-256 in all six places (`7a3cf35a…`, the v3.9.3 release's binary as downloaded here; CI checks every download against it).
     - A picture reported with a size of zero is refused plainly (it used to give a 2×2 clip).
   - **Measured here:** 35 of 35 site tests with the real packager, none skipped; 15 of 15 service tests; the drive 83 of 83.
-  - **Next:** each new check watched failing on a break, CI, and a sixth review of these fixes before the merge.
+  - **Watched failing (17:37Z):** 17 deliberate breaks, each in a fresh copy of `2ca653a`, each failing its named test:
+    - the byte check: a block left clear not named; a wrong decryption not named; a changed clear byte not named; every protected block taken as encrypted;
+    - its use: the worker ignoring it; the card ignoring it;
+    - the frame rules: keyframes by NAL type dropped; the per-frame limit dropped; clear-run NAL kinds not limited; `seig` not looked for;
+    - the token check accepting any answer; the own card kept after a corrected key value; the pictures' forms kept after one;
+    - `null` read as the shared address; the address pattern's start anchor removed in all three copies; the Apple page's refusal reason; a zero picture size.
+  - **The card tool run with a made-up key id** stopped with Axinom's own refusal ("License denied. The DRM message references the ID of an unknown communication key.") and exit code 1. The public card came out byte for byte as committed.
+  - **Two tests added for the fault itself:** a packager that puts the clip's bytes back under records saying "encrypted", and one that encrypts under another key. In both, the records check passes and the byte check refuses: the picture is readied without an Apple form, and the card is not built.
+  - **CI on `2ca653a`:** site test, service test and drive passed (runs 38159921636, 38159923998, 38159918046; read through the API).
+  - **Next:** the sixth review of these fixes, then the merge.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
