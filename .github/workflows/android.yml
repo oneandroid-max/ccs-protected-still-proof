@@ -66,3 +66,23 @@ jobs:
           fi
           gh release upload viewers ccs-proof-viewer.apk --clobber
           echo "https://github.com/${{ github.repository }}/releases/download/viewers/ccs-proof-viewer.apk"
+
+      # The release link goes through two redirects to a signed storage address, and on the owner's phone
+      # the download bar then opened a different file twice. The same APK is therefore also published on
+      # the site itself, a plain file on the same origin as the door, so a tap on the link downloads it
+      # directly and the phone's "Open" button installs it.
+      - name: Publish the APK on the site (dist/, committed by this workflow)
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk dist/ccs-proof-viewer.apk
+          SHA=$(sha256sum dist/ccs-proof-viewer.apk | cut -c1-64); SIZE=$(stat -c %s dist/ccs-proof-viewer.apk)
+          printf '{"file":"ccs-proof-viewer.apk","sha256":"%s","bytes":%s,"commit":"%s","run":%s,"builtAt":"%s"}\n' "$SHA" "$SIZE" "${{ github.sha }}" "${{ github.run_number }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > dist/android.json
+          cat dist/android.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dist/ccs-proof-viewer.apk dist/android.json
+          if git diff --cached --quiet; then echo "dist/ unchanged"; exit 0; fi
+          git commit -m "build(android): APK ${SHA:0:12} from ${{ github.sha }} (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "https://oneandroid-max.github.io/ccs-protected-still-proof/dist/ccs-proof-viewer.apk"
