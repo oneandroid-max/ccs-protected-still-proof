@@ -1,17 +1,21 @@
 // mac/main.swift — the Mac viewer of the self-defending proof, AppKit only, no library.
 //
-// Policy A (the default until a measurement moves it): the window asks for sharingType .none and reads
-// it back; on macOS 14 and older that leaves the window out of captures; on macOS 15 and newer the
-// system ignores it for recordings and screen sharing (Apple bug FB21115847), so this viewer does not
-// draw the photo there and says so. Fail closed: no decryption unless the read-back is .none and the
-// macOS major is below 15. The readout prints only what this Mac measured.
+// The window asks for sharingType .none and reads it back. Then, before anything is decrypted, the
+// viewer measures on this Mac whether that request is honoured: it draws a test pattern in the photo
+// area and captures its own window three ways with the system's own tools (mac/Capture.swift: the
+// screenshot tool, a one-second recording by the same tool, and the screen-capture framework directly).
+// Fail closed: the photo is decrypted only if the read-back is .none and every capture that could be
+// taken came back without the pattern. Measured on a GitHub macOS 26.6.2 runner (2026-10-11): the
+// screenshot and the recording both left the window out. The readout prints only what this Mac measured.
 import AppKit
 
 final class PhotoView: NSView {
     var image: CGImage?
+    var testPattern = false
     override var isOpaque: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
         NSColor.black.setFill(); bounds.fill()
+        if testPattern { Capture.drawTestPattern(in: bounds); return }
         guard let img = image, let ctx = NSGraphicsContext.current?.cgContext else { return }
         let s = min(bounds.width / CGFloat(img.width), bounds.height / CGFloat(img.height))
         let w = CGFloat(img.width) * s, h = CGFloat(img.height) * s
@@ -21,8 +25,9 @@ final class PhotoView: NSView {
 }
 
 final class ViewerApp: NSObject, NSApplicationDelegate {
-    static let POLICY_B_MEASURED_SCREENSHOT_EXCLUDED = false   // flipped only by a measurement on a real Mac (PLAN.md)
     var window: NSWindow!
+    var measured = false, measuredExcluded = false
+    var shotLine = "not measured yet", recLine = "not measured yet", fwLine = "not measured yet"
     let keyField = NSTextField(), pinField = NSTextField(), status = NSTextField(labelWithString: "Type the link key and the PIN, then Show."), readout = NSTextView()
     let photo = PhotoView()
     var pinState = "waiting", markIdText = "-", hourText = "-", timing = "-", keyFromLink: String?
@@ -47,6 +52,33 @@ final class ViewerApp: NSObject, NSApplicationDelegate {
         refreshReadout()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        selfProbe()
+    }
+
+    /// Draws the test pattern in the photo area and captures this window three ways; decides whether the refusal holds here.
+    func selfProbe() {
+        photo.testPattern = true; photo.needsDisplay = true
+        status.stringValue = "Measuring whether this Mac leaves the window out of a capture…"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            let region = Capture.screenRegion(of: self.photo)
+            let shot = Capture.screenshot(region, tag: "viewer")
+            let rec = Capture.recording(region, seconds: 1, tag: "viewer")
+            let done: (CaptureResult) -> Void = { fw in
+                self.shotLine = "\(shot.verdict) (\(shot.pixels) pattern px of \(shot.size))"
+                self.recLine = "\(rec.verdict) (\(rec.pixels) pattern px of \(rec.size))"
+                self.fwLine = fw.status == 0 ? "\(fw.verdict) (\(fw.pixels) pattern px of \(fw.size))" : fw.verdict
+                let excluded: (CaptureResult) -> Bool = { $0.status == 0 && $0.verdict.hasPrefix("excluded") }
+                // every capture that could be taken must have left the window out; a path that could not run is not a pass
+                let taken = [shot, rec, fw].filter { $0.status == 0 }
+                self.measuredExcluded = !taken.isEmpty && taken.allSatisfy(excluded) && shot.status == 0
+                self.measured = true
+                self.photo.testPattern = false; self.photo.needsDisplay = true
+                self.status.stringValue = self.refusalHolds ? "This Mac left the window out of every capture it could take. Type the link key and the PIN, then Show." : "A capture of this window showed the test pattern, so the photo stays hidden here."
+                self.refreshReadout()
+            }
+            if #available(macOS 14.0, *) { Task { let fw = await Capture.framework(region); DispatchQueue.main.async { done(fw) } } }
+            else { var fw = CaptureResult(); fw.verdict = "framework capture needs macOS 14"; done(fw) }
+        }
     }
     func application(_ application: NSApplication, open urls: [URL]) {
         if let u = urls.first, let f = u.fragment ?? URLComponents(url: u, resolvingAgainstBaseURL: false)?.query, let r = f.range(of: "k=") { keyFromLink = String(f[r.upperBound...].prefix { $0 != "&" }); keyField.stringValue = keyFromLink ?? "" }
@@ -55,14 +87,15 @@ final class ViewerApp: NSObject, NSApplicationDelegate {
 
     var macMajor: Int { ProcessInfo.processInfo.operatingSystemVersion.majorVersion }
     var sharingReadBack: String { switch window.sharingType { case .none: return "none"; case .readOnly: return "readOnly"; default: return "other" } }
-    var refusalHolds: Bool { sharingReadBack == "none" && (macMajor < 15 || Self.POLICY_B_MEASURED_SCREENSHOT_EXCLUDED) }
+    var refusalHolds: Bool { sharingReadBack == "none" && measured && measuredExcluded }
 
     @objc func showPhoto() {
         let secret = keyField.stringValue.trimmingCharacters(in: .whitespaces), pin = pinField.stringValue
         guard secret.count >= 8, pin.count == 6, pin.allSatisfy(\.isNumber) else { status.stringValue = "Enter the link key and the 6-digit PIN."; return }
+        guard measured else { status.stringValue = "Still measuring; try again in a second."; return }
         guard refusalHolds else {
-            pinState = "not tried: no refusal on this macOS"
-            status.stringValue = macMajor >= 15 ? "macOS 15 and newer no longer honours the window's no-sharing setting for recordings and screen sharing (Apple bug FB21115847); this viewer does not draw the full photo here." : "The window's no-sharing setting did not read back; nothing is drawn."
+            pinState = "not tried: a capture of this window showed the test pattern"
+            status.stringValue = "This Mac captured the window despite the no-sharing setting (measured at launch), so the photo stays hidden."
             refreshReadout(); return
         }
         status.stringValue = "Deriving the key and decrypting…"
@@ -102,7 +135,10 @@ final class ViewerApp: NSObject, NSApplicationDelegate {
         readout.string = """
         PIN: \(pinState)
         Window sharing: requested none, read back \(sharingReadBack)
-        macOS: \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)   refusal honoured here: \(refusalHolds ? "yes (policy A: macOS 14 and older)" : "NO (macOS 15+ ignores it for recordings and sharing; policy A draws nothing)")
+        macOS: \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)   refusal honoured here: \(measured ? (refusalHolds ? "YES, measured at launch" : "NO, measured at launch") : "measuring")
+        Self-capture, screenshot tool: \(shotLine)
+        Self-capture, recording by the same tool: \(recLine)
+        Self-capture, screen-capture framework: \(fwLine)
         Photo: \(photo.image == nil ? "not shown" : "drawn clean, \(photo.image!.width)x\(photo.image!.height) px")
         Viewer mark: \(markIdText) (hour \(hourText))
         Timing: \(timing)

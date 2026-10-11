@@ -38,7 +38,7 @@ jobs:
 
       - name: Mac probe on this runner (gate run, then the no-sharing run)
         run: |
-          swiftc -O -framework AppKit -framework AVFoundation mac/Probe.swift -o /tmp/macprobe
+          swiftc -O -framework AppKit -framework AVFoundation -framework ScreenCaptureKit mac/Capture.swift mac/probe/main.swift -o /tmp/macprobe
           /tmp/macprobe readOnly --out=/tmp/gate.json || true
           /tmp/macprobe none --out=/tmp/none.json || true
           echo "== gate (readOnly):"; cat /tmp/gate.json 2>/dev/null || echo "not written"; echo
@@ -49,7 +49,7 @@ jobs:
         run: |
           APP=build/mac/CCSProofViewer.app
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-          swiftc -O -framework AppKit apple/ProofCrypto.swift apple/ProofMark.swift mac/main.swift -o "$APP/Contents/MacOS/CCSProofViewer"
+          swiftc -O -framework AppKit -framework AVFoundation -framework ScreenCaptureKit apple/ProofCrypto.swift apple/ProofMark.swift mac/Capture.swift mac/main.swift -o "$APP/Contents/MacOS/CCSProofViewer"
           cp mac/Info.plist "$APP/Contents/Info.plist"
           cp photo.enc "$APP/Contents/Resources/photo.enc"
           codesign --force --sign - --deep "$APP"
