@@ -149,8 +149,9 @@ test("the Apple backfill commits what it wrote (the pictures' folders, the list,
   const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
   const env = lines.slice(at, runAt).map((l) => l.trim());
   for (const e of ["SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}", "AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}", "AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}"]) assert.ok(env.includes(e), e);
-  assert.match(FP_WF, /^on:\s*\n\s+workflow_dispatch:\s*\n\s*\npermissions:/m, "started by hand only");
-  assert.match(FP_WF, /concurrency: \{ group: site-mosaic, cancel-in-progress: false \}/, "never beside a combined-view job (both write site/mosaic)");
+  const on = FP_WF.slice(FP_WF.indexOf("\non:"), FP_WF.indexOf("\npermissions:"));
+  assert.ok(/workflow_dispatch:/.test(on) && /schedule:/.test(on) && !/repository_dispatch|push:|pull_request/.test(on), "started by hand and weekly only, never by a page or a push: " + on);
+  assert.match(FP_WF, /concurrency: \{ group: site-fairplay, cancel-in-progress: false \}/, "its own queue: never cancelled by a combined-view job");
   const d = await scratch();
   const r = runJob(d, BACKFILL, { STANDIN: "backfill", BACKFILL_RESULT: join(d, "result.json"), RACE_ONCE: join(d, "other") });
   assert.equal(r.code, 0, r.out);

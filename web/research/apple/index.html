@@ -8,7 +8,8 @@
 <style>
   body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 920px; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
   h1 { font-size: 1.2rem; } h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665c; margin: 18px 0 6px; } p, li { max-width: 65ch; }
-  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .cap { font-size: 0.78rem; line-height: 1.3; min-height: 3.9em; }
   .mini { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.35; margin: 0; word-break: break-word; }
@@ -26,12 +27,12 @@
 <body>
 <h1>Apple check: does Safari keep protected video out of a screenshot?</h1>
 <div class="steps">
-  <p><strong>For an iPhone, iPad or Mac, in Safari.</strong> Three short videos play side by side below. The first two go through Apple's protected path (FairPlay): Axinom's own test film, and our test card, packaged by the same code that packages the site's pictures. The third is plain, as a control.</p>
+  <p><strong>For an iPhone, iPad or Mac, in Safari.</strong> Four short videos play below. Three go through Apple's protected path (FairPlay): Axinom's own test film; our test card, packaged by the same code that packages the site's pictures, under Axinom's public test key; and the same card under a key of its own with a licence from OUR Axinom account, exactly as a picture would get one (shown once that account exists). The last is plain, as a control.</p>
   <ol>
-    <li>Wait until all three are moving (about ten seconds).</li>
+    <li>Wait until they are moving (about ten seconds).</li>
     <li>Take a screenshot (iPhone: side button + volume up; Mac: Shift-Command-3).</li>
-    <li>Open the screenshot in Photos. <strong>Both protected ones should be black; the control should show the film.</strong> If the control is black too, the screenshot proves nothing on that device.</li>
-    <li>If you can, also try a screen recording of all three.</li>
+    <li>Open the screenshot in Photos. <strong>The protected ones should be black; the control should show the film.</strong> A black one counts only if the line under it says <em>playing</em> with a size (for example 720x960) and its time moving; if it says <em>no frame</em>, nothing was playing there, and if the control is black too, the screenshot proves nothing on that device.</li>
+    <li>If you can, also try a screen recording of all of them.</li>
   </ol>
 </div>
 
@@ -43,7 +44,7 @@
   <dt>Device time</dt><dd id="r-time">—</dd>
 </dl>
 
-<h2>The three videos — the protected two should come out BLACK in a screenshot, the control should SHOW</h2>
+<h2>The videos — the protected ones should come out BLACK in a screenshot, the control should SHOW</h2>
 <div class="grid" id="videos">
   <div class="cell">
     <div class="cap"><span class="tag protected">PROTECTED</span><br>Axinom's test film, FairPlay</div>
@@ -54,6 +55,11 @@
     <div class="cap"><span class="tag protected">PROTECTED</span><br>our test card, FairPlay, our packaging</div>
     <div class="stage"><video id="vk" playsinline muted loop autoplay></video></div>
     <p class="mini">key system: <span id="k-ks">—</span><br>licence: <span id="k-lic">—</span><br>playing: <span id="k-play">—</span></p>
+  </div>
+  <div class="cell">
+    <div class="cap"><span class="tag protected">PROTECTED</span><br>our test card, OUR Axinom account's licence</div>
+    <div class="stage"><video id="vo" playsinline muted loop autoplay></video></div>
+    <p class="mini">key system: <span id="o-ks">—</span><br>licence: <span id="o-lic">—</span><br>playing: <span id="o-play">—</span></p>
   </div>
   <div class="cell">
     <div class="cap"><span class="tag control">CONTROL</span><br>the film, not protected</div>
@@ -72,7 +78,7 @@
   const $ = (id) => document.getElementById(id);
   const set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 13:36 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card + clear control)";
+  const PAGE_VERSION = "2026-10-11 14:26 UTC — Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account + clear control)";
   set("r-ver", PAGE_VERSION);
   set("r-ua", navigator.userAgent);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
@@ -87,11 +93,21 @@
   // our test card in FairPlay form (tools/fairplay-card.mjs, card-fairplay.yml): the route-1 test card,
   // packaged by the code that packages the site's pictures, under the same public test key as the film
   const CARD = "../drm/card-fairplay/master.m3u8";
+  // the same card under a key of its own, licensed by OUR Axinom account (card-fairplay-own/, made once the
+  // account's key is in the repository's secrets; its token unlocks only this public card)
+  const OWN = "../drm/card-fairplay-own/";
   const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUwLTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIsCiAgICAidmVyc2lvbiI6IDIsCiAgICAibGljZW5zZSI6IHsKICAgICAgImFsbG93X3BlcnNpc3RlbmNlIjogdHJ1ZQogICAgfSwKICAgICJjb250ZW50X2tleXNfc291cmNlIjogewogICAgICAiaW5saW5lIjogWwogICAgICAgIHsKICAgICAgICAgICJpZCI6ICI0MDYwYTg2NS04ODc4LTQyNjctOWNiZi05MWFlNWJhZTFlNzIiLAogICAgICAgICAgImVuY3J5cHRlZF9rZXkiOiAid3QzRW51dVI1UkFybjZBRGYxNkNCQT09IiwKICAgICAgICAgICJ1c2FnZV9wb2xpY3kiOiAiUG9saWN5IEEiCiAgICAgICAgfQogICAgICBdCiAgICB9LAogICAgImNvbnRlbnRfa2V5X3VzYWdlX3BvbGljaWVzIjogWwogICAgICB7CiAgICAgICAgIm5hbWUiOiAiUG9saWN5IEEiLAogICAgICAgICJwbGF5cmVhZHkiOiB7CiAgICAgICAgICAibWluX2RldmljZV9zZWN1cml0eV9sZXZlbCI6IDE1MCwKICAgICAgICAgICJwbGF5X2VuYWJsZXJzIjogWwogICAgICAgICAgICAiNzg2NjI3RDgtQzJBNi00NEJFLThGODgtMDhBRTI1NUIwMUE3IgogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
 
   shaka.polyfill.installAll();
+  // "playing" only with a decoded frame (a size above 0x0) and its time moving since the last look; a
+  // Mac without a working FairPlay showed "0x0, playing, time 0.0 s" with nothing on screen
   const watch = (video, id) => {
-    const tick = () => set(id, `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(1)} s`, video.paused || !video.videoWidth ? "bad" : "ok");
+    let last = null;
+    const tick = () => {
+      const moving = last !== null && Math.abs(video.currentTime - last) >= 0.2; last = video.currentTime;
+      const live = !video.paused && video.videoWidth > 0 && moving;
+      set(id, `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : !video.videoWidth ? "no frame" : moving ? "playing" : "not moving"}, time ${video.currentTime.toFixed(1)} s`, live ? "ok" : "bad");
+    };
     setInterval(tick, 1000); tick();
   };
 
@@ -115,17 +131,17 @@
   set("r-fps", fps === "yes" ? "available in this browser" : "not available here — this check needs Safari on an iPhone, iPad or Mac", fps === "yes" ? "ok" : "bad");
   log("FairPlay key system: " + fps);
   if (fps !== "yes") {
-    for (const p of ["p", "k"]) { set(p + "-ks", "none", "bad"); set(p + "-play", "not attempted (no FairPlay in this browser)", "bad"); }
+    for (const p of ["p", "k", "o"]) { set(p + "-ks", "none", "bad"); set(p + "-play", "not attempted (no FairPlay in this browser)", "bad"); }
     return;
   }
 
   // one protected video: its own player, Axinom's licence service and certificate, the public token
-  async function protectedPlay(videoId, p, url, what) {
+  async function protectedPlay(videoId, p, url, what, token = TOKEN) {
     const v = $(videoId);
     const player = new shaka.Player(); await player.attach(v);
     player.configure({ drm: { servers: { "com.apple.fps": LICENSE }, advanced: { "com.apple.fps": { serverCertificateUri: CERT } } } });
     player.getNetworkingEngine().registerRequestFilter((type, request) => {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = TOKEN; log(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = token; log(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
     });
     player.getNetworkingEngine().registerResponseFilter((type, response) => {
       if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
@@ -145,6 +161,10 @@
   }
   await protectedPlay("vp", "p", PROTECTED, "film (protected)");
   await protectedPlay("vk", "k", CARD, "our card (protected)");
+  let ownToken = null;
+  try { const r = await fetch(OWN + "token.txt?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ownToken = (await r.text()).trim(); } catch (e) {}
+  if (ownToken) await protectedPlay("vo", "o", OWN + "master.m3u8", "our card, our account (protected)", ownToken);
+  else { set("o-ks", "—"); set("o-play", "not made yet: it needs our Axinom account", "bad"); log("our card, our account: not made yet (needs the Axinom account's key in the repository's secrets)"); }
 })();
 </script>
 </body>

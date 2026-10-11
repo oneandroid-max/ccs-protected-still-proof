@@ -7,9 +7,10 @@
 // to site/photos/<id>/ with the gallery list (also encrypted). The workflow commits what this writes.
 // The clear picture exists only in this runner's temporary folder and is deleted at the end.
 // APPLE: when the Axinom evaluation account's communication key is set (AXINOM_COM_KEY_ID and
-// AXINOM_COM_KEY), every output also gets Apple's FairPlay form (fp/: HLS, 'cbcs', our own key) and a
-// licence token sealed under the picture key (fp-token.enc). WORKER_ACTION=fairplay adds that form to
-// pictures prepared before it existed, from their own protected output, and remakes the combined view.
+// AXINOM_COM_KEY), every output also gets Apple's FairPlay form: a folder fp-<8 hex>/ with the HLS files
+// ('cbcs', the output's own key) and its licence token sealed under the picture key (token.enc). The
+// "fairplay" action (site/backfill.mjs only, never a page's request) gives that form to pictures
+// prepared before it existed or whose token is running out, and remakes the combined view.
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -25,34 +26,47 @@ import { derivePlayReadyTestKey } from "../tools/playready-test-key.mjs";
 export const MAX_PHOTOS = 10;
 const OUTPUTS = ["widevine.mpd", "video-widevine.mp4", "playready.mpd", "video-playready.mp4"];
 const log = (m) => console.log(`${new Date().toISOString()} ${m}`);
-const FP_FILES = ["master.m3u8", "video.m3u8", "video.mp4"];
+const FP_FILES = ["master.m3u8", "video.m3u8", "video.mp4", "token.enc"];
+export const TOKEN_RENEW_DAYS = 14; // a token with less than this left is renewed (the weekly backfill run does it)
 
-// Apple's FairPlay form of the clip in `work` (work/clip.mp4), checked, then written to `outDir`: the
-// HLS files as they are (their samples are encrypted under a key that only the sealed token carries,
-// encrypted for Axinom), and the licence token sealed under the picture key. Returns what the meta
-// records. Throws when the packaged form fails its check: nothing is written then.
-// The form goes into a freshly named folder (fp-<8 hex>) each time, so a browser holding an older copy
-// in its cache (Pages caches for ten minutes) can never pair old video with a new licence.
+// Apple's FairPlay form of the clip in `work` (work/clip.mp4), checked, then written to `outDir` as ONE
+// folder, fp-<8 hex>/: the HLS files as they are (their samples are encrypted under a key that only the
+// token carries, encrypted for Axinom) and the licence token sealed under the picture key (token.enc).
+// The folder is assembled under a temporary name and renamed into place, so it is complete or absent;
+// the meta's pointer to it swaps files and token together. A fresh name each time means a browser holding
+// an older copy in its cache (Pages caches for ten minutes) never pairs old video with a new licence.
+// Older forms are removed by the caller, once the meta points to the new one. Throws when the packaged
+// form fails its check: nothing is written then. Returns what the meta records.
 async function addFairPlay({ tools, work, outDir, key, com }) {
   const ids = newFairPlayIds();
   await fs.rm(join(work, "fp"), { recursive: true, force: true });
   await packageFairPlay(tools.packager, work, ids);
   const check = checkFairPlay(await fs.readFile(join(work, "fp", "video.m3u8"), "utf8"), await fs.readFile(join(work, "fp", "video.mp4")), ids);
   if (!check.ok) throw new Error("the FairPlay form failed its check: " + check.problems.join("; "));
-  const token = mintToken(com, ids.kid, ids.key); // before anything is written, so a failure leaves no half form behind
-  let old = []; try { old = (await fs.readdir(outDir)).filter((d) => /^fp-[0-9a-f]{8}$/.test(d)); } catch {}
-  for (const d of old) await fs.rm(join(outDir, d), { recursive: true, force: true });
-  const folder = "fp-" + toHex(randomBytes(4));
-  await fs.mkdir(join(outDir, folder), { recursive: true });
-  for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(outDir, folder, f));
-  await fs.writeFile(join(outDir, "fp-token.enc"), await sealText(key, token));
-  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8` };
+  const token = mintToken(com, ids.kid, ids.key);
+  const expires = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).expiration_date;
+  await fs.writeFile(join(work, "fp", "token.enc"), await sealText(key, token));
+  const folder = "fp-" + toHex(randomBytes(4)), part = join(outDir, folder + ".part");
+  await fs.rm(part, { recursive: true, force: true });
+  await fs.mkdir(part, { recursive: true });
+  for (const f of FP_FILES) await fs.copyFile(join(work, "fp", f), join(part, f));
+  await fs.rename(part, join(outDir, folder));
+  return { keyUri: ids.keyUri, master: `${folder}/master.m3u8`, comKeyId: com.id, expires };
 }
-// Whether a recorded FairPlay form is really there (its playlist, video and sealed token).
-async function hasFairPlay(dir, fairplay) {
+// Removes every Apple form in `dir` but the one the meta now records (and anything half-made).
+async function removeOtherFairPlay(dir, fairplay) {
+  const keep = fairplay && String(fairplay.master).split("/")[0];
+  let names = []; try { names = await fs.readdir(dir); } catch {}
+  for (const d of names) if (/^fp-[0-9a-f]{8}(\.part)?$/.test(d) && d !== keep) await fs.rm(join(dir, d), { recursive: true, force: true });
+}
+// Whether a recorded Apple form is there and still good: all four files, its token made with THIS Axinom
+// key (one made with another cannot be licensed), and more than TOKEN_RENEW_DAYS left on it.
+export async function fairPlayCurrent(dir, fairplay, com, now = Date.now()) {
   if (!fairplay || !/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(fairplay.master))) return false;
   const folder = fairplay.master.split("/")[0];
-  try { for (const f of [...FP_FILES.map((x) => join(folder, x)), "fp-token.enc"]) await fs.access(join(dir, f)); return true; } catch { return false; }
+  try { for (const f of FP_FILES) await fs.access(join(dir, folder, f)); } catch { return false; }
+  if (com && String(fairplay.comKeyId || "").toLowerCase() !== com.id.toLowerCase()) return false;
+  return Date.parse(fairplay.expires) > now + TOKEN_RENEW_DAYS * 86400000;
 }
 
 export async function readGallery(siteDir, key) {
@@ -131,7 +145,7 @@ export async function buildMosaic({ siteDir, key, tools, com = null }) {
   // combined view already holds exactly these pictures, in this order, with none left out, keep it
   try {
     const cur = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(join(out, "meta.json.enc")))));
-    const fairPlayAsWanted = !com || await hasFairPlay(out, cur.fairplay); // with the Axinom key set, a view without FairPlay is remade
+    const fairPlayAsWanted = !com || await fairPlayCurrent(out, cur.fairplay, com); // with the Axinom key set, a view without a good Apple form is remade
     if (ready.length && cur.version === MOSAIC_VERSION && fairPlayAsWanted && !(cur.skipped || []).length && JSON.stringify(cur.ids) === JSON.stringify(ready.map((x) => x.id))) {
       log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
       return { status: "current", count: ready.length };
@@ -191,9 +205,10 @@ export async function buildMosaic({ siteDir, key, tools, com = null }) {
   }
 }
 
-// Adds Apple's FairPlay form to every ready picture that lacks it, from the picture's own protected
-// output (its still, read back as the combined view reads it, made into a clip again), then remakes the
-// combined view so it carries the form too. A picture that cannot be read back is reported, not hidden.
+// Gives Apple's FairPlay form to every ready picture that lacks a good one (none yet, made with another
+// Axinom key, or its token running out), from the picture's own protected output (its still, read back as
+// the combined view reads it, made into a clip again), then remakes the combined view when it needs the
+// same. A picture that cannot be read back is reported, not hidden.
 export async function backfillFairPlay({ siteDir, key, tools, com }) {
   if (!com) throw new Error("the Axinom communication key is not set: nothing to add");
   const gallery = await readGallery(siteDir, key);
@@ -206,7 +221,7 @@ export async function backfillFairPlay({ siteDir, key, tools, com }) {
     let meta;
     try { meta = JSON.parse(await openText(key, new Uint8Array(await fs.readFile(metaPath)))); }
     catch (e) { failed++; log(`FairPlay form NOT added: ${x.id} — its meta could not be read (${String(e.message || e).slice(0, 120)})`); continue; }
-    if (await hasFairPlay(dir, meta.fairplay)) { already++; continue; }
+    if (await fairPlayCurrent(dir, meta.fairplay, com)) { already++; continue; }
     const work = await fs.mkdtemp(join(tmpdir(), "site-fp-"));
     try {
       const kidHex = String(x.prKidGuid || meta.prKidGuid || "").replace(/-/g, "").toLowerCase();
@@ -214,6 +229,7 @@ export async function backfillFairPlay({ siteDir, key, tools, com }) {
       await renderClip(tools, s.still, join(work, "clip.mp4"));
       meta.fairplay = await addFairPlay({ tools, work, outDir: dir, key, com });
       await fs.writeFile(metaPath, await sealText(key, JSON.stringify(meta)));
+      await removeOtherFairPlay(dir, meta.fairplay); // only now: the meta points to the new form
       added++; addedIds.push(x.id); log(`FairPlay form added: ${x.id}`);
     } catch (e) { failed++; log(`FairPlay form NOT added: ${x.id} — ${String(e.message || e).slice(0, 300)}`); }
     finally { await fs.rm(work, { recursive: true, force: true }); }
@@ -231,6 +247,8 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
   const p = payload || {};
   const act = action || p.action;
   if (act !== "add" && act !== "delete" && act !== "mosaic" && act !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
+  // the backfill has its own workflow and queue: a page's request (the payload) can never start it
+  if (act === "fairplay" && action !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
   if (!/^[0-9a-f]{64}$/.test(String(p.key))) throw new Error("bad key");
   if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com });
   if (act === "fairplay") return backfillFairPlay({ siteDir, key: await importKeyHex(p.key), tools, com });

@@ -5,7 +5,8 @@
 // (window.__ccsMode = "all": the combined view of every ready picture, site/mosaic/, built by the job).
 // Apple's FairPlay form is the one exception to "from memory": Safari's own player fetches it by address,
 // so its files are served as they are (their samples are encrypted under a key that only the picture's
-// licence token carries, encrypted for the licence service), and only the token is sealed.
+// licence token carries, encrypted for the licence service), and only the token (token.enc, in the same
+// folder) is sealed.
 import { importKeyHex, open, openText } from "./crypto.js?v=aeb9bfd1fe59";
 
 const FILES = ["widevine.mpd", "video-widevine.mp4", "playready.mpd", "video-playready.mp4"];
@@ -105,7 +106,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       if (meta.fairplay) {
         try {
           if (!/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(meta.fairplay.master))) throw new Error("its address is not one the job writes");
-          const token = await openText(key, await fetchSealed(base + "fp-token.enc", "its licence token is not on the site yet"));
+          const token = await openText(key, await fetchSealed(base + meta.fairplay.master.split("/")[0] + "/token.enc", "its licence token is not on the site yet"));
           fairplay = { manifest: new URL(base + meta.fairplay.master, location.href).href, token };
         } catch (e) { fairplay = { error: e.message }; }
       }

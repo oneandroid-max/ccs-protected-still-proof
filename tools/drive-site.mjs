@@ -50,7 +50,7 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
 const FP_MASTER = "fp-0a1b2c3d/master.m3u8", PICTURE_TOKEN = "PICTURE.TOKEN.VALUE";
 await fs.mkdir(join(photoDir, "fp-0a1b2c3d"), { recursive: true });
 for (const f of ["master.m3u8", "video.m3u8", "video.mp4"]) await fs.writeFile(join(photoDir, "fp-0a1b2c3d", f), "#EXTM3U\n");
-await fs.writeFile(join(photoDir, "fp-token.enc"), await sealText(PHOTO, PICTURE_TOKEN));
+await fs.writeFile(join(photoDir, "fp-0a1b2c3d", "token.enc"), await sealText(PHOTO, PICTURE_TOKEN));
 await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { keyUri: "skd://00000000-0000-0000-0000-000000000000:00000000000000000000000000000000", master: FP_MASTER } })));
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
@@ -63,7 +63,7 @@ async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], ski
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
     ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped, fairplay })));
-  if (fairplay) await fs.writeFile(join(dir, "fp-token.enc"), await sealText(PHOTO, "MOSAIC.TOKEN.VALUE"));
+  if (fairplay) { const f = join(dir, fairplay.master.split("/")[0]); await fs.mkdir(f, { recursive: true }); await fs.writeFile(join(f, "token.enc"), await sealText(PHOTO, "MOSAIC.TOKEN.VALUE")); }
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
@@ -102,7 +102,14 @@ window.shaka = { polyfill: { installAll(){} },
       if (m.startsWith("mem://")) { const r = await window.__scheme.fn(m, { headers: {} }).promise; window.__got.push([m, r.data.byteLength]);
         const seg = await window.__scheme.fn("mem://photo/video-widevine.mp4", { headers: { Range: "bytes=100-199" } }).promise; window.__got.push(["range", seg.data.byteLength, new Uint8Array(seg.data)[0]]);
         const nope = await window.__scheme.fn("mem://photo/missing.mp4", { headers: {} }).promise.then(() => "resolved", () => "rejected"); window.__got.push(["missing", nope]); }
-      this.ks = Object.keys(this.cfg.drm.advanced)[0]; setTimeout(() => this.v.dispatchEvent(new Event("playing")), 50); }
+      this.ks = Object.keys(this.cfg.drm.advanced)[0];
+      // a decoded 720x960 frame and moving time, as a real protected video reports them (the page needs both)
+      const v = this.v, t0 = performance.now();
+      Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 720 });
+      Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 960 });
+      Object.defineProperty(v, "paused", { configurable: true, get: () => false });
+      Object.defineProperty(v, "currentTime", { configurable: true, get: () => ((performance.now() - t0) / 1000) % 2, set: () => {} });
+      setTimeout(() => v.dispatchEvent(new Event("playing")), 50); }
     drmInfo(){ return { keySystem: this.ks }; } async destroy(){} } };`;
 
 const api = { blobs: [], dispatches: [], puts: [], galleryMode: "normal" };
@@ -130,7 +137,7 @@ async function mockedContext(opts = {}) {
     // the Apple switch as it would be after a measurement on an iPhone (only when the drive asks for it)
     if (api.appleMeasured) { const before = body; body = body.replace('const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };', 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-11", "Mac": "" };'); if (body === before) throw new Error("the Apple switch was not found in the page"); }
     r.fulfill({ response: res, body }); });
-  if (api.noPictureToken) await ctx.route(/fp-token\.enc/, (r) => r.fulfill({ status: 404, body: "" }));
+  if (api.noPictureToken) await ctx.route(/\/fp-[0-9a-f]{8}\/token\.enc/, (r) => r.fulfill({ status: 404, body: "" }));
   return ctx;
 }
 

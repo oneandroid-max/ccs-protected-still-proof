@@ -60,7 +60,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 13:36 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay)";
+  const PAGE_VERSION = "2026-10-11 14:26 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay)";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -218,17 +218,23 @@
       : t.system === "fairplay" ? "Apple FairPlay — the device's own protected path (Apple offers no levels to choose)"
       : `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST ? "bad" : "ok"));
     log(`${tierName}: ${t.system === "clearkey" ? "ClearKey accepted" : t.system === "fairplay" ? "the browser accepted FairPlay" : `the browser accepted the ${t.word}-only request`}; waiting for the licence and the first frame …`);
-    // Count it as shown only when the video is really playing (licence arrived, frames decoded).
+    // Count it as shown only when the video is really playing: a decoded frame (a size above 0x0) and its
+    // time moving. The "playing" event alone is not enough: a Mac without a working FairPlay fired it with
+    // no frame at all, and a black screenshot of nothing measures nothing.
     video.style.visibility = "visible";
     const started = await new Promise((resolve) => {
-      let done = false; const finish = (v) => { if (!done) { done = true; resolve(v); } };
-      video.addEventListener("playing", () => finish(true), { once: true });
+      let done = false, t0 = null, poll = null;
+      const finish = (v) => { if (!done) { done = true; clearInterval(poll); resolve(v); } };
+      poll = setInterval(() => {
+        if (video.paused || !video.videoWidth) return;
+        if (t0 === null) t0 = video.currentTime; else if (Math.abs(video.currentTime - t0) >= 0.2) finish(true);
+      }, 200);
       player.addEventListener("error", () => finish(false), { once: true });
       setTimeout(() => finish(false), 15000);
       video.play().catch(() => {});
     });
     if (!started) {
-      log(`${tierName}: no playback within 15 s${lastError ? " — last error " + lastError : " — no licence or no decoded frame"}`);
+      log(`${tierName}: no playback within 15 s${lastError ? " — last error " + lastError : video.videoWidth ? " — a frame, but its time did not move" : " — no licence or no decoded frame (size " + video.videoWidth + "x" + video.videoHeight + ")"}`);
       hidePhoto();
       try { await player.destroy(); } catch (x) {} current = null;
       return "failed-after-grant";
@@ -240,7 +246,8 @@
       : t.system === "fairplay" ? `Apple FairPlay: screenshots measured black on ${PLATFORM} (${FAIRPLAY_MEASURED[PLATFORM]}). Take one.`
       : t.word === "hardware" ? "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one."
       : `software protection: in ${BROWSER} on ${PLATFORM} screenshots were measured black (2026-10-11). Take one.`, TEST ? "bad" : "ok");
-    const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
+    const tick = () => { const live = !video.paused && video.videoWidth > 0;
+      set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : live ? "playing" : "no frame"}, time ${video.currentTime.toFixed(2)} s${live ? " — take a screenshot now" : ""}`, live ? "ok" : "bad"); };
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
   }

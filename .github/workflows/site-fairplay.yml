@@ -1,19 +1,23 @@
-# APPLE BACKFILL, started by hand once the Axinom key is in the repository's secrets (AXINOM_COM_KEY_ID,
-# AXINOM_COM_KEY): gives every picture prepared before then Apple's FairPlay form, from its own protected
-# output, and remakes the combined view with it (site/backfill.mjs, then site/worker.mjs). The picture key
-# is derived on the runner from the site password, the way the page derives it, and masked before
-# anything else uses it. Opens no page and takes no capture. It shares the combined-view jobs' queue, so
-# the two never write site/mosaic at once, and it commits on the current tip of main, redoing the work if
-# its push races another job. A picture that did not get the form leaves the run red after the commit.
+# APPLE BACKFILL: started by hand once the Axinom key is in the repository's secrets (AXINOM_COM_KEY_ID,
+# AXINOM_COM_KEY), and weekly, so every licence token is renewed before it runs out (tokens last 60 days;
+# one with less than 14 left is renewed). Gives every picture without a good Apple form one, from its own
+# protected output, and remakes the combined view when it needs the same (site/backfill.mjs, then
+# site/worker.mjs). The picture key is derived on the runner from the site password, the way the page
+# derives it, and masked before anything is printed. Opens no page and takes no capture. Its own queue
+# (one backfill at a time, never cancelled by another workflow's jobs); it commits on the current tip of
+# main and redoes the work if its push races another job, so it may run beside a combined-view job.
+# A picture that did not get the form leaves the run red after the commit.
 name: site fairplay
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC: renew tokens before they run out
 
 permissions:
   contents: write
 
-concurrency: { group: site-mosaic, cancel-in-progress: false }
+concurrency: { group: site-fairplay, cancel-in-progress: false }
 
 jobs:
   backfill:

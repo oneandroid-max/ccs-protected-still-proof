@@ -8,8 +8,13 @@
 // The clear card is the committed PlayReady card decrypted with its own public test key (the same frames
 // as the card's other forms). The FairPlay form is then decrypted again two independent ways (ffmpeg and
 // shaka-packager), and both must give back exactly the clear card's first frame; undecrypted, it must not.
-//   node tools/fairplay-card.mjs                 writes web/research/drm/card-fairplay/
-//   node tools/fairplay-card.mjs --out <dir>     writes there instead
+// THE OWN-ACCOUNT FORM: with the Axinom evaluation key in the environment (AXINOM_COM_KEY_ID,
+// AXINOM_COM_KEY), the card is also packaged exactly as a picture is (a fresh random key) with a licence
+// token minted by OUR account, in card-fairplay-own/ (the token in clear, token.txt: it unlocks only this
+// public card). So a real Apple device can prove the account's own tokens before any picture is shown
+// there. It is remade only when missing, made with another key, or within 14 days of its token's end.
+//   node tools/fairplay-card.mjs                 writes web/research/drm/card-fairplay/ (and -own/)
+//   node tools/fairplay-card.mjs --out <dir>     writes the public form there instead (tests)
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -17,7 +22,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { packageFairPlay, checkFairPlay, checkBoxes, probe } from "../service/lib/pipeline.mjs";
 import { run } from "../service/lib/util.mjs";
-import { AXINOM_PUBLIC_TEST, kidToUuid } from "../site/axinom.mjs";
+import { AXINOM_PUBLIC_TEST, kidToUuid, newFairPlayIds, mintToken, readCommunicationKey } from "../site/axinom.mjs";
 import { derivePlayReadyTestKey } from "./playready-test-key.mjs";
 
 const REPO = fileURLToPath(new URL("../", import.meta.url));
@@ -38,7 +43,7 @@ async function firstFrame(tools, file, extra = []) {
 // The largest difference between two frames, channel by channel (0 = identical; Infinity = other sizes).
 export const largestDifference = (a, b) => { if (a.length !== b.length) return Infinity; let m = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d > m) m = d; } return m; };
 
-export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "web", "research", "drm", "card-playready.mp4") }) {
+export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "web", "research", "drm", "card-playready.mp4"), com = null }) {
   const work = await fs.mkdtemp(join(tmpdir(), "fp-card-"));
   try {
     // 1. the clear card, from the PlayReady card and its own public test key (stream copied, not re-encoded)
@@ -48,7 +53,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     const clear = await firstFrame(tools, join(work, "clip.mp4"));
     const size = await probe(tools.ffprobe, join(work, "clip.mp4"));
     // 2. Apple's form, by the code that packages the owner's pictures
-    const ids = cardFairPlayIds();
+    const ids = com ? newFairPlayIds() : cardFairPlayIds();
     await packageFairPlay(tools.packager, work, ids);
     const data = await fs.readFile(join(work, "fp", "video.mp4"));
     const check = checkFairPlay(await fs.readFile(join(work, "fp", "video.m3u8"), "utf8"), data, ids);
@@ -58,7 +63,7 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     await run(tools.packager, [`in=${join(work, "fp", "video.mp4")},stream=video,output=${join(work, "decrypted.mp4")}`, "--enable_raw_key_decryption", "--keys", `key_id=${ids.kid}:key=${ids.key}`]);
     const byPackager = await firstFrame(tools, join(work, "decrypted.mp4"));
     let undecrypted = "decoding refused";
-    try { const f = await firstFrame(tools, join(work, "fp", "video.mp4")); undecrypted = f.length === clear.length ? largestDifference(f, clear) : `a frame of another size (${f.length} bytes, the card's is ${clear.length})`; } catch {}
+    try { const f = await firstFrame(tools, join(work, "fp", "video.mp4")); undecrypted = !f.length ? "no frame decoded" : f.length === clear.length ? largestDifference(f, clear) : `a frame of another size (${f.length} bytes, the card's is ${clear.length})`; } catch {}
     const decryptCheck = { ffmpeg: largestDifference(byFfmpeg, clear), shakaPackager: largestDifference(byPackager, clear), undecrypted };
     if (decryptCheck.ffmpeg !== 0 || decryptCheck.shakaPackager !== 0) throw new Error(`decrypted, the FairPlay form is not the clear card (largest difference: ffmpeg ${decryptCheck.ffmpeg}, shaka-packager ${decryptCheck.shakaPackager})`);
     if (typeof undecrypted === "number" && undecrypted < 40) throw new Error(`undecrypted, the FairPlay form still shows the card (largest difference ${undecrypted}): its samples are not encrypted`);
@@ -67,11 +72,19 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
     await fs.rm(outDir, { recursive: true, force: true });
     await fs.mkdir(outDir, { recursive: true });
     for (const f of FILES) await fs.copyFile(join(work, "fp", f), join(outDir, f));
+    let token = null, expires = null;
+    if (com) {
+      token = mintToken(com, ids.kid, ids.key);
+      expires = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")).expiration_date;
+      await fs.writeFile(join(outDir, "token.txt"), token + "\n");
+    }
     const info = {
       content: "the route-1 test card (public by design; never a picture of the owner's)",
-      key: "Axinom's PUBLIC test key (site/axinom.mjs, AXINOM_PUBLIC_TEST), unlocked by Axinom's public licence token",
-      kid: kidToUuid(ids.kid), iv: ids.iv, keyUri: ids.keyUri, scheme: check.scheme,
+      key: com ? "a random key of its own, as a picture gets; the licence token (token.txt) is minted by our Axinom account and unlocks only this card"
+        : "Axinom's PUBLIC test key (site/axinom.mjs, AXINOM_PUBLIC_TEST), unlocked by Axinom's public licence token",
+      kid: kidToUuid(ids.kid), iv: ids.iv, keyUri: ids.keyUri, scheme: check.scheme, samples: check.samples, samplesEncrypted: check.samplesEncrypted,
       width: size.width, height: size.height, bytes: data.length, decryptCheck, packager: stdout.trim(),
+      ...(com ? { comKeyId: com.id, expires } : {}),
     };
     await fs.writeFile(join(outDir, "info.json"), JSON.stringify(info, null, 2) + "\n");
     return info;
@@ -80,9 +93,27 @@ export async function buildFairPlayCard({ tools, outDir, cardFile = join(REPO, "
   }
 }
 
+// Whether the own-account form in `dir` is still good for this key (same account, 14+ days left).
+export async function ownCardCurrent(dir, com, now = Date.now()) {
+  try {
+    const info = JSON.parse(await fs.readFile(join(dir, "info.json"), "utf8"));
+    for (const f of [...FILES, "token.txt"]) await fs.access(join(dir, f));
+    return String(info.comKeyId || "").toLowerCase() === com.id.toLowerCase() && Date.parse(info.expires) > now + 14 * 86400000;
+  } catch { return false; }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const at = process.argv.indexOf("--out");
   const outDir = at > 0 ? process.argv[at + 1] : join(REPO, "web", "research", "drm", "card-fairplay");
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir }), null, 2));
+  if (at < 0) {
+    const ownDir = join(REPO, "web", "research", "drm", "card-fairplay-own");
+    if (!process.env.AXINOM_COM_KEY_ID && !process.env.AXINOM_COM_KEY) console.log("the Axinom key is not set: no own-account form of the card");
+    else {
+      const com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY); // fails plainly when malformed
+      if (await ownCardCurrent(ownDir, com)) console.log("the own-account form of the card is current: unchanged");
+      else console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir: ownDir, com }), null, 2));
+    }
+  }
 }

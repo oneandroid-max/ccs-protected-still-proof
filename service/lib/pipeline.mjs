@@ -82,14 +82,15 @@ export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }) {
 
 // What a FairPlay output must carry before it is published: the playlist's key line with this key
 // address and Apple's key format, and in the file the 'cbcs' scheme with this key id and this constant
-// IV (so the licence's IV matches the encryption), and its samples encrypted.
+// IV (so the licence's IV matches the encryption), and EVERY sample with encrypted bytes, read from the
+// fragments' sample-encryption records ('senc': each sample's clear and protected byte counts).
 export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   const problems = [];
   const keyLine = playlist.split("\n").find((l) => l.startsWith("#EXT-X-KEY:")) || "";
   if (!/METHOD=SAMPLE-AES/.test(keyLine)) problems.push("the playlist's key line is not SAMPLE-AES");
   if (!keyLine.includes(`URI="${keyUri}"`)) problems.push("the playlist does not carry the key address");
   if (!/KEYFORMAT="com\.apple\.streamingkeydelivery"/.test(keyLine)) problems.push("the playlist does not name Apple's key format");
-  let scheme = null, tencKid = null, constIv = null;
+  let scheme = null, tencKid = null, constIv = null, ivSize = 0, samples = 0, samplesEncrypted = 0, protectedBytes = 0;
   const walk = (off, end) => {
     while (off + 8 <= end) {
       let s = data.readUInt32BE(off); const t = data.toString("latin1", off + 4, off + 8);
@@ -98,10 +99,23 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
       if (t === "schm") scheme = data.toString("latin1", off + 12, off + 16);
       if (t === "tenc") {
         tencKid = data.toString("hex", off + 16, off + 32);
-        const perSampleIvSize = data[off + 15];
-        if (perSampleIvSize === 0) { const n = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + n); }
+        ivSize = data[off + 15];
+        if (ivSize === 0) { const n = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + n); }
       }
-      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi"].includes(t)) walk(off + 8, off + s);
+      if (t === "senc" && s >= 16) { // full box: version and flags, the sample count, then per sample its IV and, with flag 2, its subsamples
+        const flags = data.readUIntBE(off + 9, 3), count = data.readUInt32BE(off + 12), end = off + s;
+        let p = off + 16;
+        for (let i = 0; i < count; i++) {
+          samples++; p += ivSize;
+          if (!(flags & 2)) { if (p <= end) samplesEncrypted++; continue; } // no subsamples: the whole sample is encrypted
+          if (p + 2 > end) break; // a record cut short counts as not encrypted
+          const n = data.readUInt16BE(p); p += 2; let prot = 0;
+          if (p + 6 * n > end) break;
+          for (let j = 0; j < n; j++) { prot += data.readUInt32BE(p + 2); p += 6; }
+          protectedBytes += prot; if (prot > 0) samplesEncrypted++;
+        }
+      }
+      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "moof", "traf"].includes(t)) walk(off + 8, off + s);
       if (t === "stsd") walk(off + 16, off + s);
       if (t === "encv") walk(off + 8 + 78, off + s);
       off += s;
@@ -113,7 +127,8 @@ export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   if (constIv !== iv) problems.push("the file's constant IV is not this IV");
   const boxes = checkBoxes(data);
   if (!boxes.ok) problems.push("the file is missing its sample-encryption boxes");
-  return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv };
+  if (!samples || samplesEncrypted !== samples) problems.push(`${samples - samplesEncrypted} of ${samples} samples have no encrypted bytes`);
+  return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, samples, samplesEncrypted, protectedBytes };
 }
 
 // Counts the boxes that matter in a packaged file and collects its key ids and protection systems.

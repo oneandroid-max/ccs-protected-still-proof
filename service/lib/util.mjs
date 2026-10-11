@@ -50,12 +50,18 @@ export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// A command's text with every key in it replaced (shaka-packager's key=<hex> and --aes_signing_key, ffmpeg's
+// -decryption_key): an error message can reach a public log, and the full command line is in it.
+export const redactKeys = (t) => String(t)
+  .replace(/(^|[^_\w])(key=)[0-9a-fA-F]{16,}/g, "$1$2<redacted>")
+  .replace(/(-decryption_key|--aes_signing_key|--aes_signing_iv)(\s+|=)[0-9a-fA-F]{16,}/g, "$1$2<redacted>");
+
 // Runs a program with arguments (no shell), capturing output; rejects after `timeoutMs`.
 export function run(bin, args, { cwd, timeoutMs = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     import("node:child_process").then(({ execFile }) => {
       execFile(bin, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err) reject(Object.assign(new Error(`${bin} failed: ${(stderr || err.message).toString().trim().slice(-800)}`), { stdout, stderr }));
+        if (err) reject(Object.assign(new Error(redactKeys(`${bin} failed: ${(stderr || err.message).toString().trim().slice(-800)}`)), { stdout, stderr }));
         else resolve({ stdout: String(stdout), stderr: String(stderr) });
       });
     });

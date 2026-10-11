@@ -12,9 +12,10 @@ import { fileURLToPath } from "node:url";
 import { createDecipheriv, createHmac, randomBytes as nodeRandom } from "node:crypto";
 import { readCommunicationKey, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT } from "../axinom.mjs";
 import { checkFairPlay, packageFairPlay, renderClip } from "../../service/lib/pipeline.mjs";
-import { deriveKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
-import { run as worker, readGallery } from "../worker.mjs";
-import { run as exec } from "../../service/lib/util.mjs";
+import { spawnSync } from "node:child_process";
+import { deriveKey, derivePhotoKey, exportKeyHex, seal, sealText, openText, open, toBase64 } from "../crypto.js";
+import { run as worker, readGallery, fairPlayCurrent, TOKEN_RENEW_DAYS } from "../worker.mjs";
+import { run as exec, redactKeys } from "../../service/lib/util.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
@@ -24,16 +25,26 @@ const b64url = (s) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
 const notice = (title, msg) => { if (process.env.GITHUB_ACTIONS === "true") console.log(`::notice title=${title}::${msg}`); };
 const unwrapKey = (comKey, kidHex, encB64) => { const d = createDecipheriv("aes-256-cbc", comKey, Buffer.from(kidHex, "hex")); d.setAutoPadding(false); return Buffer.concat([d.update(Buffer.from(encB64, "base64")), d.final()]).toString("hex"); };
 
-test("the communication key is read strictly: both values, a GUID, 32 bytes", () => {
+test("the communication key is read strictly: both values, a GUID, 32 bytes; the id kept as given; no value in a message", () => {
   assert.throws(() => readCommunicationKey("", ""), /not set/);
   assert.throws(() => readCommunicationKey(COM.id, ""), /not set/);
   assert.throws(() => readCommunicationKey("not-a-guid", COM.key.toString("base64")), /not a GUID/);
-  assert.throws(() => readCommunicationKey(COM.id, nodeRandom(16).toString("base64")), /32 bytes/);
-  const c = readCommunicationKey(COM.id.toUpperCase(), COM.key.toString("base64"));
-  assert.equal(c.id, COM.id); assert.ok(c.key.equals(COM.key));
+  const short = nodeRandom(16).toString("base64");
+  assert.throws(() => readCommunicationKey(COM.id, short), (e) => /32 bytes/.test(e.message) && !e.message.includes(short));
+  const c = readCommunicationKey(` ${COM.id.toUpperCase()} `, ` ${COM.key.toString("base64")}\n`);
+  assert.equal(c.id, COM.id.toUpperCase(), "kept as given (trimmed): Axinom compares it with its own record"); assert.ok(c.key.equals(COM.key));
 });
 
-test("a minted token: HS256 under the communication key, the content key encrypted for Axinom the way its quick start does", () => {
+test("a failing command's message carries no key (it can reach a public log)", async () => {
+  const keyArg = "label=:key_id=00112233445566778899aabbccddeeff:key=0123456789abcdef0123456789abcdef";
+  const e = await exec(process.execPath, ["-e", "process.exit(3)", "--", "--keys", keyArg, "-decryption_key", "fc35340837310cc0fb53de97e22a69e0"]).catch((x) => x);
+  assert.ok(e instanceof Error);
+  for (const secret of ["0123456789abcdef0123456789abcdef", "fc35340837310cc0fb53de97e22a69e0"]) assert.ok(!e.message.includes(secret), "no key in: " + e.message);
+  assert.match(e.message, /key_id=00112233445566778899aabbccddeeff:key=<redacted>/, "key ids stay (they are not secret)");
+  assert.equal(redactKeys("--aes_signing_key 1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9"), "--aes_signing_key <redacted>");
+});
+
+test("a minted token: HS256 under the communication key, the content key encrypted for Axinom the way its quick start does, without its relaxations", () => {
   const ids = newFairPlayIds();
   for (const k of ["kid", "key", "iv"]) assert.match(ids[k], /^[0-9a-f]{32}$/, k);
   assert.equal(ids.keyUri, `skd://${kidToUuid(ids.kid)}:${ids.iv.toUpperCase()}`);
@@ -51,9 +62,10 @@ test("a minted token: HS256 under the communication key, the content key encrypt
   assert.equal(p.message.license.allow_persistence, false);
   assert.equal(p.message.license.expiration_datetime, p.expiration_date);
   const k = p.message.content_keys_source.inline;
-  assert.equal(k.length, 1); assert.equal(k[0].id, kidToUuid(ids.kid)); assert.equal(k[0].usage_policy, "Policy A");
+  assert.equal(k.length, 1); assert.equal(k[0].id, kidToUuid(ids.kid));
   assert.equal(unwrapKey(COM.key, ids.kid, k[0].encrypted_key), ids.key, "the encrypted key opens, with an independent decryptor, to the content key");
-  assert.equal(p.message.content_key_usage_policies[0].name, "Policy A");
+  assert.equal(k[0].usage_policy, undefined); assert.equal(p.message.content_key_usage_policies, undefined, "no relaxed policy: Axinom's defaults apply");
+  assert.ok(!JSON.stringify(p).includes("786627D8"), "no virtual-machine play enabler");
   assert.equal(encryptContentKey(COM.key, ids.kid, ids.key), k[0].encrypted_key);
   assert.throws(() => encryptContentKey(COM.key, "zz", ids.key), /32 hex/);
   assert.equal(kidToUuid("4060A865887842679CBF91AE5BAE1E72"), "4060a865-8878-4267-9cbf-91ae5bae1e72");
@@ -92,25 +104,28 @@ test("every test value the workflow guard accepts makes the route-1 page play th
 });
 
 // A minimal fragmented MP4 with the boxes checkFairPlay and checkBoxes read: an encrypted sample entry
-// whose 'tenc' carries the key id and (for 'cbcs') a constant IV, and one fragment with its
-// sample-encryption boxes.
+// whose 'tenc' carries the key id and (for 'cbcs') a constant IV, and fragments with their
+// sample-encryption boxes, each 'senc' listing two samples with one subsample each (10 clear bytes, then
+// `prot` encrypted ones).
 const box = (type, ...parts) => { const body = Buffer.concat(parts.map((p) => Buffer.isBuffer(p) ? p : Buffer.from(p))); const h = Buffer.alloc(8); h.writeUInt32BE(8 + body.length); h.write(type, 4, "latin1"); return Buffer.concat([h, body]); };
-function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1 }) {
+const u16 = (n) => { const b = Buffer.alloc(2); b.writeUInt16BE(n); return b; }, u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32BE(n); return b; };
+const senc = (prot, ivSize) => box("senc", Buffer.from([0, 0, 0, 2]), u32(2), ...[prot[0], prot[1]].flatMap((p) => [Buffer.alloc(ivSize), u16(1), u16(10), u32(p)]));
+function fakeFile({ scheme = "cbcs", kid, iv, perSampleIvSize = 0, fragments = 1, prot = [900, 700] }) {
   const tenc = box("tenc", Buffer.from([1, 0, 0, 0, 0, 0x19, 1, perSampleIvSize]), Buffer.from(kid, "hex"), perSampleIvSize ? Buffer.alloc(0) : Buffer.concat([Buffer.from([16]), Buffer.from(iv, "hex")]));
   const sinf = box("sinf", box("frma", "avc1"), box("schm", Buffer.from([0, 0, 0, 0]), scheme, Buffer.from([0, 1, 0, 0])), box("schi", tenc));
   const encv = box("encv", Buffer.alloc(78), sinf);
   const stsd = box("stsd", Buffer.from([0, 0, 0, 0, 0, 0, 0, 1]), encv);
   const moov = box("moov", box("trak", box("mdia", box("minf", box("stbl", stsd)))));
-  const frags = Array.from({ length: fragments }, () => box("moof", box("traf", box("senc", Buffer.alloc(8)), box("saiz", Buffer.alloc(9)), box("saio", Buffer.alloc(12)))));
+  const frags = Array.from({ length: fragments }, () => box("moof", box("traf", senc(prot, perSampleIvSize), box("saiz", Buffer.alloc(9)), box("saio", Buffer.alloc(12)))));
   return Buffer.concat([moov, ...frags]);
 }
 
-test("the check every FairPlay form must pass: Apple's key line with this address, 'cbcs', this key id, this IV, encrypted fragments", () => {
+test("the check every FairPlay form must pass: Apple's key line with this address, 'cbcs', this key id, this IV, every sample with encrypted bytes", () => {
   const ids = newFairPlayIds();
   const playlist = `#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI="${ids.keyUri}",KEYFORMATVERSIONS="1",KEYFORMAT="com.apple.streamingkeydelivery"\n#EXTINF:2,\nvideo.mp4\n`;
   const good = checkFairPlay(playlist, fakeFile(ids), ids);
   assert.deepEqual(good.problems, []); assert.equal(good.ok, true);
-  assert.deepEqual([good.scheme, good.kid, good.iv], ["cbcs", ids.kid, ids.iv]);
+  assert.deepEqual([good.scheme, good.kid, good.iv, good.samples, good.samplesEncrypted, good.protectedBytes], ["cbcs", ids.kid, ids.iv, 2, 2, 1600]);
   // each way it can be wrong is named
   const other = newFairPlayIds();
   const cases = [
@@ -123,6 +138,8 @@ test("the check every FairPlay form must pass: Apple's key line with this addres
     [checkFairPlay(playlist, fakeFile({ ...ids, iv: other.iv }), ids), /constant IV/],
     [checkFairPlay(playlist, fakeFile({ ...ids, perSampleIvSize: 8 }), ids), /constant IV/],
     [checkFairPlay(playlist, fakeFile({ ...ids, fragments: 0 }), ids), /sample-encryption boxes/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [900, 0] }), ids), /1 of 2 samples have no encrypted bytes/],
+    [checkFairPlay(playlist, fakeFile({ ...ids, prot: [0, 0] }), ids), /2 of 2 samples have no encrypted bytes/],
   ];
   for (const [r, re] of cases) { assert.equal(r.ok, false, `a form that should fail with ${re} passed the check`); assert.ok(r.problems.some((p) => re.test(p)), `${re} in ${JSON.stringify(r.problems)}`); }
 });
@@ -184,10 +201,11 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
     const meta = JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(dir, "meta.json.enc")))));
     assert.match(meta.fairplay.master, /^fp-[0-9a-f]{8}\/master\.m3u8$/);
     const folder = meta.fairplay.master.split("/")[0];
-    assert.deepEqual((await fs.readdir(join(dir, folder))).sort(), ["master.m3u8", "video.m3u8", "video.mp4"]);
-    const token = await openText(KEY, new Uint8Array(await fs.readFile(join(dir, "fp-token.enc"))));
+    assert.deepEqual((await fs.readdir(join(dir, folder))).sort(), ["master.m3u8", "token.enc", "video.m3u8", "video.mp4"], "the form's folder holds its files AND its sealed token");
+    assert.deepEqual((await fs.readdir(dir)).filter((f) => /^fp/.test(f)), [folder], "one Apple form, nothing half-made");
+    const token = await openText(KEY, new Uint8Array(await fs.readFile(join(dir, folder, "token.enc"))));
     const p = b64url(token.split(".")[1]); const k = p.message.content_keys_source.inline[0];
-    assert.equal(p.com_key_id, COM.id);
+    assert.equal(p.com_key_id, COM.id); assert.equal(meta.fairplay.comKeyId, COM.id); assert.equal(meta.fairplay.expires, p.expiration_date, "the meta records which key made the token and when it ends");
     const contentKey = unwrapKey(COM.key, k.id.replace(/-/g, ""), k.encrypted_key);
     const media = await fs.readFile(join(dir, folder, "video.m3u8"), "utf8");
     assert.ok(media.includes(`URI="${meta.fairplay.keyUri}"`) && meta.fairplay.keyUri.startsWith(`skd://${k.id}:`), "the playlist's key address names the token's key id");
@@ -206,8 +224,10 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal((await mosaic(COM)).status, "ready", "the same pictures, but no Apple form: remade");
   const mm = await mosaicMeta();
   assert.match(mm.fairplay.master, /^fp-[0-9a-f]{8}\/master\.m3u8$/);
-  await fs.access(join(siteDir, "mosaic", mm.fairplay.master)); await fs.access(join(siteDir, "mosaic", "fp-token.enc"));
+  await fs.access(join(siteDir, "mosaic", mm.fairplay.master)); await fs.access(join(siteDir, "mosaic", mm.fairplay.master.split("/")[0], "token.enc"));
   assert.equal((await mosaic(COM)).status, "current");
+  // a page's request can never start the backfill (it has its own workflow and queue)
+  await assert.rejects(worker({ payload: { key: KEY_HEX, action: "fairplay" }, siteDir, tools, com: COM }), /unknown action/);
   // the backfill: B gets its form; A (already has one) is left exactly as it is
   const r = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM });
   assert.deepEqual({ added: r.added, already: r.already, failed: r.failed }, { added: 1, already: 1, failed: 0 });
@@ -216,7 +236,22 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(a2.folder, a1.folder); assert.equal(a2.token, a1.token, "a picture that has its form is not repackaged");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === B).fairplay, true, "the list records it");
   // a second backfill changes nothing
-  assert.deepEqual((({ added, already, failed }) => ({ added, already, failed }))(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 0, already: 2, failed: 0 });
+  const counts = (r) => ({ added: r.added, already: r.already, failed: r.failed });
+  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 0, already: 2, failed: 0 });
+  // RENEWAL: a token close to its end, or made with another Axinom key, is renewed (a new form), the old one removed
+  const metaPath = join(siteDir, "photos", A, "meta.json.enc");
+  const m = JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath))));
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, COM), true);
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, COM, Date.parse(m.fairplay.expires) - (TOKEN_RENEW_DAYS - 1) * 86400000), false, "less than the renewal margin left: not current");
+  assert.equal(await fairPlayCurrent(join(siteDir, "photos", A), m.fairplay, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "made with another key: not current");
+  await fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...m, fairplay: { ...m.fairplay, expires: new Date(Date.now() + 3 * 86400000).toISOString() } })));
+  assert.deepEqual(counts(await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: COM })), { added: 1, already: 1, failed: 0 }, "the expiring one is renewed");
+  const a3 = await verify(A, [39, 174, 96], 640, 480);
+  assert.notEqual(a3.folder, a1.folder, "a new form"); await assert.rejects(fs.access(join(siteDir, "photos", A, a1.folder)), "the old form is gone");
+  const OTHER = { id: "11111111-2222-3333-4444-555555555555", key: nodeRandom(32) };
+  const r2 = await worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: OTHER });
+  assert.deepEqual(counts(r2), { added: 2, already: 0, failed: 0 }, "another Axinom key: every form is remade under it");
+  assert.equal(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(siteDir, "mosaic", "meta.json.enc"))))).fairplay.comKeyId, OTHER.id, "the combined view too");
   // without the key the backfill refuses plainly
   await assert.rejects(worker({ payload: { key: KEY_HEX }, action: "fairplay", siteDir, tools, com: null }), /not set/);
   // a picture whose form fails to package is still ready for everything else
@@ -225,7 +260,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(broken.status, "ready", "a key the token cannot be made with leaves the picture ready elsewhere");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "c".repeat(24)).fairplay, false);
   assert.ok(!(await fs.readdir(join(siteDir, "photos", "c".repeat(24)))).some((f) => /^fp/.test(f)), "and no half-made Apple form is left behind");
-  notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; a bad key left the picture ready without a form`);
+  notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour; the token inside the form's folder); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; an expiring token renewed (1/1/0), another Axinom key: 2/0/0; a page request for the backfill refused; a bad key left the picture ready without a form`);
 });
 
 test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key, our IV, decrypted back two ways to exactly the card (needs shaka-packager)", async (t) => {
@@ -236,11 +271,64 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.deepEqual((await fs.readdir(out)).sort(), ["info.json", "master.m3u8", "video.m3u8", "video.mp4"]);
   assert.deepEqual(info.decryptCheck.ffmpeg, 0); assert.deepEqual(info.decryptCheck.shakaPackager, 0);
   const u = info.decryptCheck.undecrypted;
-  assert.ok(u === "decoding refused" || /^a frame of another size/.test(u) || (typeof u === "number" && u >= 40), "undecrypted it is not the card: " + u);
+  assert.ok(u === "decoding refused" || u === "no frame decoded" || /^a frame of another size/.test(u) || (typeof u === "number" && u >= 40), "undecrypted it is not the card: " + u);
+  assert.ok(info.samples > 0 && info.samplesEncrypted === info.samples, `every sample encrypted: ${info.samplesEncrypted} of ${info.samples}`);
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);
   notice("FairPlay card", `${info.keyUri}; ${info.bytes} bytes; decryptCheck ${JSON.stringify(info.decryptCheck)}; ${info.packager}`);
+  // the own-account form: a random key of its own, and a token minted by OUR account (here a throwaway one)
+  const { ownCardCurrent } = await import("../../tools/fairplay-card.mjs");
+  const ownDir = await fs.mkdtemp(join(tmp, "card-own-"));
+  assert.equal(await ownCardCurrent(ownDir, COM), false, "nothing there yet");
+  const own = await buildFairPlayCard({ tools, outDir: ownDir, com: COM });
+  assert.deepEqual((await fs.readdir(ownDir)).sort(), ["info.json", "master.m3u8", "token.txt", "video.m3u8", "video.mp4"]);
+  assert.ok(!own.keyUri.startsWith("skd://4060a865"), "not the public test key");
+  const token = (await fs.readFile(join(ownDir, "token.txt"), "utf8")).trim();
+  const [h, b, sig] = token.split(".");
+  assert.equal(sig, createHmac("sha256", COM.key).update(`${h}.${b}`).digest("base64url"), "minted by our account's key");
+  const k = b64url(b).message.content_keys_source.inline[0];
+  assert.ok(own.keyUri.startsWith(`skd://${k.id}:`), "the token names the form's key id");
+  const ownKey = unwrapKey(COM.key, k.id.replace(/-/g, ""), k.encrypted_key);
+  const clearCard = await frame(join(REPO, "web", "research", "drm", "card-playready.mp4"), ["-decryption_key", "a64cde52f25e07a56d7770f4d31fc1f3"]);
+  assert.ok((await frame(join(ownDir, "video.mp4"), ["-decryption_key", ownKey])).equals(clearCard), "the key inside our token decrypts it to exactly the card");
+  assert.equal(own.decryptCheck.ffmpeg, 0);
+  assert.equal(await ownCardCurrent(ownDir, COM), true, "current: same account, 60 days left");
+  assert.equal(await ownCardCurrent(ownDir, { ...COM, id: "11111111-2222-3333-4444-555555555555" }), false, "another account: remade");
+  assert.equal(await ownCardCurrent(ownDir, COM, Date.parse(own.expires) - 13 * 86400000), false, "13 days left: remade");
+  notice("FairPlay own card", `${own.keyUri}; token by the (test) account ${COM.id}; decryptCheck ${JSON.stringify(own.decryptCheck)}`);
+});
+
+// THE BACKFILL'S ENTRY, run as the workflow runs it (a child process, the real site/backfill.mjs) on a
+// scratch site: the picture key is masked before anything else is printed and appears nowhere else; a
+// password that does not open the gallery is a named error, not a quiet green run; a missing Axinom key is
+// an error when started by hand and nothing to do on the weekly run.
+test("the backfill's entry: the picture key masked first and nowhere else; a wrong password or a missing key named; the weekly run without a key does nothing", async () => {
+  const PW = "a test password, twelve+", SALT = toBase64(new Uint8Array(16).fill(9));
+  const site = await fs.mkdtemp(join(tmp, "bf-"));
+  await fs.writeFile(join(site, "config.json"), JSON.stringify({ salt: SALT, iterations: 1000 }));
+  const want = await exportKeyHex(await derivePhotoKey(await deriveKey(PW, SALT, 1000)));
+  const env = { ...process.env, SITE_DIR: site, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), BACKFILL_RESULT: join(site, "result.json"), PACKAGER_BIN: "/nonexistent/packager", GITHUB_EVENT_NAME: "workflow_dispatch" };
+  const go = (over = {}) => { const r = spawnSync(process.execPath, [join(REPO, "site", "backfill.mjs")], { encoding: "utf8", env: { ...env, ...over } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+  const masked = (out) => { const lines = out.split("\n"); assert.equal(lines[0], `::add-mask::${want}`, "the first thing printed is the mask"); assert.equal(lines.filter((l) => l.includes(want)).length, 1, "and the key appears nowhere else"); };
+  // an empty site: nothing to do, a green run that says so
+  let r = go();
+  assert.equal(r.code, 0, r.out); masked(r.out);
+  assert.match(r.out, /::notice title=Apple backfill::done — 0 added or renewed, 0 already good, 0 failed; combined view none/);
+  assert.equal(JSON.parse(await fs.readFile(join(site, "result.json"), "utf8")).status, "done");
+  // a gallery the password opens: still masked first
+  await fs.writeFile(join(site, "gallery.json.enc"), await sealText(await derivePhotoKey(await deriveKey(PW, SALT, 1000)), JSON.stringify({ photos: [] })));
+  r = go(); assert.equal(r.code, 0, r.out); masked(r.out);
+  // a gallery the password does NOT open: a named error, red
+  await fs.writeFile(join(site, "gallery.json.enc"), await sealText(await derivePhotoKey(await deriveKey("another password altogether", SALT, 1000)), JSON.stringify({ photos: [] })));
+  r = go(); assert.equal(r.code, 1, r.out); masked(r.out);
+  assert.match(r.out, /::error title=Apple backfill::SITE_PASSWORD does not open the gallery/);
+  // no Axinom key: an error when started by hand, nothing to do on the weekly run; a malformed one named
+  r = go({ AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "" }); assert.equal(r.code, 1); assert.match(r.out, /::error title=Apple backfill::the Axinom communication key is not set/);
+  r = go({ AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", GITHUB_EVENT_NAME: "schedule" }); assert.equal(r.code, 0, r.out); assert.match(r.out, /::notice title=Apple backfill::the Axinom key is not set yet: nothing to renew/);
+  r = go({ AXINOM_COM_KEY_ID: "not-a-guid" }); assert.equal(r.code, 1); assert.match(r.out, /::error title=Apple backfill::AXINOM_COM_KEY_ID is not a GUID/);
+  assert.ok(!r.out.includes(COM.key.toString("base64")), "the Axinom key never printed");
+  r = go({ SITE_PASSWORD: "" }); assert.equal(r.code, 1); assert.match(r.out, /SITE_PASSWORD is not set/);
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

@@ -1,7 +1,9 @@
 // Every workflow that opens the route-1 page must ask for the TEST CARD, never the owner's photo:
 // the link has to carry ?clip=card (normal mode, card), ?levels=software (test mode), ?levels=fairplay
 // (Apple test mode) or ?levels=clearkey (the unprotected control); every test value always plays the card
-// (site.test.mjs checks the page for each value named in SAFE).
+// (site/test/pages.test.mjs runs the page's own lines for each value named in SAFE_VALUES). The safe value
+// must be the link's FIRST parameter and the only levels= or clip= in it: the page reads the first one, so
+// "?levels=x&levels=fairplay" would play the photo while still containing a safe value (2026-10-11 review).
 // Born 2026-10-11: a runner screenshot of the page in test mode showed the photo in clear (software
 // protection does not hide it on Linux), and the workflow committed it to the public repository.
 // Checks every https URL ending in /research/drm/ and every use of $PAGE / ${PAGE} / $env:PAGE, in
@@ -37,7 +39,9 @@ for (const file of readdirSync(DIR).filter((f) => /\.ya?ml$/.test(f))) {
       checked++;
       const rest = line.slice(m.index + m[0].length).replace(/^`/, "");
       const query = rest.startsWith("?") ? rest.slice(1).split(/[\s"'#]/)[0] : null;
-      if (!query || !SAFE.test(query)) bad.push(`${DIR}/${file}:${i + 1}: ${m[0]}${query ? "?" + query : ""} does not ask for the test card`);
+      const params = query ? query.replace(/&amp;/g, "&").split("&") : [];
+      const choosers = params.filter((p) => /^(levels|clip)=/.test(p));
+      if (!query || !SAFE.test(params[0]) || choosers.length !== 1) bad.push(`${DIR}/${file}:${i + 1}: ${m[0]}${query ? "?" + query : ""} does not ask for the test card`);
     }
   });
 }
@@ -47,6 +51,7 @@ const BROWSER = /chrome|msedge|firefox|safari|screencapture|CopyFromScreen|impor
 const SITE_ALLOWED = {
   "site-photos.yml": "prepares pictures on the runner; opens no page",
   "site-fairplay.yml": "gives prepared pictures Apple's form on the runner; opens no page",
+  "card-fairplay.yml": "packages the public test card (reads site/axinom.mjs for the key handling); opens no page, reads no picture",
   "site-test.yml": "tests the site's code; opens no page",
   "live-check.yml": "fetches pages with curl; every picture file it can fetch is encrypted",
   "site-walk.yml": "THE WALK: a real browser on the live site; every capture sealed (safeguards required below)",

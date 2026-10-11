@@ -30,13 +30,15 @@ const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=+$/, "").r
 export const kidToUuid = (hex) => `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`.toLowerCase();
 
 // The communication key, from the two values the evaluation account shows: an id (GUID) and a
-// base64 key of 32 bytes. Throws with a plain message when either is missing or malformed.
+// base64 key of 32 bytes. The id is kept exactly as given (Axinom compares it with its own record).
+// Throws with a plain message when either is missing or malformed; the message never carries a value.
 export function readCommunicationKey(id, keyB64) {
   if (!id || !keyB64) throw new Error("the Axinom communication key is not set (AXINOM_COM_KEY_ID and AXINOM_COM_KEY)");
-  if (!UUID.test(String(id).toLowerCase())) throw new Error("AXINOM_COM_KEY_ID is not a GUID");
-  const key = Buffer.from(String(keyB64), "base64");
+  const given = String(id).trim();
+  if (!UUID.test(given.toLowerCase())) throw new Error("AXINOM_COM_KEY_ID is not a GUID");
+  const key = Buffer.from(String(keyB64).trim(), "base64");
   if (key.length !== 32) throw new Error(`AXINOM_COM_KEY must be 32 bytes in base64 (got ${key.length})`);
-  return { id: String(id).toLowerCase(), key };
+  return { id: given, key };
 }
 
 // The content key encrypted for Axinom: AES-256-CBC, no padding, the IV being the key id's 16 bytes.
@@ -47,10 +49,16 @@ export function encryptContentKey(comKey, kidHex, keyHex) {
   return Buffer.concat([c.update(Buffer.from(keyHex, "hex")), c.final()]).toString("base64");
 }
 
-// One licence token for one content key, shaped exactly as Axinom's quick start shapes it (envelope:
-// version, com_key_id, message, begin_date, expiration_date), except that licences are not kept on the
-// device (allow_persistence false, Axinom's default). Valid from a day before `now` (clock drift) for
-// `days` days.
+// One licence token for one content key, shaped as Axinom's quick start shapes it (envelope: version,
+// com_key_id, message, begin_date, expiration_date), with two differences: licences are not kept on the
+// device (allow_persistence false), and the quick start's PlayReady RELAXATIONS (any client, virtual
+// machines included; its comment: "as permissive as possible for the scope of this guide") are left
+// out, so Axinom's own defaults apply ("There is no need to relax the default Widevine or FairPlay
+// specific restrictions", the same file). Axinom honours one token on all of its licence services, so a
+// holder of a picture's token (only a password holder: it is sealed) could still ask Axinom's Widevine
+// service for the key under Widevine's defaults; restricting the key to FairPlay needs Axinom's
+// entitlement-message reference, not yet read (its documentation host is blocked from this sandbox).
+// Valid from a day before `now` (clock drift) for `days` days; the job renews it before it runs out.
 export function mintToken(com, kidHex, keyHex, { now = new Date(), days = 60 } = {}) {
   const from = new Date(now.getTime() - 24 * 3600 * 1000), to = new Date(now.getTime() + days * 24 * 3600 * 1000);
   const payload = {
@@ -62,9 +70,7 @@ export function mintToken(com, kidHex, keyHex, { now = new Date(), days = 60 } =
       type: "entitlement_message",
       version: 2,
       license: { start_datetime: from.toISOString(), expiration_datetime: to.toISOString(), allow_persistence: false },
-      content_keys_source: { inline: [{ id: kidToUuid(kidHex), encrypted_key: encryptContentKey(com.key, kidHex, keyHex), usage_policy: "Policy A" }] },
-      // the policy block exactly as Axinom's quick start writes it (its PlayReady relaxations are inert for FairPlay)
-      content_key_usage_policies: [{ name: "Policy A", playready: { min_device_security_level: 150, play_enablers: ["786627D8-C2A6-44BE-8F88-08AE255B01A7"] } }],
+      content_keys_source: { inline: [{ id: kidToUuid(kidHex), encrypted_key: encryptContentKey(com.key, kidHex, keyHex) }] },
     },
   };
   const head = b64url(JSON.stringify({ alg: "HS256", typ: "JWT" })), body = b64url(JSON.stringify(payload));
