@@ -1,0 +1,46 @@
+# The test site's job: the page on GitHub Pages sends a repository_dispatch "photo" event (add or
+# delete) with the picture's encrypted upload and the password-derived key; site/worker.mjs prepares
+# the picture with the proof's pipeline and writes encrypted outputs, which this workflow commits.
+# The key is masked in the log before anything else runs. One job at a time, in order.
+name: site photos
+
+on:
+  repository_dispatch:
+    types: [photo]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: site-photos
+  cancel-in-progress: false
+
+jobs:
+  photo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Mask the key
+        env: { K: "${{ github.event.client_payload.key }}" }
+        run: echo "::add-mask::$K"
+      - uses: actions/checkout@v4
+      - name: ffmpeg and shaka-packager
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          sudo chmod +x /usr/local/bin/packager && packager --version
+      - name: Prepare the picture
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGER_BIN: /usr/local/bin/packager
+        run: node site/worker.mjs
+      - name: Commit the encrypted outputs
+        env: { ACTION: "${{ github.event.client_payload.action }}", ID: "${{ github.event.client_payload.id }}" }
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A site/photos site/gallery.json.enc
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "site: $ACTION $ID"
+          for i in 1 2 3 4; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
+          exit 1

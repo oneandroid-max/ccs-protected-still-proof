@@ -1,5 +1,6 @@
-# The test site's image: Node 22, Debian's ffmpeg (with libx264) and shaka-packager v3.9.3, the same
-# packager version the proof's GitHub runners use. Built from the repository root.
+# The stand-alone service's image (for any host that runs containers): Node 22, Debian's ffmpeg (with
+# libx264) and shaka-packager v3.9.3, the same packager version the proof's GitHub runners use. Built
+# from the repository root. The live test site is the GitHub-only build in site/.
 FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*

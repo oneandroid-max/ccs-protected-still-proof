@@ -1,6 +1,6 @@
 # Proves the test site before it is hosted anywhere: the full test suite with real ffmpeg and the real
 # shaka-packager (the pipeline test is REQUIRED here, never skipped), then the Docker image is built
-# exactly as Render builds it, started, and its health must report both tools present.
+# as a container host would, started, and its health must report both tools present.
 name: service test
 
 on:
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Build the image as Render will
+      - name: Build the image as a container host would
         run: docker build -f service/Dockerfile -t ccs-proof-test .
       - name: Start it and read its health
         run: |

@@ -1,0 +1,28 @@
+# Proves the test site's GitHub half before a picture is ever uploaded: the shared crypto, the
+# in-memory scheme's byte ranges, the generated view page's freshness, and the worker end to end with
+# the real shaka-packager (REQUIRED here, never skipped), decrypting its outputs and checking their
+# sample-encryption boxes.
+name: site test
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "web/research/drm/index.html", ".github/workflows/site-test.yml"]
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg and shaka-packager
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          sudo chmod +x /usr/local/bin/packager && packager --version
+      - name: The generated view page is current
+        run: node tools/build-site-view.mjs --check
+      - name: node --test (the worker's packager test must run)
+        env: { REQUIRE_PACKAGER: "1", PACKAGER_BIN: /usr/local/bin/packager }
+        run: node --version && node --test --test-reporter spec "site/test/*.test.mjs"
