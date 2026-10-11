@@ -37,9 +37,12 @@ jobs:
           txt=re.sub(r"[ \t]+"," ","".join(t.out)); txt=re.sub(r"\n\s*\n+","\n",txt)
           print(txt.strip()[:24000])
           PY
-          for u in https://docs.axinom.com/services/drm/how-to-guides/create-account https://docs.axinom.com/services/drm/quickstart/ https://docs.axinom.com/services/drm/how-to-guides/legacy-credentials https://docs.axinom.com/services/drm/license-service/entitlement-message https://docs.axinom.com/services/drm/license-service/entitlement-message/content-key-usage-policies; do
+          for u in https://docs.axinom.com/services/drm/how-to-guides/drm-credentials https://docs.axinom.com/services/drm/mosaic-drm-service/configure-drm https://docs.axinom.com/services/drm/license-service/license-service-configuration; do
             echo "=================== $u"; curl -sSL -m 30 "$u" | python3 /tmp/text.py; echo
           done
+          echo "=================== the live Apple check page"
+          curl -sS -m 20 -o /tmp/apple.html -w 'http %{http_code}, %{size_download} bytes\n' "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/?v=$(date +%s)"
+          grep -o 'PAGE_VERSION = "[^"]*"' /tmp/apple.html; grep -c '<video' /tmp/apple.html
       - name: The protected and the clear HLS test playlists
         run: |
           for m in https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8 https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8; do
