@@ -83,54 +83,111 @@ export async function packageFairPlay(packager, dir, { kid, key, iv, keyUri }, {
 }
 
 // What a FairPlay output must carry before it is published: the playlist's key line with this key
-// address and Apple's key format, and in the file the 'cbcs' scheme with this key id and this constant
-// IV (so the licence's IV matches the encryption), and EVERY sample with encrypted bytes, read from the
-// fragments' sample-encryption records ('senc': each sample's clear and protected byte counts).
+// address and Apple's key format; in the file the 'cbcs' scheme with this key id and this constant IV (so
+// the licence's IV matches the encryption); and, fragment by fragment, the sample table ('trun': each
+// sample's size and whether it is a keyframe) matched record for record with the sample-encryption records
+// ('senc': each sample's clear and protected byte counts): every sample recorded, its record adding up to
+// its size (no byte of it outside the record), with a protected range, and EVERY KEYFRAME with at least
+// one encrypted block. Under 'cbcs' a protected range shorter than one 16-byte block encrypts nothing:
+// normal for the near-empty frames between a still picture's keyframes (10 to 13 bytes, measured on a
+// solid colour), never acceptable for a keyframe, which carries the picture.
 export function checkFairPlay(playlist, data, { kid, iv, keyUri }) {
   const problems = [];
   const keyLine = playlist.split("\n").find((l) => l.startsWith("#EXT-X-KEY:")) || "";
   if (!/METHOD=SAMPLE-AES/.test(keyLine)) problems.push("the playlist's key line is not SAMPLE-AES");
   if (!keyLine.includes(`URI="${keyUri}"`)) problems.push("the playlist does not carry the key address");
   if (!/KEYFORMAT="com\.apple\.streamingkeydelivery"/.test(keyLine)) problems.push("the playlist does not name Apple's key format");
-  let scheme = null, tencKid = null, constIv = null, ivSize = 0, samples = 0, samplesEncrypted = 0, protectedBytes = 0;
+  let scheme = null, tencKid = null, constIv = null, ivSize = 0;
+  const trex = new Map(); // per track: the movie's default sample size and flags
+  const n = { samples: 0, samplesMarked: 0, samplesEncrypted: 0, keyframes: 0, keyframesEncrypted: 0, protectedBytes: 0, mismatched: 0, uncovered: 0 };
+  const NOT_KEYFRAME = 0x10000; // sample_is_non_sync_sample, in a sample's flags
+  const header = (off, end) => { let s = data.readUInt32BE(off); if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off; return [s, data.toString("latin1", off + 4, off + 8)]; };
+  const cut = (what) => { throw new Error(`a fragment's ${what} is cut short`); };
+  const sane = (count) => { if (count > 1e6) throw new Error(`a fragment lists ${count} samples`); return count; };
+  // one fragment of the track: its defaults ('tfhd', else the movie's 'trex'), its samples ('trun') and
+  // their records ('senc'), in the order the standard gives them
+  const fragment = (off, end) => {
+    let dflt = { size: 0, flags: 0 }, p = off; const table = [], records = [], limit = Math.min(end, data.length);
+    for (; p + 8 <= limit;) {
+      const [s, t] = header(p, limit); if (s < 8 || p + s > limit) cut("box");
+      if (t === "tfhd") {
+        const f = data.readUIntBE(p + 9, 3); let q = p + 16;
+        dflt = { ...(trex.get(data.readUInt32BE(p + 12)) || { size: 0, flags: 0 }) };
+        if (f & 0x1) q += 8; if (f & 0x2) q += 4; if (f & 0x8) q += 4;
+        if (f & 0x10) { dflt.size = data.readUInt32BE(q); q += 4; }
+        if (f & 0x20) dflt.flags = data.readUInt32BE(q);
+      }
+      if (t === "trun") {
+        const f = data.readUIntBE(p + 9, 3), count = sane(data.readUInt32BE(p + 12)); let q = p + 16, first = null;
+        if (f & 0x1) q += 4; if (f & 0x4) { first = data.readUInt32BE(q); q += 4; }
+        const row = 4 * [0x100, 0x200, 0x400, 0x800].filter((b) => f & b).length;
+        if (q + count * row > p + s) cut("sample table");
+        for (let i = 0; i < count; i++) {
+          const r = { size: dflt.size, flags: i === 0 && first !== null ? first : dflt.flags };
+          if (f & 0x100) q += 4; if (f & 0x200) { r.size = data.readUInt32BE(q); q += 4; } if (f & 0x400) { r.flags = data.readUInt32BE(q); q += 4; } if (f & 0x800) q += 4;
+          table.push(r);
+        }
+      }
+      if (t === "senc") { // full box: version and flags, the sample count, then per sample its IV and, with flag 2, its subsamples
+        const f = data.readUIntBE(p + 9, 3), count = sane(data.readUInt32BE(p + 12)); let q = p + 16;
+        for (let i = 0; i < count; i++) {
+          q += ivSize;
+          if (!(f & 2)) { if (q > p + s) cut("encryption record"); records.push(null); continue; } // no subsamples: the whole sample is protected
+          if (q + 2 > p + s) cut("encryption record");
+          const k = data.readUInt16BE(q); q += 2; let clear = 0, prot = 0;
+          if (q + 6 * k > p + s) cut("encryption record");
+          for (let j = 0; j < k; j++) { clear += data.readUInt16BE(q); prot += data.readUInt32BE(q + 2); q += 6; }
+          records.push({ clear, prot });
+        }
+      }
+      p += s;
+    }
+    if (p !== end) cut("box"); // the file ends inside the fragment
+    if (records.length !== table.length) n.mismatched++;
+    table.forEach((r, i) => {
+      const keyframe = !(r.flags & NOT_KEYFRAME), rec = records[i];
+      n.samples++; if (keyframe) n.keyframes++;
+      if (rec === undefined) return; // no record: neither protected nor encrypted
+      const prot = rec === null ? r.size : rec.prot;
+      if (rec !== null && rec.clear + rec.prot !== r.size) n.uncovered++;
+      n.protectedBytes += prot;
+      if (prot > 0) n.samplesMarked++;
+      if (prot >= 16) { n.samplesEncrypted++; if (keyframe) n.keyframesEncrypted++; }
+    });
+  };
   const walk = (off, end) => {
+    end = Math.min(end, data.length);
     while (off + 8 <= end) {
-      let s = data.readUInt32BE(off); const t = data.toString("latin1", off + 4, off + 8);
-      if (s === 1) s = Number(data.readBigUInt64BE(off + 8)); if (s === 0) s = end - off;
+      const [s, t] = header(off, end);
       if (s < 8) return;
       if (t === "schm") scheme = data.toString("latin1", off + 12, off + 16);
       if (t === "tenc") {
         tencKid = data.toString("hex", off + 16, off + 32);
         ivSize = data[off + 15];
-        if (ivSize === 0) { const n = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + n); }
+        if (ivSize === 0) { const len = data[off + 32]; constIv = data.toString("hex", off + 33, off + 33 + len); }
       }
-      if (t === "senc" && s >= 16) { // full box: version and flags, the sample count, then per sample its IV and, with flag 2, its subsamples
-        const flags = data.readUIntBE(off + 9, 3), count = data.readUInt32BE(off + 12), end = off + s;
-        let p = off + 16;
-        for (let i = 0; i < count; i++) {
-          samples++; p += ivSize;
-          if (!(flags & 2)) { if (p <= end) samplesEncrypted++; continue; } // no subsamples: the whole sample is encrypted
-          if (p + 2 > end) break; // a record cut short counts as not encrypted
-          const n = data.readUInt16BE(p); p += 2; let prot = 0;
-          if (p + 6 * n > end) break;
-          for (let j = 0; j < n; j++) { prot += data.readUInt32BE(p + 2); p += 6; }
-          protectedBytes += prot; if (prot >= 16) samplesEncrypted++; // under one 16-byte block, 'cbcs' encrypts nothing
-        }
-      }
-      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "moof", "traf"].includes(t)) walk(off + 8, off + s);
+      if (t === "trex") trex.set(data.readUInt32BE(off + 12), { size: data.readUInt32BE(off + 24), flags: data.readUInt32BE(off + 28) });
+      if (t === "traf") fragment(off + 8, off + s);
+      if (["moov", "trak", "mdia", "minf", "stbl", "sinf", "schi", "mvex", "moof"].includes(t)) walk(off + 8, off + s);
       if (t === "stsd") walk(off + 16, off + s);
       if (t === "encv") walk(off + 8 + 78, off + s);
       off += s;
     }
   };
-  walk(0, data.length);
+  try { walk(0, data.length); } catch (e) { problems.push(`the file cannot be read: ${e.message}`); }
   if (scheme !== "cbcs") problems.push(`the file's scheme is ${scheme}, not cbcs`);
   if (tencKid !== kid) problems.push("the file's key id is not this key id");
   if (constIv !== iv) problems.push("the file's constant IV is not this IV");
-  const boxes = checkBoxes(data);
+  let boxes = { ok: false }; try { boxes = checkBoxes(data); } catch {} // a file cut short is already named above
   if (!boxes.ok) problems.push("the file is missing its sample-encryption boxes");
-  if (!samples || samplesEncrypted !== samples) problems.push(`${samples - samplesEncrypted} of ${samples} samples have no encrypted bytes`);
-  return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, samples, samplesEncrypted, protectedBytes };
+  if (!n.samples) problems.push("the file carries no samples");
+  if (n.mismatched) problems.push(`${n.mismatched} fragment(s) list a different number of encryption records than samples`);
+  if (n.samples && n.samplesMarked !== n.samples) problems.push(`${n.samples - n.samplesMarked} of ${n.samples} samples have no protected bytes`);
+  if (n.uncovered) problems.push(`${n.uncovered} of ${n.samples} samples are not covered whole by their encryption records`);
+  if (n.samples && !n.keyframes) problems.push("no sample is marked as a keyframe");
+  if (n.keyframesEncrypted !== n.keyframes) problems.push(`${n.keyframes - n.keyframesEncrypted} of ${n.keyframes} keyframes have no encrypted block`);
+  const { mismatched, uncovered, ...counts } = n;
+  return { ok: problems.length === 0, problems, scheme, kid: tencKid, iv: constIv, ...counts };
 }
 
 // Counts the boxes that matter in a packaged file and collects its key ids and protection systems.

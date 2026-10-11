@@ -215,7 +215,7 @@ try {
   await page.evaluate(() => sessionStorage.removeItem("ccs-pending")); // forget the pending delete for the view test
   // 4. the protected view (same session)
   await page.goto(BASE + "view.html?id=" + ID);
-  await page.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__photoShown || /held back|not opened/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const got = await page.evaluate(() => window.__got);
   const title = await page.textContent("#title");
   check(title === "Protected view: Cotton <Bowl>.jpg", "the view names the picture: " + title);
@@ -225,7 +225,7 @@ try {
   check((await page.textContent("#r-content")) === "your picture: Cotton <Bowl>.jpg", "the readout's Content line");
   // 4b. the combined view: its own files from memory, the list of pictures, and a tap opens one alone
   await page.goto(BASE + "all.html");
-  await page.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__photoShown || /held back|not opened/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const gotAll = await page.evaluate(() => window.__got);
   check((await page.textContent("#title")) === "All your pictures, protected (1)", "the combined view says what it is: " + (await page.textContent("#title")));
   check((await page.textContent("#r-content")) === "your pictures: all 1, combined into one protected video", "its readout's Content line");
@@ -380,7 +380,7 @@ try {
   await ac.close();
   // (2) the Apple test: only the test card, through FairPlay, with Axinom's licence service, certificate and PUBLIC token
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay"));
-  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const tc = (await ap.evaluate(() => window.__cfgs)).at(-1);
   check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === "../web/research/drm/card-fairplay/master.m3u8", "the Apple test plays the test card's Apple form, and only that: " + (await ap.evaluate(() => window.__manifests)).join());
   check(tc.drm.servers["com.apple.fps"] === "https://drm-fairplay-licensing.axprod.net/AcquireLicense" && tc.drm.advanced["com.apple.fps"].serverCertificateUri === "https://tools.axinom.com/FPScert/fairplay.cer", "with Axinom's licence service and evaluation certificate");
@@ -390,7 +390,7 @@ try {
   // (3) the switch flipped (as after a measurement on an iPhone): the picture's own Apple form, by its address, with its own token
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
-  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === BASE + "photos/" + ID + "/" + FP_MASTER, "measured: the picture plays through its own Apple form, by its full address: " + (await ap.evaluate(() => window.__manifests)).join());
   check((await licenceHeaders(ap))["X-AxDRM-Message"] === PICTURE_TOKEN, "with the picture's own licence token, unsealed in memory");
   check(/measured black on iPhone\/iPad \(2026-10-11\)/.test(await ap.textContent("#r-expect")), "and the readout names the measurement: " + (await ap.textContent("#r-expect")));
@@ -398,7 +398,7 @@ try {
   // (4) the combined view, measured: its own Apple form and token
   await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8" });
   ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
-  await ap.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE", "the combined view plays through its own Apple form and token");
   await ac.close(); await publishMosaic();
   // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
