@@ -59,7 +59,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 04:05 UTC — test mode plays a test card, never the photo";
+  const PAGE_VERSION = "2026-10-11 04:20 UTC — test card; ClearKey control (?levels=clearkey)";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -85,11 +85,18 @@
   // measure whether a browser keeps software-decrypted video out of screenshots.
   const params = new URLSearchParams(location.search);
   const TEST_SOFTWARE = params.get("levels") === "software";
+  // CONTROL, off unless the link says ?levels=clearkey: the card with NO protection (ClearKey, decrypted
+  // in the browser's own code), so a screenshot SHOULD show it. Run beside the software test on the same
+  // machine: if this capture shows the card while the software one is black, the black comes from the
+  // protection and not from the machine. Only the card's key is ever given here (public by design).
+  const TEST_CLEAR = params.get("levels") === "clearkey";
+  const TEST = TEST_SOFTWARE || TEST_CLEAR;
   // THE CONTENT. Test mode ALWAYS plays the test card, never the owner's photo, because a test can show
   // the picture to a screenshot (that is what it measures). ?clip=card selects the card in normal mode:
   // every runner workflow uses it (tools/check-workflow-links.mjs fails CI otherwise). The card has its
   // own keys (drm-card.yml), so its licence never unlocks the photo.
-  const CARD = TEST_SOFTWARE || params.get("clip") === "card";
+  const CARD = TEST || params.get("clip") === "card";
+  const CARD_CLEARKEY = { "5cfcb567f2f19d08a30b20483d92e930": "a64cde52f25e07a56d7770f4d31fc1f3" };
   const CLIP = CARD
     ? { name: "the test card (not the photo)", widevine: "card-widevine.mpd", playready: "card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" }
     : { name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A" };
@@ -99,17 +106,21 @@
     "widevine-software":  { system: "widevine",  word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
     "playready-hardware": { system: "playready", word: "hardware", levels: ["3000"], sl: 3000 },
     "playready-software": { system: "playready", word: "software", levels: ["2000"], sl: 2000 },
+    "clearkey-card":      { system: "clearkey",  word: "no protection", levels: ["ClearKey, decrypted in the browser's own code"] },
   };
-  const ORDER = TEST_SOFTWARE ? ["widevine-software", "playready-software"]
+  const ORDER = TEST_CLEAR ? ["clearkey-card"]
+    : TEST_SOFTWARE ? ["widevine-software", "playready-software"]
     : SOFTWARE_MEASURED ? ["widevine-hardware", "widevine-software", "playready-hardware"]
     : ["widevine-hardware", "playready-hardware"];
   // The platform and browser come from what the browser says about itself, which can be wrong (a tablet
   // asking for desktop sites reports Linux) or changed by the person using it; the line says so.
   const SAYS = `${BROWSER === "other" ? "this browser" : BROWSER} on ${PLATFORM} (as the browser reports itself)`;
-  set("r-rule", TEST_SOFTWARE ? "TEST: software only, on any platform (measurement, test card)"
+  set("r-rule", TEST_CLEAR ? "CONTROL: no protection (ClearKey), test card — a screenshot SHOULD show the card"
+    : TEST_SOFTWARE ? "TEST: software only, on any platform (measurement, test card)"
     : SOFTWARE_MEASURED ? `${SAYS}: hardware protection, or software protection (screenshots measured black there)`
     : `${SAYS}: hardware protection only (software not yet measured there)`);
   if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
+  if (TEST_CLEAR) { const b = document.createElement("p"); b.style.cssText = "background:#6b4e16;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "CONTROL MODE: this link plays the TEST CARD with NO protection (ClearKey), so a screenshot SHOULD show it. If the capture is black here too, a black capture on this machine proves nothing."; document.querySelector("h1").after(b); }
   const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; return `${d.code || "?"}${inner}`; };
 
   shaka.polyfill.installAll();
@@ -126,12 +137,15 @@
   async function tryOne(tierName) {
     const t = TIERS[tierName];
     hidePhoto();
-    const manifest = t.system === "playready" ? CLIP.playready : CLIP.widevine;
+    const manifest = t.system === "widevine" ? CLIP.widevine : CLIP.playready;
     if (current) { try { await current.destroy(); } catch (e) {} current = null; }
     const player = new shaka.Player(); current = player;
     await player.attach(video);
     const cfg = { drm: { servers: {}, advanced: {}, keySystemsMapping: {} } };
-    if (t.system === "playready") {
+    if (t.system === "clearkey") {
+      if (!CARD) throw new Error("the ClearKey control plays only the test card"); // belt and braces: TEST_CLEAR implies CARD
+      cfg.drm.clearKeys = CARD_CLEARKEY;
+    } else if (t.system === "playready") {
       const ks = "com.microsoft.playready.recommendation";
       cfg.drm.keySystemsMapping["com.microsoft.playready"] = ks;
       cfg.drm.servers[ks] = `https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${CLIP.prKid},sl:${t.sl})`;
@@ -147,7 +161,8 @@
     // Every error the player raises is written down, so nothing fails silently.
     let lastError = null;
     player.addEventListener("error", (e) => { lastError = errText(e); log(`${tierName}: player error ${lastError}`); });
-    log(`${tierName}: asking for ${t.word} protection only (${t.levels.join(", ")}) …`);
+    log(t.system === "clearkey" ? `${tierName}: no protection — the browser decrypts the card in its own code (control) …`
+      : `${tierName}: asking for ${t.word} protection only (${t.levels.join(", ")}) …`);
     try {
       await player.load(manifest);
     } catch (e) {
@@ -157,8 +172,9 @@
     }
     const info = player.drmInfo();
     set("r-ks", info ? info.keySystem : "none");
-    set("r-granted", `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST_SOFTWARE ? "bad" : "ok"));
-    log(`${tierName}: the browser accepted the ${t.word}-only request; waiting for the licence and the first frame …`);
+    set("r-granted", t.system === "clearkey" ? "none — ClearKey: the browser decrypts the card in its own code (control)"
+      : `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST ? "bad" : "ok"));
+    log(`${tierName}: ${t.system === "clearkey" ? "ClearKey accepted" : `the browser accepted the ${t.word}-only request`}; waiting for the licence and the first frame …`);
     // Count it as shown only when the video is really playing (licence arrived, frames decoded).
     video.style.visibility = "visible";
     const started = await new Promise((resolve) => {
@@ -175,9 +191,10 @@
       return "failed-after-grant";
     }
     msg.hidden = true; window.__photoShown = tierName;
-    set("r-expect", TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots"
+    set("r-expect", TEST_CLEAR ? "CONTROL: a screenshot should SHOW the card; if it is black here, black captures on this machine mean nothing"
+      : TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots"
       : t.word === "hardware" ? "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one."
-      : `software protection: in ${BROWSER} on ${PLATFORM} screenshots were measured black (2026-10-11). Take one.`, TEST_SOFTWARE ? "bad" : "ok");
+      : `software protection: in ${BROWSER} on ${PLATFORM} screenshots were measured black (2026-10-11). Take one.`, TEST ? "bad" : "ok");
     const tick = () => set("r-play", `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(2)} s${video.paused ? "" : " — take a screenshot now"}`, video.paused ? "bad" : "ok");
     tick(); setTimeout(tick, 1500); setTimeout(tick, 3000);
     return "ok";
