@@ -1,0 +1,126 @@
+# Route 1 viability: package a labeled TEST clip with shaka-packager (the tool the first proof used,
+# not ffmpeg, whose fragmented-CENC output left the fragments without their sample-encryption boxes,
+# so the owner's phone granted the key but decoded nothing). Builds one clip for Widevine (key from
+# Google's UAT key server, public test signer) and one for PlayReady (the key the public test server
+# derives for a fixed test key id), checks that every fragment carries senc/saiz/saio, and commits the
+# protected files. No portrait and no secret: this proves whether the browser's protected path
+# withholds the frame. The real portrait goes through the same path afterwards, sealed, needing the
+# one repository secret the sandbox cannot set. Every number is printed by the command that made it.
+name: drm package
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/drm-package.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PR_KID: "9e0ffaba46a81decdc6fce6f0cafa51a"
+  PR_KEY: "40e5f649ceffefbda90b977272f3d2d3"
+  PR_KID_GUID: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A"
+  WV_CONTENT_ID: "ccs-proof-drm-test"
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get shaka-packager
+        run: |
+          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64
+          chmod +x /tmp/packager
+          /tmp/packager --version | tee /tmp/packager-version.txt
+
+      - name: Render the labeled test clip
+        run: |
+          mkdir -p /tmp/src
+          FONT=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "color=c=0x1f4e8c:s=720x960:r=15:d=2" \
+            -vf "drawtext=fontfile=$FONT:text='CCS PROOF':fontcolor=white:fontsize=72:x=(w-tw)/2:y=360, \
+                 drawtext=fontfile=$FONT:text='PROTECTED TEST':fontcolor=white:fontsize=44:x=(w-tw)/2:y=460, \
+                 drawtext=fontfile=$FONT:text='a screenshot here should be black':fontcolor=0xcfe0ff:fontsize=26:x=(w-tw)/2:y=540" \
+            -c:v libx264 -profile:v main -level 3.1 -pix_fmt yuv420p -g 15 -movflags +faststart /tmp/src/source.mp4
+          ffprobe -hide_banner -v error -select_streams v:0 -show_entries stream=codec_name,profile,level,width,height -of json /tmp/src/source.mp4 | tee /tmp/src/probe.json
+
+      - name: Package for Widevine (Google UAT key server, public test signer)
+        run: |
+          CID=$(printf '%s' "$WV_CONTENT_ID" | xxd -p | tr -d '\n')
+          /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-widevine.mp4 \
+            --enable_widevine_encryption \
+            --key_server_url https://license.uat.widevine.com/cenc/getcontentkey/widevine_test \
+            --content_id "$CID" --signer widevine_test \
+            --aes_signing_key 1ae8ccd0e7985cc0b6203a55855a1034afc252980e970ca90e5202689f947ab9 \
+            --aes_signing_iv d58ce954203b7c9a9a9d467f59839249 \
+            --protection_systems Widevine --protection_scheme cenc --clear_lead 0 \
+            --segment_duration 2 --fragment_duration 2 \
+            --mpd_output web/research/drm/widevine.mpd
+
+      - name: Package for PlayReady (the key the public test server derives for this key id)
+        run: |
+          LA="https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${PR_KID_GUID},sl:2000)"
+          /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4 \
+            --enable_raw_key_encryption --keys "label=:key_id=${PR_KID}:key=${PR_KEY}" \
+            --protection_systems PlayReady --protection_scheme cenc --clear_lead 0 \
+            --segment_duration 2 --fragment_duration 2 \
+            --playready_extra_header_data "<LA_URL>$(printf '%s' "$LA" | sed 's/&/\&amp;/g')</LA_URL>" \
+            --mpd_output web/research/drm/playready.mpd
+
+      - name: Check every fragment carries its sample-encryption boxes
+        run: |
+          node - <<'EOF'
+          const fs = require("fs");
+          for (const f of ["web/research/drm/video-widevine.mp4", "web/research/drm/video-playready.mp4"]) {
+            const data = fs.readFileSync(f); const count = {}; const pssh = [];
+            const walk = (off, end) => { while (off + 8 <= end) { let size = data.readUInt32BE(off); const typ = data.toString("latin1", off + 4, off + 8);
+              if (size === 1) size = Number(data.readBigUInt64BE(off + 8)); if (size === 0) size = end - off;
+              count[typ] = (count[typ] || 0) + 1; if (typ === "pssh") pssh.push(data.toString("hex", off + 12, off + 28));
+              if (["moov","trak","mdia","minf","stbl","moof","traf","sinf","schi","mvex"].includes(typ)) walk(off + 8, off + size);
+              if (typ === "stsd") walk(off + 16, off + size); if (typ === "encv") walk(off + 8 + 78, off + size); off += size; } };
+            walk(0, data.length);
+            console.log(f, data.length, "bytes", JSON.stringify({ moof: count.moof||0, senc: count.senc||0, saiz: count.saiz||0, saio: count.saio||0, tenc: count.tenc||0, pssh }));
+            if (!count.moof || (count.senc||0) < count.moof || (count.saiz||0) < count.moof) { console.error("FAIL: a fragment is missing its sample-encryption boxes"); process.exit(1); }
+          }
+          EOF
+          ls -l web/research/drm/
+          echo "--- widevine.mpd ---"; sed -n '1,30p' web/research/drm/widevine.mpd
+
+      - name: Write info.json and commit
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          node - <<'EOF'
+          const fs = require("fs");
+          const st = JSON.parse(fs.readFileSync("/tmp/src/probe.json","utf8")).streams[0];
+          const profileHex = ({ Baseline:"42", Main:"4d", High:"64" })[st.profile] || "4d";
+          const codecs = `avc1.${profileHex}00${Number(st.level).toString(16).padStart(2,"0")}`;
+          const size = (f) => fs.statSync(f).size;
+          const info = {
+            content: "a labeled test pattern, not the portrait; the portrait goes through the same path once the mechanism is proven",
+            codecs, width: st.width, height: st.height,
+            widevine: { file: "video-widevine.mp4", bytes: size("web/research/drm/video-widevine.mp4"),
+              contentId: process.env.WV_CONTENT_ID || "ccs-proof-drm-test",
+              licenseServer: "https://cwip-shaka-proxy.appspot.com/no_auth",
+              note: "test-only: Google's public test licence proxy issues this key to anyone presenting the content's PSSH" },
+            playready: { file: "video-playready.mp4", bytes: size("web/research/drm/video-playready.mp4"),
+              kid: process.env.PR_KID, kidGuid: process.env.PR_KID_GUID,
+              licenseServer: "https://test.playready.microsoft.com/service/rightsmanager.asmx",
+              note: "test-only: Microsoft's public test licence server issues this key to anyone asking with the key id" },
+            packager: fs.readFileSync("/tmp/packager-version.txt","utf8").trim(),
+            builtAt: new Date().toISOString(), run: Number(process.env.RUN_NUMBER),
+          };
+          fs.writeFileSync("web/research/drm/info.json", JSON.stringify(info, null, 2) + "\n");
+          console.log(JSON.stringify(info));
+          EOF
+          rm -f web/research/drm/source.enc web/research/drm/drm-request.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A web/research/drm/
+          if git diff --cached --quiet; then echo "outputs unchanged"; exit 0; fi
+          git commit -m "research(drm): shaka-packager test clips for route 1, Widevine + PlayReady (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/"
