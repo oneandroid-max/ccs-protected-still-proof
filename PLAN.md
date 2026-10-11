@@ -329,7 +329,8 @@ device for it; no outside service is in the chain.
     - a form made without Axinom's acceptance: kept on a refused "Try again".
   - **Minor, each fixed:**
     - the guard tested in a git checkout;
-    - Windows paths normalised;
+    - Windows paths normalised (by reading only: no test runs on Windows);
+    - `continue-on-error: False` stays refused on purpose: only a plain `false` is certain to mean false;
     - the 20-second default pinned (a silent server is cut at the given limit with no `signalFor` passed);
     - a kept view's count is the pictures it draws;
     - the plan's and the worker's wording corrected (above);

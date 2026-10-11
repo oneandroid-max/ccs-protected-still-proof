@@ -152,10 +152,10 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 //   (A) A line that names a packager ("packager" in any form: shaka-packager, packager-linux-x64, setup-packager,
 //       /usr/local/bin/packager) AND could bring one in (an address; a fetch, copy, archive, install or package
 //       command; a container image, an action or an action's input; in a Dockerfile an image to build on, ADD, COPY
-//       from anything but one of its own stages, or a build mount from an image) must be the pinned download: `curl -o <file> <pinned release>`, its
-//       only other options -f, -s, -S, -L or their long forms, quotes allowed (in a Dockerfile after RUN); and that
-//       line may stand only in a workflow (.github/workflows/) or a Dockerfile. A YAML step's, job's or workflow's
-//       name brings nothing in.
+//       from anything but one of its own stages, or a build mount from an image) must be the pinned download:
+//       `curl -o <file> <pinned release>`, its only other options -f, -s, -S, -L or their long forms, quotes allowed
+//       (in a Dockerfile after RUN); and that line may stand only in a workflow (.github/workflows/) or a Dockerfile.
+//       A YAML step's, job's or workflow's name brings nothing in.
 //   (B) The very next line must be that file's SHA-256 check, exactly: in a workflow `echo "<sha256>  <file>" |
 //       sha256sum -c - || exit 1` (a trailing comment allowed); in a Dockerfile `&& echo "<sha256>  <file>" |
 //       sha256sum -c -`, after which the instruction may go on only with lines that start with '&&' and hold no ';',
