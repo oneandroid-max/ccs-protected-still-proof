@@ -1,0 +1,21 @@
+# Measures the live Pages site from a GitHub runner (this sandbox cannot reach the Pages host): for
+# each address, the HTTP status, the byte count and the first line, plus config.json as served.
+# Started by hand or through the API; it changes nothing.
+name: live check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  look:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch the live site's pages
+        run: |
+          B="https://oneandroid-max.github.io/ccs-protected-still-proof"
+          for p in site/index.html site/setup.html site/view.html site/app.js site/crypto.js site/view-prelude.js site/config.json web/research/drm/index.html web/research/drm/card-widevine.mpd; do
+            code=$(curl -sS -m 20 -o /tmp/body -w '%{http_code}' "$B/$p?v=$(date +%s)")
+            printf '%s\t%s\t%s bytes\t%s\n' "$code" "$p" "$(wc -c < /tmp/body)" "$(head -c 120 /tmp/body | tr '\n' ' ')"
+          done
+          echo "--- config.json as served:"; curl -sS -m 20 "$B/site/config.json?v=$(date +%s)"; echo
