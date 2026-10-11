@@ -574,6 +574,20 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(broken.status, "ready", "a key the token cannot be made with leaves the picture ready elsewhere");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "c".repeat(24)).fairplay, false);
   assert.ok(!(await fs.readdir(join(siteDir, "photos", "c".repeat(24)))).some((f) => /^fp/.test(f)), "and no half-made Apple form is left behind");
+  // a packager that encrypts Apple's form under another key than the one it was given: the records are all
+  // right (key id, IV, layout), so only the bytes can tell; the byte check refuses the form
+  const wrongKeyPackager = join(tmp, "packager-wrong-key");
+  await fs.writeFile(wrongKeyPackager, `#!/usr/bin/env node\nconst { spawnSync } = require("node:child_process");\nconst cbcs = process.argv.includes("cbcs");\nconst args = process.argv.slice(2).map((a) => cbcs && /^label=:key_id=[0-9a-f]{32}:key=[0-9a-f]{32}$/.test(a) ? a.replace(/:key=[0-9a-f]{32}$/, ":key=00112233445566778899aabbccddeeff") : a);\nprocess.exit(spawnSync(${JSON.stringify(tools.packager)}, args, { stdio: "inherit" }).status ?? 1);\n`);
+  await fs.chmod(wrongKeyPackager, 0o755);
+  process.env.WORKER_BLOB_FILE = await upload(await solid("teal.png", 320, 240, "0x16a085"));
+  const logged = [], consoleLog = console.log; let wrongKey;
+  console.log = (...a) => { logged.push(a.join(" ")); };
+  try { wrongKey = await worker({ payload: { action: "add", id: "d".repeat(24), name: "d.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: KEY_HEX }, siteDir, tools: { ...tools, packager: wrongKeyPackager }, com: COM }); }
+  finally { console.log = consoleLog; }
+  assert.equal(wrongKey.status, "ready", "the picture is ready elsewhere");
+  assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "d".repeat(24)).fairplay, false, "but gets no Apple form");
+  assert.ok(logged.some((l) => /no FairPlay form for d{24}: the FairPlay form failed its byte check: .*decrypt with the form's own key to something other than the clip/.test(l)), "refused by the byte check: " + logged.filter((l) => /FairPlay/.test(l)).join(" | "));
+  assert.ok(!(await fs.readdir(join(siteDir, "photos", "d".repeat(24)))).some((f) => /^fp/.test(f)), "and no Apple form is left behind");
   notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour; the token inside the form's folder); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; an expiring token renewed (1/1/0), another Axinom key: 2/0/0; a page request for the backfill refused; a bad key left the picture ready without a form`);
 });
 
