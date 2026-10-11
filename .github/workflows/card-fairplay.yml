@@ -28,7 +28,9 @@ jobs:
           sudo chmod +x /usr/local/bin/packager && packager --version
       - name: Package the card for FairPlay, check it, decrypt it back two ways
         env: { PACKAGER_BIN: /usr/local/bin/packager }
-        run: node tools/fairplay-card.mjs
+        run: |
+          node tools/fairplay-card.mjs
+          echo "::notice title=FairPlay card::$(node -e 'const i = require("./web/research/drm/card-fairplay/info.json"); console.log(i.keyUri + "; " + i.bytes + " bytes; decryptCheck " + JSON.stringify(i.decryptCheck))')"
       - name: Commit the card's FairPlay form
         run: |
           git config user.name "github-actions[bot]"

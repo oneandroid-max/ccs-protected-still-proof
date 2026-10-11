@@ -20,6 +20,8 @@ const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
 const COM = { id: "0e2c58d1-7c4b-4f3e-9a51-3d1f0b7e6a42", key: nodeRandom(32) }; // a throwaway communication key
 const b64url = (s) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
+// on GitHub, what a test measured is also written as a notice on the run (readable without the log)
+const notice = (title, msg) => { if (process.env.GITHUB_ACTIONS === "true") console.log(`::notice title=${title}::${msg}`); };
 const unwrapKey = (comKey, kidHex, encB64) => { const d = createDecipheriv("aes-256-cbc", comKey, Buffer.from(kidHex, "hex")); d.setAutoPadding(false); return Buffer.concat([d.update(Buffer.from(encB64, "base64")), d.final()]).toString("hex"); };
 
 test("the communication key is read strictly: both values, a GUID, 32 bytes", () => {
@@ -161,6 +163,7 @@ test("packaged for FairPlay with the real packager: Apple's playlist, 'cbcs' und
   // and not with another key
   let wrong = null; try { wrong = await frame(join(dir, "fp", "video.mp4"), ["-decryption_key", newFairPlayIds().key]); } catch {}
   assert.ok(!wrong || !wrong.equals(clear), "another key does not give the picture back");
+  notice("FairPlay packaging", `checkFairPlay ok (scheme ${check.scheme}, kid ${check.kid}, iv ${check.iv}); ${data.length} bytes; key line: ${media.split("\n").find((l) => l.startsWith("#EXT-X-KEY"))}; decrypted by ffmpeg with our key: first frame identical to the clear clip, centre ${centre(back, 640, 480)}; another key: ${wrong ? "a different frame" : "decoding refused"}`);
 });
 
 test("the worker with the Axinom key: a new picture gets its Apple form, its token (sealed) carries the key that decrypts it; the combined view too; a backfill adds the form to an older picture (needs shaka-packager)", async (t) => {
@@ -222,6 +225,7 @@ test("the worker with the Axinom key: a new picture gets its Apple form, its tok
   assert.equal(broken.status, "ready", "a key the token cannot be made with leaves the picture ready elsewhere");
   assert.equal((await readGallery(siteDir, KEY)).photos.find((x) => x.id === "c".repeat(24)).fairplay, false);
   assert.ok(!(await fs.readdir(join(siteDir, "photos", "c".repeat(24)))).some((f) => /^fp/.test(f)), "and no half-made Apple form is left behind");
+  notice("FairPlay worker", `added with the key: ${A} (its token's key decrypts its form to its colour); combined view remade with its form; backfill: 1 added, 1 already, 0 failed, then 0/2/0; a bad key left the picture ready without a form`);
 });
 
 test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key, our IV, decrypted back two ways to exactly the card (needs shaka-packager)", async (t) => {
@@ -235,6 +239,7 @@ test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key,
   assert.equal(info.keyUri, cardFairPlayIds().keyUri);
   assert.ok(info.keyUri.startsWith("skd://4060a865-8878-4267-9cbf-91ae5bae1e72:"), "the key Axinom's public token licenses");
   assert.deepEqual([info.width, info.height], [720, 960]);
+  notice("FairPlay card", `${info.keyUri}; ${info.bytes} bytes; decryptCheck ${JSON.stringify(info.decryptCheck)}; ${info.packager}`);
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
