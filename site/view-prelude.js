@@ -41,9 +41,9 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     let st = null;
     try { st = JSON.parse(sessionStorage.getItem("ccs-site") || "null"); } catch {}
     if (!/^[0-9a-f]{24}$/.test(id)) { location.replace("index.html"); return; }
-    if (!st) { location.replace("index.html?then=" + encodeURIComponent(id)); return; }
+    if (!st || !st.photoKeyHex || !st.at || Date.now() - st.at > 4 * 60 * 60 * 1000) { location.replace("index.html?then=" + encodeURIComponent(id)); return; }
     try {
-      const key = await importKeyHex(st.keyHex);
+      const key = await importKeyHex(st.photoKeyHex);
       const meta = JSON.parse(await openText(key, await fetchSealed(`photos/${id}/meta.json.enc`)));
       const files = {};
       for (const f of FILES) files[f] = await open(key, await fetchSealed(`photos/${id}/${f}.enc`));

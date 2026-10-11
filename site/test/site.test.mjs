@@ -4,7 +4,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deriveKey, exportKeyHex, importKeyHex, seal, open, sealText, openText, toBase64, fromBase64, randomBytes } from "../crypto.js";
+import { deriveKey, derivePhotoKey, exportKeyHex, importKeyHex, seal, open, sealText, openText, toBase64, fromBase64, randomBytes } from "../crypto.js";
 import { sliceRange } from "../view-prelude.js";
 import { run as worker, readGallery, MAX_PHOTOS } from "../worker.mjs";
 import { buildView } from "../../tools/build-site-view.mjs";
@@ -40,6 +40,11 @@ test("crypto: the same password and salt give the same key; sealed data opens on
   assert.equal(await openText(KEY, await sealText(KEY, "héllo")), "héllo");
   assert.deepEqual(fromBase64(toBase64(sealed)), sealed);
   assert.equal(await exportKeyHex(await importKeyHex(KEY_HEX)), KEY_HEX);
+  // the picture key: fixed for a given password key, different from it, and sealing under one does not open under the other
+  const photo = await derivePhotoKey(KEY), photo2 = await derivePhotoKey(await importKeyHex(KEY_HEX));
+  assert.equal(await exportKeyHex(photo), await exportKeyHex(photo2));
+  assert.notEqual(await exportKeyHex(photo), KEY_HEX);
+  await assert.rejects(open(KEY, await seal(photo, data)), /wrong password/);
 });
 
 test("the in-memory scheme honours byte ranges the way the player asks for them", () => {
@@ -72,9 +77,16 @@ test("worker: bad payloads are refused; without a packager a picture fails visib
   const g = await readGallery(siteDir, KEY);
   assert.equal(g.photos.length, 1); assert.equal(g.photos[0].id, ID); assert.equal(g.photos[0].status, "failed"); assert.equal(g.photos[0].name, "sideways.jpg");
   await assert.rejects(fs.stat(join(siteDir, "photos", ID)), "no folder for a failed picture");
-  // a gallery written under another key reads as empty, never as a crash
+  // a gallery written under another key reads as a fresh list, never as a crash, and the next job clears the old folders
   const otherKey = await deriveKey("yet another password", SALT, 1000);
-  assert.deepEqual(await readGallery(siteDir, otherKey), { photos: [] });
+  assert.deepEqual(await readGallery(siteDir, otherKey), { photos: [], fresh: true });
+  await fs.mkdir(join(siteDir, "photos", "a".repeat(24)), { recursive: true });
+  await fs.writeFile(join(siteDir, "photos", "a".repeat(24), "widevine.mpd.enc"), "old");
+  const freshDel = await worker({ payload: { action: "delete", id: "b".repeat(24), key: await exportKeyHex(otherKey) }, siteDir, tools: noPackager });
+  assert.equal(freshDel.status, "deleted");
+  await assert.rejects(fs.stat(join(siteDir, "photos", "a".repeat(24))), "the old folder is gone");
+  assert.deepEqual(await readGallery(siteDir, otherKey), { photos: [] }, "the list now belongs to the new key");
+  await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g))); // back to the first key for the rest of the test
   // an upload that is not a picture
   process.env.WORKER_BLOB_FILE = await sealedUpload(new TextEncoder().encode("not a picture"));
   const bad = await worker({ payload: payload({ id: "e".repeat(24) }), siteDir, tools: noPackager });

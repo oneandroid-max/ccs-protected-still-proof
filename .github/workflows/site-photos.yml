@@ -1,7 +1,10 @@
 # The test site's job: the page on GitHub Pages sends a repository_dispatch "photo" event (add or
-# delete) with the picture's encrypted upload and the password-derived key; site/worker.mjs prepares
-# the picture with the proof's pipeline and writes encrypted outputs, which this workflow commits.
-# The key is masked in the log before anything else runs. One job at a time, in order.
+# delete) with the picture's encrypted upload and the picture key; site/worker.mjs prepares the
+# picture with the proof's pipeline and writes encrypted outputs, which this workflow commits.
+# The key is masked in the log before anything else runs. Jobs run in parallel and each one commits
+# on the CURRENT tip of main: if its push loses a race it refreshes to the new tip, runs the worker
+# again (idempotent for a given upload) and pushes again. Order between a delete and an add of the
+# same id is not guaranteed by GitHub; the page only asks to delete pictures that already exist.
 name: site photos
 
 on:
@@ -11,14 +14,10 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: site-photos
-  cancel-in-progress: false
-
 jobs:
   photo:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       # The key is read from the event file INSIDE the script: a step-level env would be printed in
       # clear in the step's header before the mask line runs (caught by the independent review).
@@ -27,23 +26,28 @@ jobs:
           K=$(jq -r '.client_payload.key // empty' "$GITHUB_EVENT_PATH")
           if [ -n "$K" ]; then echo "::add-mask::$K"; fi
       - uses: actions/checkout@v4
+        with: { ref: main }
       - name: ffmpeg and shaka-packager
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
           sudo chmod +x /usr/local/bin/packager && packager --version
-      - name: Prepare the picture
+      - name: Prepare the picture on the current tip of main and commit; refresh and redo if the push races
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PACKAGER_BIN: /usr/local/bin/packager
-        run: node site/worker.mjs
-      - name: Commit the encrypted outputs
-        env: { ACTION: "${{ github.event.client_payload.action }}", ID: "${{ github.event.client_payload.id }}" }
+          ACTION: ${{ github.event.client_payload.action }}
+          ID: ${{ github.event.client_payload.id }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A site/photos site/gallery.json.enc
-          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
-          git commit -m "site: $ACTION $ID"
-          for i in 1 2 3 4; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
-          exit 1
+          for i in 1 2 3 4 5; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            node site/worker.mjs
+            git add -A site
+            if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+            git commit -q -m "site: $ACTION $ID"
+            if git push -q origin HEAD:main; then echo "pushed"; exit 0; fi
+            echo "the push raced with another job; refreshing and running again ($i)"; sleep $((i * 5))
+          done
+          echo "could not push after five tries"; exit 1

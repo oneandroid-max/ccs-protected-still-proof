@@ -19,3 +19,8 @@ jobs:
             printf '%s\t%s\t%s bytes\t%s\n' "$code" "$p" "$(wc -c < /tmp/body)" "$(head -c 120 /tmp/body | tr '\n' ' ')"
           done
           echo "--- config.json as served:"; curl -sS -m 20 "$B/site/config.json?v=$(date +%s)"; echo
+      - name: The player library's integrity hash (for the pages' integrity attribute)
+        run: |
+          U="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"
+          curl -sSL -m 30 -o /tmp/shaka.js "$U"
+          printf 'bytes: %s\nsha384-%s\n' "$(wc -c < /tmp/shaka.js)" "$(openssl dgst -sha384 -binary /tmp/shaka.js | openssl base64 -A)"

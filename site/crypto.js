@@ -24,6 +24,15 @@ export async function deriveKey(password, saltBase64, iterations = ITERATIONS) {
   return subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: fromBase64(saltBase64), iterations }, base, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
 }
 export async function exportKeyHex(key) { return toHex(new Uint8Array(await subtle.exportKey("raw", key))); }
+
+// The PICTURE key, derived one-way (HKDF-SHA256) from the password key. It is the only key that ever
+// leaves the browser (it rides each job request to GitHub); knowing it does not give the password key,
+// so the sealed access token in config.json stays closed.
+export async function derivePhotoKey(passwordKey) {
+  const ikm = await subtle.importKey("raw", await subtle.exportKey("raw", passwordKey), "HKDF", false, ["deriveKey"]);
+  const enc = new TextEncoder();
+  return subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: enc.encode("ccs-site-photos"), info: enc.encode("photos") }, ikm, { name: "AES-GCM", length: 256 }, true, ["encrypt", "decrypt"]);
+}
 export async function importKeyHex(hex) {
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("the key must be 64 hex characters");
   return subtle.importKey("raw", fromHex(hex), { name: "AES-GCM" }, true, ["encrypt", "decrypt"]);

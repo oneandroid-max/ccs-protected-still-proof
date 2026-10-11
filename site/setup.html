@@ -16,7 +16,7 @@
 </head>
 <body>
 <h1>Set up the test site</h1>
-<p class="muted">Done once, by the owner. The access key is encrypted with the password right here in your browser and saved to the site's <code>config.json</code>; GitHub never sees the password, and the key never appears in clear anywhere. Changing the password later makes the pictures already on the site unreadable: delete them and upload again.</p>
+<p class="muted">Done once, by the owner. The access key is encrypted with the password right here in your browser and saved to the site's <code>config.json</code>; GitHub never sees the password, and the key never appears in clear anywhere. Changing the password later makes the pictures already on the site unreadable: the next job clears them, and you upload again.</p>
 <form id="f">
   <label for="t">GitHub access key (a fine-grained personal access token for this repository, Contents: read and write)</label><input id="t" type="password" autocomplete="off" required>
   <label for="p">Password for the site</label><input id="p" type="password" autocomplete="new-password" required>
@@ -25,8 +25,8 @@
 </form>
 <ol id="steps" class="muted" style="font-size:0.9rem"></ol>
 <script type="module">
-import { deriveKey, sealText, toBase64, fromBase64, exportKeyHex, randomBytes } from "./crypto.js";
-import { REPO, api, checkToken, loadConfig, session } from "./app.js";
+import { deriveKey, derivePhotoKey, sealText, toBase64, fromBase64, exportKeyHex, randomBytes } from "./crypto.js";
+import { REPO, api, checkToken, session } from "./app.js";
 const $ = (id) => document.getElementById(id);
 const step = (t, cls) => { const li = document.createElement("li"); li.textContent = t; if (cls) li.className = cls; $("steps").appendChild(li); };
 $("f").addEventListener("submit", async (e) => {
@@ -35,18 +35,23 @@ $("f").addEventListener("submit", async (e) => {
     const token = $("t").value.trim(), pw = $("p").value;
     if (pw !== $("p2").value) throw new Error("the two passwords differ");
     if (pw.length < 12) throw new Error("use at least 12 characters: with the site on GitHub, this password is the only thing protecting the pictures");
-    await checkToken(token); step("the access key reaches the repository and can write to it", "ok");
-    let cfg; try { cfg = await loadConfig(); } catch { cfg = {}; }
-    const salt = cfg.salt || toBase64(randomBytes(16)), iterations = cfg.iterations || 600000;
+    await checkToken(token); step("the access key reaches the repository and can write to it (checked with a harmless write)", "ok");
+    // the salt comes from the repository itself, never from a cached copy of the site, so the same
+    // password always gives the same key; a new salt is minted only when there is no config at all
+    const cur = await api(token, "GET", `/repos/${REPO}/contents/site/config.json?ref=main&t=${Date.now()}`);
+    let sha, salt, iterations = 600000;
+    if (cur.ok) {
+      const j = await cur.json(); sha = j.sha;
+      try { const c = JSON.parse(new TextDecoder().decode(fromBase64(String(j.content || "").replace(/\n/g, "")))); salt = c.salt; iterations = c.iterations || iterations; } catch {}
+    } else if (cur.status !== 404) throw new Error(`GitHub answered ${cur.status} for config.json`);
+    if (!salt) { salt = toBase64(randomBytes(16)); step("no salt on the repository yet: a new one minted", "ok"); } else step("salt read from the repository (the same password keeps the same key)", "ok");
     const key = await deriveKey(pw, salt, iterations); step("key derived from the password (" + iterations + " rounds)", "ok");
     const tokenEnc = toBase64(await sealText(key, token));
     const body = { repo: REPO, salt, iterations, tokenEnc };
-    const cur = await api(token, "GET", `/repos/${REPO}/contents/site/config.json?ref=main&t=${Date.now()}`);
-    const sha = cur.ok ? (await cur.json()).sha : undefined;
     const put = await api(token, "PUT", `/repos/${REPO}/contents/site/config.json`, { message: "site: access key sealed under the password (set-up)", content: toBase64(new TextEncoder().encode(JSON.stringify(body, null, 2) + "\n")), sha, branch: "main" });
     if (!put.ok) throw new Error(`GitHub refused to save config.json (${put.status})`);
     step("config.json saved to the repository; the site publishes it within about a minute", "ok");
-    session.set({ keyHex: await exportKeyHex(key), token, at: Date.now() });
+    session.set({ keyHex: await exportKeyHex(key), photoKeyHex: await exportKeyHex(await derivePhotoKey(key)), token, at: Date.now() });
     $("msg").innerHTML = 'Done. <a href="index.html">Open the site</a> (you are already signed in on this device).'; $("msg").className = "ok";
     $("t").value = ""; $("p").value = ""; $("p2").value = "";
   } catch (err) { $("msg").textContent = err.message; $("msg").className = "bad"; }

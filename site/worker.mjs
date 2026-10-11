@@ -23,7 +23,7 @@ export async function readGallery(siteDir, key) {
   let sealed;
   try { sealed = new Uint8Array(await fs.readFile(join(siteDir, "gallery.json.enc"))); } catch { return { photos: [] }; }
   try { return JSON.parse(await openText(key, sealed)); }
-  catch { log("WARNING: the gallery could not be opened with this key (the password changed?); starting a fresh list"); return { photos: [] }; }
+  catch { log("WARNING: the gallery could not be opened with this key (the password changed?); starting a fresh list"); return { photos: [], fresh: true }; }
 }
 async function writeGallery(siteDir, key, g) {
   await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(key, JSON.stringify(g)));
@@ -47,6 +47,13 @@ export async function run({ payload, siteDir, repo, token, tools }) {
   const gallery = await readGallery(siteDir, key);
   const photosDir = join(siteDir, "photos");
   const dir = join(photosDir, p.id);
+  if (gallery.fresh) {
+    // nothing under the old password can be opened any more: clear every old picture folder
+    let old = []; try { old = await fs.readdir(photosDir); } catch {}
+    for (const d of old) await fs.rm(join(photosDir, d), { recursive: true, force: true });
+    delete gallery.fresh;
+    log(`cleared ${old.length} picture folder(s) written under another key`);
+  }
 
   if (p.action === "delete") {
     gallery.photos = gallery.photos.filter((x) => x.id !== p.id);
@@ -59,6 +66,7 @@ export async function run({ payload, siteDir, repo, token, tools }) {
   const name = String(p.name || "picture").replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 120) || "picture";
   const entry = { id: p.id, name, bytes: Number(p.bytes) || 0, status: "failed", error: null, createdAt: new Date().toISOString() };
   gallery.photos = gallery.photos.filter((x) => x.id !== p.id);
+  await fs.rm(dir, { recursive: true, force: true }); // a re-used id never leaves old files published beside a failure
   const work = await fs.mkdtemp(join(tmpdir(), "site-photo-"));
   try {
     // only prepared pictures take a slot; a failed entry stays visible until deleted but blocks nothing
@@ -76,7 +84,6 @@ export async function run({ payload, siteDir, repo, token, tools }) {
     const wv = checkBoxes(await fs.readFile(join(work, "video-widevine.mp4")));
     const pr = checkBoxes(await fs.readFile(join(work, "video-playready.mp4")));
     if (!wv.ok || !pr.ok || !pr.kids.includes(ids.prKid)) throw new Error("a packaged file is missing its sample-encryption boxes");
-    await fs.rm(dir, { recursive: true, force: true });
     await fs.mkdir(dir, { recursive: true });
     for (const f of OUTPUTS) await fs.writeFile(join(dir, f + ".enc"), await seal(key, new Uint8Array(await fs.readFile(join(work, f)))));
     Object.assign(entry, { status: "ready", width: clip.width, height: clip.height, readyAt: new Date().toISOString(), prKidGuid: ids.prKidGuid });
