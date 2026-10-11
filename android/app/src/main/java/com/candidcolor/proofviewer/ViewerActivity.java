@@ -160,11 +160,13 @@ public final class ViewerActivity extends Activity {
                 + "5. Open the recent-apps view. This app's thumbnail is blank.\n"
                 + "6. Long-press the photo. Nothing is offered.\n"
                 + "7. Save the share card: the honest copy a family is given, credited and marked.", 14, false);
+        Button lab = new Button(this); lab.setText("Open the Android test platform"); lab.setAllCaps(false);
+        lab.setOnClickListener(v -> { Intent i = new Intent(this, LabActivity.class); i.putExtra("key", keyField.getText().toString().trim()); i.putExtra("pin", pinField.getText().toString().trim()); startActivity(i); });
         TextView limits = text("What this cannot do\n"
                 + "A camera pointed at the screen still photographs it, and that photo carries the viewer's mark. "
                 + "The refusal is Android's own, asked for by this app; the key, the file, the mark and the viewer are ours.", 14, false);
 
-        for (View v : new View[] { title, lede, keyField, pinField, showButton, photoView, status, credit, cardButton, h2, readout, tryIt, limits }) {
+        for (View v : new View[] { title, lede, keyField, pinField, showButton, photoView, status, credit, cardButton, h2, readout, tryIt, lab, limits }) {
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lp.bottomMargin = (int) (10 * d);
             col.addView(v, lp);
