@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Apple check: FairPlay in Safari</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 920px; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
+  h1 { font-size: 1.2rem; } h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: #6b665c; margin: 18px 0 6px; } p, li { max-width: 65ch; }
+  .stage { background: #000; border-radius: 10px; aspect-ratio: 16 / 9; position: relative; overflow: hidden; }
+  video { display: block; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 0.85rem; color: #fff; }
+  .tag.protected { background: #1d6b3a; } .tag.control { background: #6b4e16; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
+  dt { color: #6b665c; } dd { margin: 0; word-break: break-word; }
+  .ok { color: #1d6b3a; font-weight: 600; } .bad { color: #a83a2b; }
+  pre { font-size: 0.75rem; white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d9d4c8; border-radius: 8px; padding: 10px; }
+  .steps { background: #fff; border: 1px solid #d9d4c8; border-radius: 10px; padding: 10px 14px; }
+</style>
+</head>
+<body>
+<h1>Apple check: does Safari keep protected video out of a screenshot?</h1>
+<div class="steps">
+  <p><strong>For an iPhone, iPad or Mac, in Safari.</strong> Two copies of the same short film play below: the first through Apple's protected path (FairPlay), the second plain, as a control.</p>
+  <ol>
+    <li>Wait until both are moving (about ten seconds).</li>
+    <li>Take a screenshot (iPhone: side button + volume up; Mac: Shift-Command-3).</li>
+    <li>Open the screenshot in Photos. <strong>The protected one should be black; the control should show the film.</strong> If both are black, the screenshot proves nothing on that device.</li>
+    <li>If you can, also try a screen recording of both.</li>
+  </ol>
+</div>
+
+<h2>Read this first</h2>
+<dl>
+  <dt>Page version</dt><dd id="r-ver">—</dd>
+  <dt>Browser</dt><dd id="r-ua">—</dd>
+  <dt>Apple FairPlay</dt><dd id="r-fps">checking…</dd>
+  <dt>Device time</dt><dd id="r-time">—</dd>
+</dl>
+
+<h2><span class="tag protected">PROTECTED — FairPlay</span> should come out BLACK in a screenshot</h2>
+<div class="stage"><video id="vp" playsinline muted loop autoplay></video></div>
+<dl>
+  <dt>Key system</dt><dd id="p-ks">—</dd>
+  <dt>Licence</dt><dd id="p-lic">—</dd>
+  <dt>Playing</dt><dd id="p-play">—</dd>
+</dl>
+
+<h2><span class="tag control">CONTROL — not protected</span> should SHOW in a screenshot</h2>
+<div class="stage"><video id="vc" playsinline muted loop autoplay></video></div>
+<dl>
+  <dt>Playing</dt><dd id="c-play">—</dd>
+</dl>
+
+<h2>What happened, in order</h2>
+<pre id="log"></pre>
+<p style="font-size:0.85rem;color:#6b665c">The film is <em>Tears of Steel</em> by the Blender Foundation (CC BY 3.0), from Axinom's public test streams; the protected copy is licensed by Axinom's public test service with Axinom's evaluation FairPlay certificate, issued by Apple. Nothing on this page is a CCS picture. <a href="../">Back to the list of candidates</a></p>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  const set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
+  const log = (t) => { $("log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
+  const PAGE_VERSION = "2026-10-11 13:05 UTC — Apple check (Axinom public FairPlay test stream + clear control)";
+  set("r-ver", PAGE_VERSION);
+  set("r-ua", navigator.userAgent);
+  set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
+
+  // Axinom's public test stream (README of github.com/Axinom/public-test-vectors, v10, HLS H264 single key):
+  // its playlist, its licence service, Axinom's evaluation FairPlay certificate (issued by Apple to
+  // "FairPlay Streaming: Axinom GmbH", valid to 2026-11-30), and the public licence token published for it.
+  const PROTECTED = "https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8";
+  const CLEAR = "https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8";
+  const LICENSE = "https://drm-fairplay-licensing.axprod.net/AcquireLicense";
+  const CERT = "https://tools.axinom.com/FPScert/fairplay.cer";
+  const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ewogICJ2ZXJzaW9uIjogMSwKICAiY29tX2tleV9pZCI6ICI2OWU1NDA4OC1lOWUwLTQ1MzAtOGMxYS0xZWI2ZGNkMGQxNGUiLAogICJtZXNzYWdlIjogewogICAgInR5cGUiOiAiZW50aXRsZW1lbnRfbWVzc2FnZSIsCiAgICAidmVyc2lvbiI6IDIsCiAgICAibGljZW5zZSI6IHsKICAgICAgImFsbG93X3BlcnNpc3RlbmNlIjogdHJ1ZQogICAgfSwKICAgICJjb250ZW50X2tleXNfc291cmNlIjogewogICAgICAiaW5saW5lIjogWwogICAgICAgIHsKICAgICAgICAgICJpZCI6ICI0MDYwYTg2NS04ODc4LTQyNjctOWNiZi05MWFlNWJhZTFlNzIiLAogICAgICAgICAgImVuY3J5cHRlZF9rZXkiOiAid3QzRW51dVI1UkFybjZBRGYxNkNCQT09IiwKICAgICAgICAgICJ1c2FnZV9wb2xpY3kiOiAiUG9saWN5IEEiCiAgICAgICAgfQogICAgICBdCiAgICB9LAogICAgImNvbnRlbnRfa2V5X3VzYWdlX3BvbGljaWVzIjogWwogICAgICB7CiAgICAgICAgIm5hbWUiOiAiUG9saWN5IEEiLAogICAgICAgICJwbGF5cmVhZHkiOiB7CiAgICAgICAgICAibWluX2RldmljZV9zZWN1cml0eV9sZXZlbCI6IDE1MCwKICAgICAgICAgICJwbGF5X2VuYWJsZXJzIjogWwogICAgICAgICAgICAiNzg2NjI3RDgtQzJBNi00NEJFLThGODgtMDhBRTI1NUIwMUE3IgogICAgICAgICAgXQogICAgICAgIH0KICAgICAgfQogICAgXQogIH0KfQ.l8PnZznspJ6lnNmfAE9UQV532Ypzt1JXQkvrk8gFSRw";
+
+  shaka.polyfill.installAll();
+  const watch = (video, id) => {
+    const tick = () => set(id, `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : "playing"}, time ${video.currentTime.toFixed(1)} s`, video.paused || !video.videoWidth ? "bad" : "ok");
+    setInterval(tick, 1000); tick();
+  };
+
+  // the control: the same film with no protection at all
+  (async () => {
+    const v = $("vc");
+    try {
+      if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = CLEAR; log("control: playing natively (Safari's own HLS)"); }
+      else { const p = new shaka.Player(); await p.attach(v); await p.load(CLEAR); log("control: playing through the player library"); }
+      v.play().catch((e) => log("control: play() refused: " + e.message));
+      watch(v, "c-play");
+    } catch (e) { set("c-play", "could not load: " + (e.code || e.message), "bad"); log("control error " + (e.code || e.message)); }
+  })();
+
+  // the protected copy: FairPlay only
+  let fps = "no";
+  try {
+    await navigator.requestMediaKeySystemAccess("com.apple.fps", [{ initDataTypes: ["skd", "sinf"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"' }] }]);
+    fps = "yes";
+  } catch (e) { fps = "no (" + e.name + ")"; }
+  set("r-fps", fps === "yes" ? "available in this browser" : "not available here — this check needs Safari on an iPhone, iPad or Mac", fps === "yes" ? "ok" : "bad");
+  log("FairPlay key system: " + fps);
+  if (fps !== "yes") { set("p-ks", "none", "bad"); set("p-play", "not attempted (no FairPlay in this browser)", "bad"); return; }
+
+  const v = $("vp");
+  const player = new shaka.Player(); await player.attach(v);
+  player.configure({ drm: { servers: { "com.apple.fps": LICENSE }, advanced: { "com.apple.fps": { serverCertificateUri: CERT } } } });
+  player.getNetworkingEngine().registerRequestFilter((type, request) => {
+    if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = TOKEN; log("protected: licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
+  });
+  player.getNetworkingEngine().registerResponseFilter((type, response) => {
+    if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set("p-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); log("protected: licence obtained (" + response.data.byteLength + " bytes)"); }
+  });
+  player.addEventListener("error", (e) => { const d = e.detail || {}; log("protected: player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "")); });
+  try {
+    await player.load(PROTECTED);
+    const info = player.drmInfo();
+    set("p-ks", info ? info.keySystem : "none", info ? "ok" : "bad");
+    log("protected: loaded; key system " + (info ? info.keySystem : "none"));
+    v.play().catch((e) => log("protected: play() refused: " + e.message));
+    watch(v, "p-play");
+  } catch (e) {
+    set("p-play", "could not load: error " + (e.code || e.message), "bad");
+    log("protected: load failed, error " + (e.code || e.message) + (e.data && e.data[0] && e.data[0].code ? " (inner " + e.data[0].code + ")" : ""));
+  }
+})();
+</script>
+</body>
+</html>

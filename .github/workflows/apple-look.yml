@@ -1,0 +1,75 @@
+# Opens the Apple check (web/research/apple/) in Safari on a GitHub Mac, driven through Safari's own
+# WebDriver, reads the page's readout (FairPlay available? licence obtained? both copies playing?), and
+# captures the screen from the operating system the way a person's screenshot would, plus Safari's own
+# page screenshot. The page plays only Axinom's public test film (Blender's Tears of Steel), never a
+# CCS picture, so the captures are kept in web/research/apple/results/. A runner is a virtual Mac:
+# whatever it shows is a runner result, not a person's iPhone.
+name: apple look
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  EXPECT_VERSION: "Apple check (Axinom public FairPlay test stream + clear control)"
+  PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/"
+
+jobs:
+  mac-safari:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait for the live page version
+        run: |
+          for i in $(seq 1 45); do curl -sS -m 15 "$PAGE?v=${{ github.run_number }}" | grep -q "$EXPECT_VERSION" && { echo "live"; exit 0; }; sleep 8; done; exit 1
+      - name: Safari, through its own WebDriver — open, wait, read the readout, capture
+        timeout-minutes: 6
+        run: |
+          sw_vers; /Applications/Safari.app/Contents/MacOS/Safari --version 2>/dev/null || defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString
+          sudo safaridriver --enable
+          safaridriver -p 4444 > /tmp/safaridriver.log 2>&1 &
+          sleep 3
+          mkdir -p web/research/apple/results
+          python3 - <<'PY'
+          import json, urllib.request, time, base64, subprocess, os
+          B = "http://127.0.0.1:4444"
+          def call(method, path, body=None):
+              req = urllib.request.Request(B + path, method=method, data=json.dumps(body).encode() if body is not None else None, headers={"Content-Type": "application/json"})
+              return json.loads(urllib.request.urlopen(req, timeout=120).read() or b"{}")
+          sid = call("POST", "/session", {"capabilities": {"alwaysMatch": {"browserName": "safari"}}})["value"]["sessionId"]
+          call("POST", f"/session/{sid}/window/rect", {"x": 0, "y": 0, "width": 1280, "height": 1000})
+          url = os.environ["PAGE"] + "?v=" + os.environ["GITHUB_RUN_NUMBER"]
+          call("POST", f"/session/{sid}/url", {"url": url})
+          read = "return ['r-ua','r-fps','p-ks','p-lic','p-play','c-play'].map(function(k){return k+': '+document.getElementById(k).textContent}).join('\\n') + '\\n---\\n' + document.getElementById('log').textContent;"
+          for t in (15, 30, 45):
+              time.sleep(15)
+              print(f"=== readout at {t} s ===")
+              print(call("POST", f"/session/{sid}/execute/sync", {"script": read, "args": []})["value"])
+          # scroll so both videos are on screen, then capture: the operating system's capture first
+          call("POST", f"/session/{sid}/execute/sync", {"script": "document.getElementById('vp').scrollIntoView({block:'start'}); return 1;", "args": []})
+          time.sleep(3)
+          subprocess.run(["caffeinate", "-u", "-t", "2"])
+          r = subprocess.run(["screencapture", "-x", "web/research/apple/results/mac-safari-screen.png"])
+          if r.returncode != 0:
+              time.sleep(5); subprocess.run(["screencapture", "-x", "web/research/apple/results/mac-safari-screen.png"])
+          png = call("GET", f"/session/{sid}/screenshot")["value"]
+          open("web/research/apple/results/mac-safari-webdriver.png", "wb").write(base64.b64decode(png))
+          print("=== readout after the captures ===")
+          print(call("POST", f"/session/{sid}/execute/sync", {"script": read, "args": []})["value"])
+          call("DELETE", f"/session/{sid}")
+          PY
+          ls -l web/research/apple/results
+      - name: Save the captures (public test film only)
+        if: always()
+        run: |
+          ls web/research/apple/results/*.png > /dev/null 2>&1 || { echo "no capture was produced: nothing saved"; exit 1; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/research/apple/results
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -m "research(apple): Apple check in Safari on a GitHub Mac — captures (run ${{ github.run_number }})"
+          git pull --rebase origin main
+          git push origin HEAD:main
