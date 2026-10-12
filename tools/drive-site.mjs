@@ -1,11 +1,14 @@
-// Drives the test site's three pages in a real browser against a MOCKED GitHub API (route
-// interception), with the real crypto in the browser: wrong and right password, the gallery, an
-// upload (the mock receives an encrypted blob that decrypts to the chosen file), a delete and its
-// "being removed" state, a gallery written under another password, the set-up page (config.json
-// rewritten with the repository's own salt and a sealed access key), and the protected view (files
-// decrypted in memory and served to a stand-in player through the mem:// scheme, byte ranges included),
-// and the combined view (asked for when none exists, offered once it is published, opened from its own
-// files, a tap on a picture opening that picture alone, and the password first when signed out), and
+// Drives the test site in a real browser against a MOCKED GitHub API (route interception), with the real
+// crypto in the browser: THE ONE PAGE (site/index.html — the sign-in, the gallery, adding and deleting,
+// and the combined view of every ready picture played INLINE above the gallery) plus the single-picture
+// view (site/view.html). Wrong and right password, the gallery, an upload (the mock receives an encrypted
+// blob that decrypts to the chosen file), a delete and its "being removed" state, a gallery written under
+// another password, the set-up page (config.json rewritten with the repository's own salt and a sealed
+// access key), and the protected view (files decrypted in memory and served to a stand-in player through
+// the mem:// scheme, byte ranges included), and the combined view inline on the one page (asked for when
+// none exists, a "newer view ready" note once it is published, played above the gallery, a tap on a
+// picture opening that picture alone, the old all.html link and a signed-out link forwarding to the one
+// page's password), and
 // the Apple path both ways: with the Apple switch OFF (as a Mac still is, and as an iPhone was before the
 // owner measured it) the picture held back and Apple's test playing only public material with Axinom's public
 // token; and AS BUILT (iPhones and iPads switched on, 2026-10-12) the picture's own Apple form by its address
@@ -41,6 +44,10 @@ const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"}  ${what}${OFF
 // a served copy of site/ with a sealed access key and one prepared picture
 const www = await fs.mkdtemp(join(tmpdir(), "site-www-"));
 await fs.cp(join(REPO_DIR, "site"), join(www, "site"), { recursive: true });
+// the committed site/mosaic/ is the LIVE combined view, sealed under the real site password's picture key, which this
+// drive cannot open: the one page now plays the combined view inline on every sign-in, so drop it and let the drive own
+// the mosaic state entirely through publishMosaic() (the drive starts with no combined view, as a fresh gallery would)
+await fs.rm(join(www, "site", "mosaic"), { recursive: true, force: true });
 await fs.mkdir(join(www, "web", "research", "drm"), { recursive: true });
 // the route-1 page, with its own card's Apple form as card-fairplay.yml writes it (current.json naming a folder, its token)
 const R1_HTML = await fs.readFile(join(REPO_DIR, "web", "research", "drm", "index.html"), "utf8");
@@ -219,7 +226,11 @@ async function mockedContext(opts = {}) {
   // route-1 page). Either way the switch must be found exactly as built, or the drive stops.
   const SWITCH_BUILT = 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-12", "Mac": "" };', SWITCH_OFF = 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };';
   const withSwitch = (body, asBuilt) => { if (body.split(SWITCH_BUILT).length !== 2) throw new Error("the Apple switch was not found in the page as built"); return asBuilt ? body : body.replace(SWITCH_BUILT, SWITCH_OFF); };
-  await ctx.route(/\/site\/(view|all)\.html/, own(async (r) => { const res = await r.fetch(); const body = withSwitch((await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, ""), api.appleMeasured);
+  // view.html (one picture), index.html (THE ONE PAGE — the gallery and the combined view, played inline) and the bare
+  // /site/ (which all.html and a signed-out link forward to) all carry the Apple switch and pin the player library by
+  // hash; setup.html, gallery.js and the encrypted files under /site/ do not, and are served as they are. all.html is now
+  // a switch-less forwarder, so it is not matched here.
+  await ctx.route(/\/site\/(view\.html|index\.html|($|\?))/, own(async (r) => { const res = await r.fetch(); const body = withSwitch((await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, ""), api.appleMeasured);
     r.fulfill({ response: res, body }); }));
   await ctx.route(/\/web\/research\/drm\/(index\.html)?(\?[^/]*)?$/, own(async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: withSwitch((await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, ""), api.r1AsBuilt) }); }));
   await ctx.route("https://media.axprod.net/**", (r) => r.fulfill({ status: 404, body: "" }));
@@ -246,20 +257,26 @@ try {
   check(status === "ready" && (await page.$('a[href="view.html?id=' + ID + '"]')) !== null, "a published picture reads ready and shows its protected-view link (status: " + status + ")");
   const st = await page.evaluate(() => JSON.parse(sessionStorage.getItem("ccs-site")));
   check(st && st.keyHex === KEY_HEX && st.photoKeyHex === PHOTO_HEX && st.token === TOKEN && typeof st.at === "number", "the session holds the password key, the picture key and the unsealed access key");
-  // 1b. no combined view yet: the page asks the job for one, once, and says what is happening
+  // 1b. no combined view yet (the one page): the box where the view plays says so (CLIP.none, nothing asked of the browser),
+  // the page asks the job for one, once, and the gallery says what is happening. Once a view is published, the gallery says
+  // a newer one is ready and offers "Play the new view"; playing it (a reload) shows the view inline, above the gallery.
   await page.waitForFunction(() => /Combining your 1 picture/.test(document.getElementById("all").textContent), null, { timeout: 15000 });
+  await page.waitForFunction(() => document.getElementById("r-ks").textContent === "nothing to play yet", null, { timeout: 15000 });
+  check((await page.textContent("#r-granted")) === "nothing: there is no combined view yet" && /Your pictures show here, all at once/.test(await page.textContent("#msg")) && (await page.evaluate(() => (window.__manifests || []).length)) === 0, "with no combined view the box where it will play says so, and nothing is given to the player: " + (await page.textContent("#r-ks")));
   const askedFor = api.dispatches.filter((x) => x.client_payload.action === "mosaic");
   check(askedFor.length === 1 && askedFor[0].client_payload.key === PHOTO_HEX && Object.keys(askedFor[0].client_payload).sort().join() === "action,ask,key" && /^[0-9a-f]{16}$/.test(askedFor[0].client_payload.ask), "with no combined view the page asks the job for one (the action, the picture key and the request's own id only)");
-  check((await page.$("#open-all")) === null, "nothing to open until it is published");
   await publishMosaic();
-  await page.waitForSelector("#open-all", { timeout: 20000 });
-  check((await page.textContent("#open-all")) === "Open all 1 at once" && /All 1 in one protected view/.test(await page.textContent("#all")), "once published, the gallery offers it: " + (await page.textContent("#all")));
-  check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "it does not ask again while the view is current");
+  await page.waitForFunction(() => /A newer combined view of all 1 is ready/.test(document.getElementById("all").textContent), null, { timeout: 20000 });
+  check((await page.$("#replay")) !== null && /Play the new view/.test(await page.textContent("#all")), "once published, the gallery says a newer view is ready and offers to play it: " + (await page.textContent("#all")));
+  check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "it does not ask again while a current view is ready");
+  await page.click("#replay");
+  await page.waitForFunction(() => /All 1 in one protected view above/.test(document.getElementById("all").textContent) && (window.__got || []).some((g) => g[0] === "mem://photo/widevine.mpd" && g[1] === 640), null, { timeout: 20000 });
+  check(/All 1 in one protected view above/.test(await page.textContent("#all")), "Play the new view shows the combined view inline, above the gallery (its own 640-byte manifest, from memory): " + (await page.textContent("#all")));
   // the same with the eight-minute gap out of the way and a view made an hour ago (so only "it is current"
   // can hold the page back): a page that has never asked still does not ask while it is current
   await publishMosaic(HOUR_AGO);
   await page.evaluate(() => sessionStorage.removeItem("ccs-mosaic-asked"));
-  await page.reload(); await page.waitForSelector("#open-all", { timeout: 20000 }); await page.waitForTimeout(1500);
+  await page.reload(); await page.waitForFunction(() => /All 1 in one protected view above/.test(document.getElementById("all").textContent), null, { timeout: 20000 }); await page.waitForTimeout(1500);
   check(api.dispatches.filter((x) => x.client_payload.action === "mosaic").length === 1, "a current combined view is never asked for again, gap or no gap");
   // 2. upload
   await page.setInputFiles("#files", join(www, "pic.png"));
@@ -295,15 +312,19 @@ try {
   check(got[1] && got[1][0] === "range" && got[1][1] === 100 && got[1][2] === fileBytes["video-widevine.mp4"][100], "a byte-range request is sliced from the decrypted file");
   check(got[2] && got[2][1] === "rejected", "a file that is not there is refused");
   check((await page.textContent("#r-content")) === "your picture: Cotton <Bowl>.jpg", "the readout's Content line");
-  // 4b. the combined view: its own files from memory, the list of pictures, and a tap opens one alone
-  await page.goto(BASE + "all.html");
+  // 4b. the combined view, inline on the one page: its own files from memory, the pictures right above the gallery, and a
+  // tap on a picture opens it alone. The gallery's card names the view above and says to tap a picture there.
+  await page.goto(BASE + "index.html");
   await page.waitForFunction(() => window.__photoShown || /held back|not opened/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const gotAll = await page.evaluate(() => window.__got);
-  check((await page.textContent("#title")) === "All your pictures, protected (1)", "the combined view says what it is: " + (await page.textContent("#title")));
+  check((await page.textContent("#title")) === "Your pictures, protected (1)", "the one page's title names the combined view: " + (await page.textContent("#title")));
   check((await page.textContent("#r-content")) === "your pictures: all 1, combined into one protected video", "its readout's Content line");
   check(gotAll[0] && gotAll[0][0] === "mem://photo/widevine.mpd" && gotAll[0][1] === 640 && gotAll[1] && gotAll[1][2] === mosaicBytes["video-widevine.mp4"][100], "its files are the combined view's own, decrypted in memory (640-byte manifest, its own bytes)");
-  check((await page.textContent("#tiles")) === "Cotton <Bowl>.jpg" && (await page.$('#tiles a[href="view.html?id=' + ID + '"]')) !== null, "the list names each picture, escaped, with its own link");
-  check(await page.evaluate(() => { const h = document.getElementById("title"), st = document.getElementById("stage"); return h.nextElementSibling === st && st.getBoundingClientRect().top < document.getElementById("readout").getBoundingClientRect().top; }), "the pictures come first, right under the title, above the readout");
+  check(/All 1 in one protected view above, at the same protection as each picture on its own\. Tap a picture there to open it alone\./.test(await page.textContent("#all")), "the gallery card names the view above and says to tap a picture there: " + (await page.textContent("#all")));
+  // stage precedes the gallery in the document (its full-screen bar and "Left to right…" caption sit between them) and is
+  // drawn above both the gallery and the readout
+  const geo = await page.evaluate(() => { const g = document.getElementById("gallery"), st = document.getElementById("stage"), rd = document.getElementById("readout"); return { precedes: !!(st.compareDocumentPosition(g) & Node.DOCUMENT_POSITION_FOLLOWING), aboveReadout: st.getBoundingClientRect().top < rd.getBoundingClientRect().top, aboveGallery: st.getBoundingClientRect().top < g.getBoundingClientRect().top, stTop: Math.round(st.getBoundingClientRect().top), gTop: Math.round(g.getBoundingClientRect().top), rdTop: Math.round(rd.getBoundingClientRect().top) }; });
+  check(geo.precedes && geo.aboveReadout && geo.aboveGallery, "the pictures come first, above the gallery and the readout: " + JSON.stringify(geo));
   await page.locator("#v").scrollIntoViewIfNeeded();
   check(await page.evaluate(() => window.__ccsMosaic && window.__ccsMosaic.width === 1080 && window.__ccsMosaic.tiles.length === 1 && !("name" in window.__ccsMosaic.tiles[0])), "the layout a walker taps by is on the page (sizes and ids only)");
   const spot = await page.evaluate(() => { const r = document.getElementById("v").getBoundingClientRect(); const s = Math.min(r.width / 1080, r.height / 1440); return { x: r.left + (r.width - 1080 * s) / 2 + 540 * s, y: r.top + (r.height - 1440 * s) / 2 + 720 * s }; });
@@ -324,7 +345,7 @@ try {
   const until = async (re, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (re.test(await allText())) return true; await new Promise((r) => setTimeout(r, 250)); } return false; };
   const asks = () => api.dispatches.filter((x) => x.client_payload.action === "mosaic").length;
   const before = asks();
-  check(await until(/made for an earlier set \(1 picture\); it is being remade with your 2/, 20000) && (await p4.textContent("#open-all")) === "Open the earlier one (1)", "out of date: it says so and offers the earlier one: " + (await allText()));
+  check(await until(/made for an earlier set \(1 picture\); it is being remade with your 2/, 20000), "out of date: the gallery says so (the earlier view plays inline above): " + (await allText()));
   check(asks() === before, "a freshly made view out of date for under three minutes is not asked for yet");
   api.refuseDispatch = true; // GitHub refuses this one
   await p4.clock.fastForward("03:30");
@@ -343,7 +364,7 @@ try {
   // the job's own run makes it current: the page offers all of them, and the old refusal is gone
   await publishMosaic(undefined, [ID, ID2]);
   await p4.clock.fastForward("00:30");
-  check(await until(/All 2 in one protected view/, 15000) && !/did not take the request/.test(await allText()), "once current, it offers all 2 and the refusal is gone: " + (await allText()));
+  check(await until(/A newer combined view of all 2 is ready/, 15000) && !/did not take the request/.test(await allText()), "once current, the gallery says a newer view of all 2 is ready and the refusal is gone: " + (await allText()));
   await sctx.close();
   // 4d. out of date for twenty minutes: it gives up visibly and stops asking; "Ask again" asks, says so,
   // and keeps the page refreshing until the remade view arrives
@@ -366,7 +387,7 @@ try {
   check(await until5(/Asked again at/, 15000) && asks() === b5 + 2, "Ask again asks and says so: " + (await t5()));
   await publishMosaic(undefined, [ID, ID2]);
   await p5.clock.fastForward("00:30");
-  check(await until5(/All 2 in one protected view/, 15000) && !/being remade/.test(await t5()), "and the page keeps refreshing until the remade view arrives, then no longer says it is being remade (its clock twenty minutes ahead of the job's): " + (await t5()));
+  check(await until5(/A newer combined view of all 2 is ready/, 15000) && !/being remade/.test(await t5()), "and the page keeps refreshing until the remade view arrives, then says a newer view of all 2 is ready and no longer that it is being remade (its clock twenty minutes ahead of the job's): " + (await t5()));
   await dctx.close();
   // the three timing rules, each on its own fresh page and fake clock
   async function clockPage(mode, opts = {}) {
@@ -376,6 +397,9 @@ try {
     await pg.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
     await pg.goto(BASE + "index.html");
     await pg.waitForFunction(() => !document.getElementById("all").hidden && document.getElementById("all").textContent.length > 0, null, { timeout: 20000 });
+    // let the inline combined-view player's own start-up timers fire under the fake clock (its "playing" fires ~50 ms after
+    // load; without this the one page's player would wait on a frozen clock, leaving the context un-idle at close)
+    await pg.clock.runFor(200);
     await new Promise((r) => setTimeout(r, 1500));
     return { c, pg };
   }
@@ -435,7 +459,7 @@ try {
   // its own answer: a view remade with both pictures, carrying the new id
   await publishMosaic(new Date((await pt.evaluate(() => Date.now())) + 60000).toISOString(), [ID, ID2], [], FORM, null, [ask2, "0123456789abcdef", ask1]);
   await settle(pt, "00:30");
-  check(/All 2 in one protected view/.test(await tt()) && !/Left out|being remade|kept as it is/.test(await tt()), "and the page keeps refreshing until its own answer arrives: " + (await tt()));
+  check(/A newer combined view of all 2 is ready/.test(await tt()) && !/Left out|being remade|kept as it is/.test(await tt()), "and the page keeps refreshing until its own answer arrives (a newer view of all 2, nothing left out): " + (await tt()));
   await ct.close();
   // an answer from days ago reads with its day (Chicago time), never as if it were today
   const oldAt = new Date(Date.now() - 3 * 86400000).toISOString();
@@ -539,9 +563,9 @@ try {
     && (await ap.textContent("#detected")).endsWith(" is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on an iPhone (2026-10-12)."),
     "and the readout and the top line name the measurement, on an iPhone (an iPad is told it was an iPhone, and not yet on an iPad: (6f) below): " + (await ap.textContent("#r-expect")) + " | " + (await ap.textContent("#detected")));
   await ac.close();
-  // (4) the combined view, measured: its own Apple form and token
+  // (4) the combined view, measured: its own Apple form and token (inline on the one page)
   await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
-  ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "index.html"));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE" && (await ap.evaluate(() => window.__cfgs)).at(-1).drm.servers["com.apple.fps"] === OWN_LICENSE, "the combined view plays through its own Apple form and token, at its licence address");
   await ac.close(); await publishMosaic();
@@ -593,7 +617,7 @@ try {
   check((await ap.textContent("#r-ks")) === "held back — the photo has no Apple (FairPlay) form yet" && (await ap.textContent("#msg")) === "The photo hasn't been prepared for Apple devices yet, so it isn't shown here." && !(await ap.evaluate(() => window.__manifests)).length,
     "as built, a picture with no Apple form: held back, and its box says it has not been prepared yet: " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#msg")));
   await ac.close(); await writePhotoMeta();
-  ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "index.html"));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#r-ks")) === "held back — the combined view has no Apple (FairPlay) form yet" && (await ap.textContent("#msg")) === "The combined view hasn't been prepared for Apple devices yet, so it isn't shown here." && !(await ap.evaluate(() => window.__manifests)).length,
     "as built, a combined view with no Apple form: named as the combined view, not a picture (the twenty-fourth review): " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#msg")));
@@ -624,7 +648,7 @@ try {
   // twenty-ninth review: only a picture's line was checked)
   for (const [more, iphone, what] of [[{}, true, "a usable Apple form: names an iPhone"], [{ expires: "2026-01-02T03:04:05.000Z" }, false, "an expired Apple form: does not name an iPhone"]]) {
     await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE, ...more });
-    ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "all.html"));
+    ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "index.html"));
     await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
     check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the combined view out of screenshots, so it isn't shown here yet. The combined view shows on an Android phone, " + (iphone ? "on an iPhone, " : "") + "or on a Windows PC in Chrome or Edge.",
       `as built, a Mac in Safari on the combined view with ${what}: ` + (await ap.textContent("#msg")));
@@ -653,12 +677,20 @@ try {
   await ownCard();
   const SAFARI_PARTS = (fps) => `(() => { Object.defineProperty(Navigator.prototype, "requestMediaKeySystemAccess", { configurable: true, value: (ks) => ${fps} && ks === "com.apple.fps" ? Promise.resolve({ keySystem: ks }) : Promise.reject(new DOMException("not in this browser", "NotSupportedError")) });
     const cpt = HTMLMediaElement.prototype.canPlayType; HTMLMediaElement.prototype.canPlayType = function (t) { return /mpegurl/i.test(t) ? "maybe" : cpt.call(this, t); }; })()`;
+  // The route-1 page's photo proof lives at ?photo: any parameter keeps the page, none forwards to the one page (the
+  // bare-link forward is checked on its own, below). Every oneLink check here wants the route-1 page, so an omitted or
+  // empty query means ?photo; a real query (?clip=card, ?levels=…) is kept as given.
   async function oneLink(ua, query = "", init = "") {
     const c = await mockedContext(ua ? { userAgent: ua } : {}); const pg = await c.newPage();
     if (init) await pg.addInitScript(init);
-    await pg.goto(R1 + query);
+    await pg.goto(R1 + (query || "?photo"));
     return { c, pg };
   }
+  // the bare route-1 link (no parameter) forwards to the one page, keeping any hash
+  { const c = await mockedContext(); const pg = await c.newPage(); await pg.goto(R1 + "#k=xyz");
+    await pg.waitForURL(/\/site\/(index\.html)?#k=xyz$/, { timeout: 10000 }).catch(() => {});
+    check(/\/site\/(index\.html)?#k=xyz$/.test(pg.url()), "the bare route-1 link (no parameter) forwards to the one page, hash kept: " + pg.url());
+    await c.close(); }
   const shown = (pg, id) => pg.evaluate((i) => { const e = document.getElementById(i); return !!e && !e.closest("[hidden]"); }, id);
   // every request type the pinned player library has (shaka 5.2.10: 0 to 13) and one more, all but the licence's (2)
   const NOT_LICENCE = Array.from({ length: 15 }, (_, i) => i).filter((t) => t !== 2);
@@ -1045,24 +1077,26 @@ try {
   await ap.waitForFunction(() => /could not be opened/.test(document.getElementById("msg").textContent), null, { timeout: 20000 }).catch(() => {});
   check(/could not be opened/.test(await ap.textContent("#msg")) && !(await shown(ap, "detected")) && !(await ap.textContent("#detected")), "a site page whose picture cannot be opened: no top line left half-made: " + (await ap.textContent("#msg")));
   await ac.close();
-  ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "all.html"));
+  ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "index.html"));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#detected")).startsWith("Detected: Chrome on Windows (as the browser reports itself). The combined view is shown here through the browser's protected path"), "the combined view's top line names it: " + (await ap.textContent("#detected")));
   await ac.close();
-  ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "all.html", "window.__refuseAll = true;"));
+  ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "index.html", "window.__refuseAll = true;"));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "This browser offered none of the protection this page accepts, so the combined view isn't shown here. If its protected-content setting is off, turning it on lets the combined view show here.",
     "the combined view, nothing offered: the box names it too: " + (await ap.textContent("#msg")));
   await ac.close();
 
-  // 5. the view without a session goes to the password; an expired session too
+  // 5. the one page without a session shows the password; a picture's view without a session sends you there; the combined
+  // view's old link (all.html, now a forwarder) lands on the one page's password too; an expired session asks again
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);
-  check(/index\.html\?then=/.test(p2.url()), "the view without a session sends you to the password first");
-  await p2.goto(BASE + "all.html"); await p2.waitForURL(/index\.html\?then=all/);
+  check(/index\.html\?then=/.test(p2.url()), "a picture's view without a session sends you to the one page's password first");
+  await p2.goto(BASE + "all.html"); await p2.waitForURL(/\/site\/(index\.html)?$/, { timeout: 10000 });
+  check(/\/site\/(index\.html)?$/.test(p2.url()) && (await p2.isVisible("#lock")), "the combined view's old link forwards to the one page, which asks for the password: " + p2.url());
   await p2.fill("#pw", PASSWORD); await p2.click("#go");
-  await p2.waitForURL(/all\.html/, { timeout: 20000 });
-  check(/\/all\.html$/.test(p2.url()), "the combined view without a session asks for the password, then opens: " + p2.url());
+  await p2.waitForFunction(() => !document.getElementById("app").hidden, null, { timeout: 20000 });
+  check(await p2.isHidden("#lock") && !(await p2.isHidden("#app")), "after the password the one page opens: " + p2.url());
   await p2.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() - 5 * 3600 * 1000 })), st);
   await p2.goto(BASE + "index.html");
   check(await p2.isVisible("#lock"), "a session older than four hours asks for the password again");
