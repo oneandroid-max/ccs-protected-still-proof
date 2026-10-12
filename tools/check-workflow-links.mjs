@@ -130,7 +130,7 @@ const PINNED = {
   ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
   "tools/walk-site.mjs": "4b2222eaa660a66bd8aa75eaf46f9821063cfa20f6f374b78e0250cf0bf1e5ce",
   ".github/workflows/site-drive.yml": "561f8bb83320ec4c3981fb399b5f09dbd4edf669fcb5826fee480f793a3dfbe7",
-  "tools/drive-site.mjs": "eca18d2963684a92fc03ba103113ce02559bbe3a35d1701f30c8c2b24564b57e",
+  "tools/drive-site.mjs": "4f48a439cb3677437a6e7faa9338939a3cce32002e2de961cd27e00ae057b4d6",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");

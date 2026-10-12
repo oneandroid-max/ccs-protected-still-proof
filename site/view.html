@@ -223,7 +223,7 @@
       : APPLE_TEST ? "On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead."
       : FAIRPLAY_OK ? `${SHOWN} is shown here only through Apple's protected path (FairPlay), measured black on this kind of device.`
       : APPLE ? `On Apple devices ${SHOWN.toLowerCase()} is held back until a screenshot there is measured black.`
-      : SOFTWARE_MEASURED ? `${SHOWN} is shown here through the browser's protected path, where screenshots were measured black.`
+      : SOFTWARE_MEASURED ? `${SHOWN} is shown here through the browser's protected path (the readout below says which kind was granted).`
       : `${SHOWN} is shown here only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead.`)
     + (APPLE_TEST_HERE && !APPLE ? (PLATFORM === "Mac" ? " In Safari on this Mac, this same link runs Apple's own test." : " On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari.") : ""));
   // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured)

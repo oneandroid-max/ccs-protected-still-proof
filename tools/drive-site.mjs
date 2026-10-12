@@ -586,8 +586,8 @@ try {
   const ANDROID_CHROME = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
   const MAC_CHROME = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
   const LINUX_FIREFOX = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
-  for (const [ua, name, says] of [[WIN_CHROME, "Chrome on Windows", /through the browser's protected path, where screenshots were measured black\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
-    [ANDROID_CHROME, "Chrome on Android", /through the browser's protected path, where screenshots were measured black\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
+  for (const [ua, name, says] of [[WIN_CHROME, "Chrome on Windows", /through the browser's protected path \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
+    [ANDROID_CHROME, "Chrome on Android", /through the browser's protected path \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
     [MAC_CHROME, "Chrome on a Mac", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. In Safari on this Mac, this same link runs Apple's own test\.$/],
     [LINUX_FIREFOX, "Firefox on Linux", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/]]) {
     ({ c: ac, pg: ap } = await oneLink(ua));
