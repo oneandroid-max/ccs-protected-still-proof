@@ -123,7 +123,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 19:08 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone, one of his own pictures too; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 19:36 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone, one of his own pictures too; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -175,7 +175,9 @@
   // it: "yes they were moving, OK switch it on". NOT measured: a screen recording; an iPad (the switch covers iPads too,
   // Safari there being the same engine); other iOS versions; and our own Axinom account's licence on a real device (the
   // third video, our card under our own account as the pictures are licensed, was black but its line was below the
-  // screenshot's edge). FAIRPLAY_MEASURED_ON names the device each measurement was made on, for the lines that cite it.
+  // screenshot's edge; seen since: one of the owner's own pictures, licensed by our own account, played in Safari on his
+  // iPhone and came out black in its screenshot, his answer at 19:07Z the same day). FAIRPLAY_MEASURED_ON names the
+  // device each measurement was made on, for the lines that cite it.
   const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-12", "Mac": "" };
   const FAIRPLAY_MEASURED_ON = { "iPhone/iPad": "an iPhone", "Mac": "a Mac" };
   // Apple's engine: every browser on an iPhone or iPad, and Safari on a Mac (Chrome, Edge and Firefox on a
@@ -490,9 +492,12 @@
     }
     const info = player.drmInfo();
     set("r-ks", info ? info.keySystem : "none");
+    // FairPlay is named as granted only once the video plays: while waiting, only the playlist is known to have loaded
+    // (the twenty-ninth review: this named FairPlay for the whole wait, where the box may then say the browser offers none)
+    const FP_GRANTED = "Apple FairPlay — the device's own protected path (Apple offers no levels to choose)";
     set("r-granted", t.system === "clearkey" ? "none — ClearKey: the browser decrypts the card in its own code (control)"
-      : t.system === "fairplay" ? "Apple FairPlay — the device's own protected path (Apple offers no levels to choose)"
-      : `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST ? "bad" : "ok"));
+      : t.system === "fairplay" ? "waiting (the FairPlay playlist loaded)"
+      : `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.system === "fairplay" ? "" : t.word === "hardware" ? "ok" : (TEST ? "bad" : "ok"));
     // FairPlay: only that the playlist loaded; through Safari's own player that says nothing of whether the browser offers
     // FairPlay, which is asked after a failure (the twenty-eighth review: this said "the browser accepted FairPlay" where
     // the box then said it offers none)
@@ -519,6 +524,7 @@
       try { await player.destroy(); } catch (x) {} current = null;
       return "failed-after-grant";
     }
+    if (t.system === "fairplay") set("r-granted", FP_GRANTED, TEST ? "bad" : "ok");
     msg.hidden = true; window.__photoShown = tierName;
     set("r-expect", TEST_CLEAR ? "CONTROL: a screenshot should SHOW the card; if it is black here, black captures on this machine mean nothing"
       : TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots"

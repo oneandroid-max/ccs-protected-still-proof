@@ -611,14 +611,26 @@ try {
   await ac.close();
   OFF = false;
   // (7b) the same as built (the twenty-fourth review: a Mac read "Apple devices aren't confirmed yet", and the line naming
-  // where the picture shows left out iPhones and iPads, where it now shows): the box names Macs, and iPhones and iPads
+  // where the picture shows left out iPhones and iPads, where it now shows): the box names Macs, and an iPhone where the
+  // picture shows (the twenty-ninth review: this said "iPhones and iPads")
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, on an iPhone, or on a Windows PC in Chrome or Edge."
     && (await ap.textContent("#detected")).endsWith(". On a Mac the photo is held back until a screenshot there is measured black.") && !(await ap.evaluate(() => (window.__players || []).length)),
     "as built, a Mac in Safari on a site page: its box names Macs, and an iPhone where a picture shows (seen playing on the owner's iPhone, 2026-10-12; until then said apart: the twenty-fifth review): " + (await ap.textContent("#msg")));
-  await ac.close(); api.appleMeasured = false;
+  await ac.close();
+  // ... and the combined view's line, as built: an iPhone named with a usable Apple form, not with an expired one (the
+  // twenty-ninth review: only a picture's line was checked)
+  for (const [more, iphone, what] of [[{}, true, "a usable Apple form: names an iPhone"], [{ expires: "2026-01-02T03:04:05.000Z" }, false, "an expired Apple form: does not name an iPhone"]]) {
+    await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE, ...more });
+    ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "all.html"));
+    await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
+    check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the combined view out of screenshots, so it isn't shown here yet. The combined view shows on an Android phone, " + (iphone ? "on an iPhone, " : "") + "or on a Windows PC in Chrome or Edge.",
+      `as built, a Mac in Safari on the combined view with ${what}: ` + (await ap.textContent("#msg")));
+    await ac.close();
+  }
+  await publishMosaic(); api.appleMeasured = false;
 
   // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing);
   // in a browser that offers FairPlay, as Safari does (since the twenty-seventh review the page asks the browser after a
@@ -942,6 +954,16 @@ try {
   check(!(await shown(ap, "wv")) && !(await shown(ap, "pr")) && (await shown(ap, "fp")) && (await ap.textContent("#r-expect")) === "Apple FairPlay: screenshots measured black on an iPhone (2026-10-12). Take one."
     && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay (screenshots measured black on an iPhone, 2026-10-12)"),
     "as built, an iPhone: only the FairPlay button, and the lines name the measurement: " + (await ap.textContent("#r-rule")));
+  check((await ap.textContent("#r-granted")) === "Apple FairPlay — the device's own protected path (Apple offers no levels to choose)",
+    "as built, an iPhone, once playing: the readout names FairPlay as granted: " + (await ap.textContent("#r-granted")));
+  await ac.close();
+  // ... and while it waits for the first frame, the readout does not yet name FairPlay as granted: only the playlist is
+  // known to have loaded (the twenty-ninth review: it named FairPlay for the whole wait, where the box may then say the
+  // browser offers none)
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true) + "; window.__noFrames = true;"));
+  await ap.waitForFunction(() => /the FairPlay playlist loaded/.test(document.getElementById("log").textContent), null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#r-granted")) === "waiting (the FairPlay playlist loaded)" && !(await ap.evaluate(() => window.__photoShown)),
+    "as built, an iPhone, waiting for the first frame: the readout says the playlist loaded, not that FairPlay was granted: " + (await ap.textContent("#r-granted")));
   await ac.close();
   // ... and where its FairPlay load fails, the box says what happened, by asking the browser whether it offers FairPlay
   // (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: the load's error code cannot
