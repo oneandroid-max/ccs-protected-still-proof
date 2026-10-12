@@ -551,6 +551,12 @@ try {
   check((await ap.textContent("#r-granted")) === "nothing: Apple FairPlay was not asked, the form could not be used" && (await ap.textContent("#msg")) === "The photo couldn't be opened for Apple's protected path right now, so it isn't shown.",
     "and the readout does not say FairPlay was accepted: no player was made (the twenty-fourth review): " + (await ap.textContent("#r-granted")) + " | " + (await ap.textContent("#msg")));
   await ac.close();
+  // ... and such a picture is not said to be offered on iPhones and iPads, where it is refused (the twenty-sixth review)
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
+    "and a Mac is not told it is offered on an iPhone or iPad: " + (await ap.textContent("#msg")));
+  await ac.close();
   // (4c) a picture whose form's token has expired (the date its job recorded): not offered, its token never fetched
   await writePhotoMeta(OWN_LICENSE, { expires: "2026-01-02T03:04:05.000Z" });
   api.tokenReads = 0;
