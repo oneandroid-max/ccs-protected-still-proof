@@ -195,11 +195,15 @@ async function mockedContext(opts = {}) {
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
-  await ctx.route(/\/site\/(view|all)\.html/, own(async (r) => { const res = await r.fetch(); let body = (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "");
-    // the Apple switch as it would be after a measurement on an iPhone (only when the drive asks for it)
-    if (api.appleMeasured) { const before = body; body = body.replace('const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };', 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-11", "Mac": "" };'); if (body === before) throw new Error("the Apple switch was not found in the page"); }
+  // The Apple switch: as built, iPhones and iPads are switched on (measured on the owner's iPhone, 2026-10-12) and a Mac
+  // waits. The drive serves a page with the switch OFF everywhere, to keep driving Apple's test and the held-back lines a
+  // Mac still gets, unless it asks for the page as built (api.appleMeasured on a site page, api.r1AsBuilt on the
+  // route-1 page). Either way the switch must be found exactly as built, or the drive stops.
+  const SWITCH_BUILT = 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-12", "Mac": "" };', SWITCH_OFF = 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };';
+  const withSwitch = (body, asBuilt) => { if (body.split(SWITCH_BUILT).length !== 2) throw new Error("the Apple switch was not found in the page as built"); return asBuilt ? body : body.replace(SWITCH_BUILT, SWITCH_OFF); };
+  await ctx.route(/\/site\/(view|all)\.html/, own(async (r) => { const res = await r.fetch(); const body = withSwitch((await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, ""), api.appleMeasured);
     r.fulfill({ response: res, body }); }));
-  await ctx.route(/\/web\/research\/drm\/(index\.html)?(\?[^/]*)?$/, own(async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); }));
+  await ctx.route(/\/web\/research\/drm\/(index\.html)?(\?[^/]*)?$/, own(async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: withSwitch((await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, ""), api.r1AsBuilt) }); }));
   await ctx.route("https://media.axprod.net/**", (r) => r.fulfill({ status: 404, body: "" }));
   await ctx.route(/\/fp-[0-9a-f]{8}\/token\.enc/, own((r) => { api.tokenReads = (api.tokenReads || 0) + 1; return api.noPictureToken ? r.fulfill({ status: 404, body: "" }) : r.continue(); }));
   return ctx;
@@ -503,7 +507,7 @@ try {
   check(jwtKid((await licenceHeaders(ap))["X-AxDRM-Message"]) === "4060a865-8878-4267-9cbf-91ae5bae1e72", "and Axinom's public token for its public test key (the card's), never the picture's");
   check((await ap.textContent("#r-content")) === "the test card (not the photo)" && /APPLE TEST MODE/.test(await ap.textContent("body")), "the readout and the banner say it is the test card");
   await ac.close();
-  // (3) the switch flipped (as after a measurement on an iPhone): the picture's own Apple form, by its address, with its own token
+  // (3) the switch as built (iPhones on, after the measurement on the owner's iPhone): the picture's own Apple form, by its address, with its own token
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
@@ -511,7 +515,9 @@ try {
   check((await licenceHeaders(ap))["X-AxDRM-Message"] === PICTURE_TOKEN, "with the picture's own licence token, unsealed in memory");
   const pcfg = (await ap.evaluate(() => window.__cfgs)).at(-1);
   check(pcfg.drm.servers["com.apple.fps"] === OWN_LICENSE, "sent to the licence address its form records (the account's own): " + pcfg.drm.servers["com.apple.fps"]);
-  check(/measured black on iPhone\/iPad \(2026-10-11\)/.test(await ap.textContent("#r-expect")), "and the readout names the measurement: " + (await ap.textContent("#r-expect")));
+  check((await ap.textContent("#r-expect")) === "Apple FairPlay: screenshots measured black on an iPhone (2026-10-12). Take one." && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay (screenshots measured black on an iPhone, 2026-10-12)")
+    && (await ap.textContent("#detected")).endsWith(" is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on an iPhone (2026-10-12)."),
+    "and the readout and the top line name the measurement, on an iPhone (an iPad is told the same, and that it was an iPhone): " + (await ap.textContent("#r-expect")) + " | " + (await ap.textContent("#detected")));
   await ac.close();
   // (4) the combined view, measured: its own Apple form and token
   await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
@@ -812,6 +818,22 @@ try {
     && (await ap.textContent("#r-expect")) === "the photo is not shown on this device yet: take the screenshot of Apple's test above instead",
     "and the readout names the photo as what is held back, not the card that Apple's test is playing: " + (await ap.textContent("#r-rule")) + " | " + (await ap.textContent("#r-expect")));
   await ac.close();
+  // (6e) the route-1 page AS BUILT on an iPhone (switched on after the measurement on the owner's iPhone, 2026-10-12): no
+  // Apple's test there any more; the test photo, which has no Apple form, is held back and says why; the test card's
+  // link plays the card through FairPlay, with Axinom's public token for its public key and nothing of a picture's
+  api.r1AsBuilt = true;
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "", SAFARI_PARTS(true)));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check(!(await shown(ap, "apple")) && (await players(ap)).length === 0 && (await ap.textContent("#r-ks")) === "held back — this picture has no Apple (FairPlay) form yet"
+    && (await ap.textContent("#detected")) === "Detected: Safari on an iPhone or iPad (as the browser reports itself). The photo is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on an iPhone (2026-10-12).",
+    "as built, an iPhone on the one link: no Apple's test; the test photo, which has no Apple form, is held back, and the top line names the measurement: " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#detected")));
+  await ac.close();
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true)));
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === "card-fairplay/master.m3u8" && jwtKid((await licenceHeaders(ap))["X-AxDRM-Message"]) === "4060a865-8878-4267-9cbf-91ae5bae1e72",
+    "as built, an iPhone on the test card's link: the card plays through FairPlay, with Axinom's public token for its public key: " + (await ap.evaluate(() => window.__manifests)).join());
+  await ac.close();
+  api.r1AsBuilt = false;
   // (6d) the catch-all itself: a page asking another host (the drive's own server by another name, and its address on
   // another port), also by an address one of the drive's own page routes would match, and by a WebSocket, is answered here
   // and written down; only these entries are taken off the record, so anything else asked meanwhile still fails the
