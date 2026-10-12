@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<script>/* THE ONE PAGE (the owner, 2026-10-12: "I think we should just have one page with all the images"): this address with no parameter opens the one page, the test site's own (sign in, your pictures, adding them, this same player). Any parameter keeps this page: the test links measure (?clip=card, ?levels=), ?photo shows the test photo (the checks of the rule use it). */ if (!location.search) location.replace("../../../site/" + location.hash);</script>
 <title>Route 1: the browser's protected video path</title>
 <style>
   body { font-family: system-ui, sans-serif; margin: 0 auto; padding: 16px; max-width: 920px; line-height: 1.5; color: #1b1a17; background: #f6f4ef; }
@@ -192,7 +193,7 @@
   const CARD_FAIRPLAY = { manifest: "card-fairplay/master.m3u8", token: AXINOM_PUBLIC_TOKEN };
   const CLIP = CARD
     ? { name: "the test card (not the photo)", widevine: "card-widevine.mpd", playready: "card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: CARD_FAIRPLAY }
-    : { name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A", fairplay: null };
+    : { name: "the photo", widevine: "widevine.mpd", playready: "playready.mpd", prKid: "9E0FFABA-46A8-1DEC-DC6F-CE6F0CAFA51A", fairplay: null, none: null };
   set("r-content", CLIP.name);
   const TIERS = {
     "widevine-hardware":  { system: "widevine",  word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
@@ -497,6 +498,12 @@
   async function play(order) {
     $("log").textContent = ""; noAppleForm = false; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
+    // nothing to play yet (the one page before its combined view is made, CLIP.none): said where the view will play, and
+    // nothing is asked of the browser; on an Apple device that holds it back, the lines below say that instead
+    if (CLIP.none && !(APPLE && !FAIRPLAY_OK)) {
+      hidePhoto(); set("r-ks", "nothing to play yet", "bad"); set("r-expect", `${shown} is not made yet, so there is nothing to capture`, "bad"); showMsg(CLIP.none);
+      return;
+    }
     let grantedButNoLicence = false, grantedSystem = null;
     for (let i = 0; i < order.length; i++) {
       const r = await tryOne(order[i]);
