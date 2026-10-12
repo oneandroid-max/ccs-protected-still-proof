@@ -1,11 +1,13 @@
-# Opens the Apple check (web/research/apple/) in Safari on a GitHub Mac, driven through Safari's own
-# WebDriver, reads the page's readout (FairPlay available? licences obtained? all three videos playing?),
-# and captures the screen from the operating system the way a person's screenshot would, plus Safari's
-# own page screenshot. Then opens the route-1 page in its Apple test mode (?levels=fairplay, which plays
-# the TEST CARD through FairPlay, never a picture of the owner's) and reads its readout, to check the
-# site's own Apple path. Both pages play only public test material (Axinom's test film, Blender's Tears of
-# Steel, and the route-1 test card), so the captures are kept in web/research/apple/results/. A runner is
-# a virtual Mac: whatever it shows is a runner result, not a person's iPhone.
+# Opens the one test page (web/research/drm/?clip=card; Apple's test runs there on Apple's engine since
+# 2026-10-12, when the separate Apple check page became a forward to it) in Safari on a GitHub Mac, driven
+# through Safari's own WebDriver, reads what the page detected and Apple's test's readout (FairPlay
+# available? licences obtained? the videos playing?), and captures the screen from the operating system
+# the way a person's screenshot would, plus Safari's own page screenshot. Then opens the same page in its
+# Apple test mode (?levels=fairplay, which plays the TEST CARD through FairPlay, never a picture of the
+# owner's) and reads its readout, to check the site's own Apple path. Both play only public test material
+# (Axinom's test film, Blender's Tears of Steel, and the route-1 test card), so the captures are kept in
+# web/research/apple/results/. A runner is a virtual Mac: whatever it shows is a runner result, not a
+# person's iPhone.
 name: apple look
 
 on:
@@ -15,9 +17,8 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "Apple check (Axinom's FairPlay film + our FairPlay test card, public key and our own account at its own licence address, Axinom's reason in the licence line + clear control)"
-  APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/apple/"
-  ROUTE1_VERSION: "Apple FairPlay test (?levels=fairplay)"
+  EXPECT_VERSION: "one link for every device: Apple's test on this page"
+  APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card"
   ROUTE1_TEST: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?levels=fairplay"
 
 jobs:
@@ -26,10 +27,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Wait for the live page versions
+      - name: Wait for the live page version
         run: |
-          for i in $(seq 1 45); do curl -sS -m 15 "$APPLE_PAGE?v=${{ github.run_number }}" | grep -qF "$EXPECT_VERSION" && { echo "live"; break; }; [ "$i" = 45 ] && exit 1; sleep 8; done
-          for i in $(seq 1 45); do curl -sS -m 15 "$ROUTE1_TEST&v=${{ github.run_number }}" | grep -qF "$ROUTE1_VERSION" && { echo "route 1 live"; exit 0; }; sleep 8; done; exit 1
+          for i in $(seq 1 45); do curl -sS -m 15 "$APPLE_PAGE&v=${{ github.run_number }}" | grep -qF "$EXPECT_VERSION" && { echo "live"; exit 0; }; sleep 8; done; exit 1
       - name: Safari, through its own WebDriver — open, wait, read the readout, capture
         timeout-minutes: 6
         run: |
@@ -49,15 +49,15 @@ jobs:
               return json.loads(urllib.request.urlopen(req, timeout=120).read() or b"{}")
           sid = call("POST", "/session", {"capabilities": {"alwaysMatch": {"browserName": "safari"}}})["value"]["sessionId"]
           call("POST", f"/session/{sid}/window/rect", {"x": 0, "y": 0, "width": 1280, "height": 1000})
-          url = os.environ["APPLE_PAGE"] + "?v=" + os.environ["GITHUB_RUN_NUMBER"]
+          url = os.environ["APPLE_PAGE"] + "&v=" + os.environ["GITHUB_RUN_NUMBER"]
           call("POST", f"/session/{sid}/url", {"url": url})
-          read = "return ['r-ua','r-fps','p-ks','p-lic','p-play','k-ks','k-lic','k-play','o-ks','o-lic','o-play','c-play'].map(function(k){return k+': '+document.getElementById(k).textContent}).join('\\n') + '\\n---\\n' + document.getElementById('log').textContent;"
+          read = "return ['detected','r-platform','r-rule','r-ks','r-fps','p-ks','p-lic','p-play','k-ks','k-lic','k-play','o-ks','o-lic','o-play','c-play'].map(function(k){return k+': '+document.getElementById(k).textContent}).join('\\n') + '\\n---\\n' + document.getElementById('apple-log').textContent;"
           for t in (15, 30, 45):
               time.sleep(15)
               print(f"=== readout at {t} s ===")
               r = call("POST", f"/session/{sid}/execute/sync", {"script": read, "args": []})["value"]
               print(r)
-          note("Apple check at 45 s", r)
+          note("Apple's test at 45 s", r)
           # scroll so both videos are on screen, then capture: the operating system's capture first
           call("POST", f"/session/{sid}/execute/sync", {"script": "document.getElementById('videos').scrollIntoView({block:'start'}); return 1;", "args": []})
           time.sleep(3)

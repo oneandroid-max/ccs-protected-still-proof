@@ -6,7 +6,9 @@
 //   - on Apple's engine (every iPhone or iPad browser, Safari on a Mac) nothing at all is tried for the
 //     picture until FAIRPLAY_MEASURED holds a date for that platform, and then only Apple's own form,
 //     with the picture's own form and token;
-//   - nowhere else is the Apple form tried outside its test, and the switch changes nothing there.
+//   - nowhere else is the Apple form tried outside its test, and the switch changes nothing there;
+//   - Apple's test (the one link for every device) runs on the route-1 page exactly where the picture is held back on
+//     Apple's engine, outside a test mode; never on the site's pages, never elsewhere.
 // Also: the workflow guard refuses a link whose first parameter is not the safe one, or that names a
 // second levels= or clip= (the page reads the first; the bypass a review found on 2026-10-11).
 import { test } from "node:test";
@@ -31,7 +33,7 @@ function decide(html, measured) {
     body = body.replace(/const FAIRPLAY_MEASURED = \{[^}]*\};/, `const FAIRPLAY_MEASURED = ${JSON.stringify(measured)};`);
     assert.notEqual(body, before, "the Apple switch is found");
   }
-  return new Function("navigator", "location", "set", "CTX", body + "\nreturn { PLATFORM, APPLE, TEST, CARD, ORDER, CLIP, FAIRPLAY_OK };");
+  return new Function("navigator", "location", "set", "CTX", body + "\nreturn { PLATFORM, APPLE, TEST, CARD, ORDER, CLIP, FAIRPLAY_OK, APPLE_TEST };");
 }
 
 const IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)";
@@ -66,7 +68,7 @@ const OTHER = ["", "?clip=card", "?v=3", "?levels=x&levels=fairplay", "?clip=pho
 const PICTURE = { manifest: "https://example.test/site/photos/ID/fp-0a1b2c3d/master.m3u8", token: "THE.PICTURES.OWN.TOKEN" };
 const CTX = { content: "your picture: P", prKidGuid: "0", fairplay: PICTURE };
 
-test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured; nothing else changes", async () => {
+test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured and, on the route-1 page only, runs Apple's test there; nothing else changes", async () => {
   const route1 = await read("web/research/drm/index.html");
   const publicToken = route1.match(/const AXINOM_PUBLIC_TOKEN = "([^"]+)"/)[1];
   const pages = { "route-1 page": route1, "site/view.html": await read("site/view.html"), "site/all.html": await read("site/all.html") };
@@ -76,8 +78,11 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
     for (const measured of [null, { "iPhone/iPad": "2026-10-11", "Mac": "" }, { "iPhone/iPad": "", "Mac": "2026-10-11" }]) {
       const fn = decide(html, measured);
       for (const [dev, [ua, touch, apple, platform]] of Object.entries(DEVICES)) {
-        const at = (q) => { runs++; return fn({ userAgent: ua, maxTouchPoints: touch }, { search: q }, () => {}, CTX); };
         const what = (q) => `${pageName}, ${dev}, "${q}", Apple switch ${JSON.stringify(measured)}`;
+        // Apple's test: on the route-1 page only, on Apple's engine where the switch holds no date, outside a test mode
+        const at = (q) => { runs++; const r = fn({ userAgent: ua, maxTouchPoints: touch }, { search: q }, () => {}, CTX);
+          assert.equal(r.APPLE_TEST, pageName === "route-1 page" && apple && !(measured && measured[platform]) && !r.TEST, what(q) + ": Apple's test where the picture is held back on Apple's engine, on the route-1 page only");
+          return r; };
         const plain = (q) => { // a link that is not a test
           const r = at(q);
           assert.equal(r.PLATFORM, platform, what(q)); assert.equal(r.APPLE, apple, what(q)); assert.equal(r.TEST, false, what(q));
@@ -104,6 +109,18 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
     }
   }
   assert.ok(runs > 1500, `${runs} combinations run`);
+});
+
+// The Apple check's old address (sent before its test moved onto the route-1 page) forwards there, to the test card:
+// never a picture; and it holds no player, token or key system of its own that could drift from the page's
+test("the Apple check's old address forwards to the one test page, on the test card, and holds nothing of its own", async () => {
+  const old = await read("web/research/apple/index.html");
+  assert.match(old, /<meta http-equiv="refresh" content="0; url=\.\.\/drm\/\?clip=card">/);
+  assert.match(old, /<script>location\.replace\("\.\.\/drm\/\?clip=card"\);<\/script>/);
+  const targets = [...old.matchAll(/(?:url=|href="|replace\(")([^"]+)/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(targets)], ["../drm/?clip=card"], "every way out goes to the test card: " + targets.join(", "));
+  assert.equal(targets.length, 3, "the refresh, the script and the link");
+  assert.ok(!/shaka|AxDRM|eyJhbGci|requestMediaKeySystemAccess|<video/.test(old), "no player, token, key system or video of its own");
 });
 
 // The guard, run in a copy of the repository's workflows and tools with one extra workflow, or with one

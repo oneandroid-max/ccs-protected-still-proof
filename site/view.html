@@ -21,18 +21,70 @@
   .ok { color: #1d6b3a; font-weight: 600; } .bad { color: #a83a2b; }
   pre { font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; background: #fff; border: 1px solid #d9d4c8; border-radius: 8px; padding: 10px; }
   .lede { max-width: 65ch; }
+  .detected { max-width: 65ch; background: #e8eef7; border: 1px solid #c4d3ea; border-radius: 10px; padding: 8px 12px; font-weight: 600; }
+  /* Apple's test (an iPhone, iPad or Mac in Safari, while FairPlay is not yet measured there): four videos side by side */
+  .steps { background: #fff; border: 1px solid #d9d4c8; border-radius: 10px; padding: 10px 14px; margin: 10px 0; }
+  .steps ol { margin: 6px 0; padding-left: 1.3em; } .steps p, .steps li { max-width: 65ch; }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
+  @media (max-width: 640px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .cap { font-size: 0.78rem; line-height: 1.3; min-height: 3.9em; }
+  .mini { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.35; margin: 0; word-break: break-word; }
+  .tile { background: #000; border-radius: 10px; aspect-ratio: 3 / 4; position: relative; overflow: hidden; }
+  .tile video { visibility: visible; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 0.85rem; color: #fff; }
+  .tag.protected { background: #1d6b3a; } .tag.control { background: #6b4e16; }
+  .credit { font-size: 0.85rem; color: #6b665c; }
 </style>
 </head>
 <body>
 <h1 id="title">Protected view</h1>
+<p class="detected" id="detected">Finding out which browser and device this is…</p>
 <p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only where screenshots are known to come out black:</strong> with hardware protection on any device, and with software protection in Chrome and Edge on Windows and Android, where screenshots were measured black. On other browsers and platforms, Apple devices included, the photo is held back until each is measured the same way. It starts on its own when the page opens; the buttons only run it again.</p>
 
-<div class="row">
+<div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
   <button id="wv">Widevine</button>
   <button id="pr">PlayReady</button>
   <button id="fp">FairPlay</button>
 </div>
+
+<section id="apple" hidden>
+  <div class="steps">
+    <p><strong>Apple's test, on this iPhone, iPad or Mac.</strong> The photo is held back here until a screenshot on this kind of device is measured black. Four short videos play below instead; none of them is a CCS picture. Three go through Apple's protected path (FairPlay): Axinom's own test film; our test card, packaged by the same code that packages the site's pictures, under Axinom's public test key; and the same card under a key of its own, licensed by our own Axinom account, exactly as a picture would be. The fourth is the film unprotected, as a control.</p>
+    <ol>
+      <li>Wait until they are moving (about ten seconds).</li>
+      <li>Take a screenshot (iPhone: side button + volume up; Mac: Shift-Command-3), and a screen recording if you can.</li>
+      <li>Open the screenshot in Photos. <strong>The protected ones should be black; the control should show the film.</strong> A black one counts only if the line under it says <em>playing</em> with a size (for example 720x960) and its time moving; if it says <em>no frame</em>, nothing was playing there, and if the control is black too, the screenshot proves nothing on this device.</li>
+    </ol>
+    <p class="mini">Apple FairPlay in this browser: <span id="r-fps">checking…</span></p>
+  </div>
+  <div class="grid" id="videos">
+    <div class="cell">
+      <div class="cap"><span class="tag protected">PROTECTED</span><br>Axinom's test film, FairPlay</div>
+      <div class="tile"><video id="vp" playsinline muted loop autoplay></video></div>
+      <p class="mini">key system: <span id="p-ks">—</span><br>licence: <span id="p-lic">—</span><br>playing: <span id="p-play">—</span></p>
+    </div>
+    <div class="cell">
+      <div class="cap"><span class="tag protected">PROTECTED</span><br>our test card, FairPlay, our packaging</div>
+      <div class="tile"><video id="vk" playsinline muted loop autoplay></video></div>
+      <p class="mini">key system: <span id="k-ks">—</span><br>licence: <span id="k-lic">—</span><br>playing: <span id="k-play">—</span></p>
+    </div>
+    <div class="cell">
+      <div class="cap"><span class="tag protected">PROTECTED</span><br>our test card, OUR Axinom account's licence</div>
+      <div class="tile"><video id="vo" playsinline muted loop autoplay></video></div>
+      <p class="mini">key system: <span id="o-ks">—</span><br>licence: <span id="o-lic">—</span><br>playing: <span id="o-play">—</span></p>
+    </div>
+    <div class="cell">
+      <div class="cap"><span class="tag control">CONTROL</span><br>the film, not protected</div>
+      <div class="tile"><video id="vc" playsinline muted loop autoplay></video></div>
+      <p class="mini">playing: <span id="c-play">—</span></p>
+    </div>
+  </div>
+  <h2>Apple's test, what happened, in order</h2>
+  <pre id="apple-log"></pre>
+  <p class="credit">The film is <em>Tears of Steel</em> by the Blender Foundation (CC BY 3.0), from Axinom's public test streams. The protected videos are licensed by Axinom's FairPlay licence service with Axinom's evaluation FairPlay certificate, issued by Apple: the film under Axinom's own packaging, the card under ours (tools/fairplay-card.mjs). The card's first form uses Axinom's public test key, which Axinom's public licence token unlocks; its second uses a key of its own, whose token our account made.</p>
+</section>
 
 <h2 id="readout">What this device is doing — read this first</h2>
 <dl>
@@ -53,8 +105,10 @@
   <div class="msg" id="msg">Loading…</div>
 </div>
 
+<div id="attempts">
 <h2>Attempts, in order</h2>
 <pre id="log"></pre>
+</div>
 <p><a href="index.html">Back to your pictures</a></p>
 <script>window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>
@@ -65,7 +119,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-11 18:11 UTC — test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 03:47 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -126,8 +180,10 @@
   // own keys (drm-card.yml), so its licence never unlocks the photo.
   const CARD = TEST || params.get("clip") === "card";
   const CARD_CLEARKEY = { "5cfcb567f2f19d08a30b20483d92e930": "a64cde52f25e07a56d7770f4d31fc1f3" };
+  // the card's Apple form, with Axinom's public token (also played by Apple's test below)
+  const CARD_FAIRPLAY = { manifest: "../web/research/drm/card-fairplay/master.m3u8", token: AXINOM_PUBLIC_TOKEN };
   const CLIP = CARD
-    ? { name: "the test card (not the photo)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { manifest: "../web/research/drm/card-fairplay/master.m3u8", token: AXINOM_PUBLIC_TOKEN } }
+    ? { name: "the test card (not the photo)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: CARD_FAIRPLAY }
     : { name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid, fairplay: CTX.fairplay };
   set("r-content", CLIP.name);
   const TIERS = {
@@ -144,15 +200,45 @@
     : APPLE ? (FAIRPLAY_OK ? ["fairplay-apple"] : []) // Apple's engine has no Widevine or PlayReady
     : SOFTWARE_MEASURED ? ["widevine-hardware", "widevine-software", "playready-hardware"]
     : ["widevine-hardware", "playready-hardware"];
+  // ONE LINK FOR EVERY DEVICE (the owner's choice, 2026-10-12). On Apple's engine, while FairPlay is not yet measured
+  // there, this page runs Apple's test in the photo's place: Axinom's test film and our test card through FairPlay,
+  // beside the film unprotected as a control, so the same link measures an iPhone, iPad or Mac. It plays only that
+  // public material; the rule above still holds the photo back. Not in a test mode (each plays its own test), and not
+  // on the site's pages (tools/build-site-view.mjs turns it off there): they hold the picture back and say so.
+  const APPLE_TEST_HERE = false; // the site's pages: Apple's test is on the route-1 page
+  const APPLE_TEST = APPLE_TEST_HERE && APPLE && !FAIRPLAY_OK && !TEST;
   // The platform and browser come from what the browser says about itself, which can be wrong (a tablet
   // asking for desktop sites reports Linux) or changed by the person using it; the line says so.
-  const SAYS = `${BROWSER === "other" ? "this browser" : BROWSER} on ${PLATFORM} (as the browser reports itself)`;
+  // The browser's own name, for what the page says only (the rule above reads BROWSER): an app's built-in browser first,
+  // since it reports the engine it is built on
+  const BROWSER_NAME = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /FBAN|FBAV|FB_IAB|Instagram/.test(ua) ? "an app's built-in browser" : /SamsungBrowser\//.test(ua) ? "Samsung Internet"
+    : /OPR\/|OPT\//.test(ua) ? "Opera" : /Firefox\/|FxiOS/.test(ua) ? "Firefox" : /Chrome\/|CriOS/.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "this browser";
+  const DEVICE_NAME = { "iPhone/iPad": "an iPhone or iPad", "Mac": "a Mac", "Windows": "Windows", "Android": "Android", "ChromeOS": "a Chromebook", "Linux": "Linux" }[PLATFORM] || "this device";
+  const SAYS = `${BROWSER_NAME} on ${PLATFORM} (as the browser reports itself)`;
+  // WHAT THIS PAGE DETECTED, at the top in plain words (the owner, 2026-10-12: "the site needs to know automatically what
+  // browser is being used to view"): the browser and the device, and what the page does for them
+  const SHOWN = CARD ? "The test card" : "The photo";
+  set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (as the browser reports itself). `
+    + (TEST ? "This link runs a test, on the test card: the box below says which."
+      : APPLE_TEST ? "On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead."
+      : FAIRPLAY_OK ? `${SHOWN} is shown here only through Apple's protected path (FairPlay), measured black on this kind of device.`
+      : APPLE ? `On Apple devices ${SHOWN.toLowerCase()} is held back until a screenshot there is measured black.`
+      : SOFTWARE_MEASURED ? `${SHOWN} is shown here through the browser's protected path, where screenshots were measured black.`
+      : `${SHOWN} is shown here only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead.`)
+    + (APPLE_TEST_HERE && !APPLE ? (PLATFORM === "Mac" ? " In Safari on this Mac, this same link runs Apple's own test." : " On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari.") : ""));
+  // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured)
+  const WHERE = `${SHOWN} shows on an Android phone, or on a Windows PC in Chrome or Edge.`;
+  const OPEN_INSTEAD = PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
+    : PLATFORM === "Android" ? "On this phone, open this link in Chrome (screenshots measured black there)."
+    : PLATFORM === "Mac" && APPLE_TEST_HERE ? `On this Mac, open this link in Safari: Apple's test runs there. ${WHERE}`
+    : PLATFORM === "Linux" ? `On Linux no browser keeps protected video out of a screenshot (measured on a test machine). ${WHERE}`
+    : WHERE;
   set("r-rule", TEST_CLEAR ? "CONTROL: no protection (ClearKey), test card — a screenshot SHOULD show the card"
     : TEST_SOFTWARE ? "TEST: software only, on any platform (measurement, test card)"
     : TEST_FAIRPLAY ? "TEST: Apple FairPlay (measurement, test card) — a screenshot of the card should come out BLACK"
     : SOFTWARE_MEASURED ? `${SAYS}: hardware protection, or software protection (screenshots measured black there)`
     : FAIRPLAY_OK ? `${SAYS}: Apple FairPlay (screenshots measured black on ${PLATFORM}, ${FAIRPLAY_MEASURED[PLATFORM]})`
-    : APPLE ? `${SAYS}: Apple FairPlay is not yet measured here, so the photo is held back until a screenshot on ${PLATFORM} is measured black (?levels=fairplay plays the test card for that)`
+    : APPLE ? `${SAYS}: Apple FairPlay is not yet measured here, so the photo is held back until a screenshot on ${PLATFORM} is measured black (${APPLE_TEST ? "Apple's test on this page measures that" : "?levels=fairplay plays the test card for that"})`
     : `${SAYS}: hardware protection only (software not yet measured there)`);
   if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
   if (TEST_FAIRPLAY) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "APPLE TEST MODE: this link plays a TEST CARD through Apple's FairPlay, never the photo, to measure whether this iPhone, iPad or Mac keeps FairPlay video out of screenshots. Take a screenshot once the card plays: the card should come out black."; document.querySelector("h1").after(b); }
@@ -164,11 +250,103 @@
   const axinomReason = (d) => { for (const x of [d, d && d.data && d.data[0]]) { const why = x && x.data && axinomSays(x.data[3]); if (why) return why; } return ""; };
   const errText = (e) => { const d = (e && e.detail) || e || {}; const inner = d.data && d.data[0] && d.data[0].code ? ` (inner ${d.data[0].code}${d.data[0].data && d.data[0].data[1] ? ", http " + d.data[0].data[1] : ""})` : ""; const why = axinomReason(d); return `${d.code || "?"}${inner}${why ? "; Axinom: " + why : ""}`; };
 
+  // APPLE'S TEST (see ONE LINK FOR EVERY DEVICE above; until 2026-10-12 a page of its own, web/research/apple/,
+  // which now forwards here). Four videos side by side, each with its own player: Axinom's public test stream
+  // (README of github.com/Axinom/public-test-vectors, v10, HLS H264 single key) and the same film unprotected; the
+  // test card's Apple form (CARD_FAIRPLAY); and the same card under a key of its own, licensed by OUR Axinom account
+  // (made by card-fairplay.yml; its token unlocks only this public card), whose folder current.json names, fresh at
+  // each renewal, so a cached older video never pairs with a newer token.
+  const APPLE_FILM = "https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8";
+  const APPLE_FILM_CLEAR = "https://media.axprod.net/TestVectors/Hls/not_protected_hls_1080p_h264/manifest.m3u8";
+  const CARD_FAIRPLAY_OWN = "../web/research/drm/card-fairplay-own/";
+  async function appleTest() {
+    $("apple").hidden = false; $("stage").hidden = true; $("buttons").hidden = true; $("attempts").hidden = true;
+    const alog = (t) => { $("apple-log").textContent += new Date().toISOString().slice(11, 19) + "  " + t + "\n"; };
+    // "playing" only with a decoded frame (a size above 0x0) and its time moving since the last look; a
+    // Mac without a working FairPlay showed "0x0, playing, time 0.0 s" with nothing on screen
+    const watch = (video, id) => {
+      let last = null;
+      const tick = () => {
+        const moving = last !== null && Math.abs(video.currentTime - last) >= 0.2; last = video.currentTime;
+        const live = !video.paused && video.videoWidth > 0 && moving;
+        set(id, `${video.videoWidth}x${video.videoHeight}, ${video.paused ? "paused" : !video.videoWidth ? "no frame" : moving ? "playing" : "not moving"}, time ${video.currentTime.toFixed(1)} s`, live ? "ok" : "bad");
+      };
+      setInterval(tick, 1000); tick();
+    };
+    // the control: the same film with no protection at all
+    (async () => {
+      const v = $("vc");
+      try {
+        if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = APPLE_FILM_CLEAR; alog("control: playing natively (Safari's own HLS)"); }
+        else { const p = new shaka.Player(); await p.attach(v); await p.load(APPLE_FILM_CLEAR); alog("control: playing through the player library"); }
+        v.play().catch((e) => alog("control: play() refused: " + e.message));
+        watch(v, "c-play");
+      } catch (e) { set("c-play", "could not load: " + (e.code || e.message), "bad"); alog("control error " + (e.code || e.message)); }
+    })();
+    // the protected videos: FairPlay only
+    let fps = "no";
+    try {
+      await navigator.requestMediaKeySystemAccess("com.apple.fps", [{ initDataTypes: ["skd", "sinf"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"' }] }]);
+      fps = "yes";
+    } catch (e) { fps = "no (" + e.name + ")"; }
+    set("r-fps", fps === "yes" ? "available in this browser" : "not available here — Apple's test needs Safari on an iPhone, iPad or Mac", fps === "yes" ? "ok" : "bad");
+    alog("FairPlay key system: " + fps);
+    if (fps !== "yes") {
+      for (const p of ["p", "k", "o"]) { set(p + "-ks", "none", "bad"); set(p + "-play", "not attempted (no FairPlay in this browser)", "bad"); }
+      return;
+    }
+    // one protected video: its own player, Axinom's licence service and certificate, the token given
+    async function protectedPlay(videoId, p, url, what, token = AXINOM_PUBLIC_TOKEN, license = AXINOM_LICENSE) {
+      const v = $(videoId);
+      const player = new shaka.Player(); await player.attach(v);
+      player.configure({ drm: { servers: { "com.apple.fps": license }, advanced: { "com.apple.fps": { serverCertificateUri: AXINOM_CERT } } } });
+      player.getNetworkingEngine().registerRequestFilter((type, request) => {
+        if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { request.headers["X-AxDRM-Message"] = token; alog(what + ": licence request sent (" + (request.body ? request.body.byteLength : 0) + " bytes)"); }
+      });
+      player.getNetworkingEngine().registerResponseFilter((type, response) => {
+        if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) { set(p + "-lic", "obtained, " + response.data.byteLength + " bytes", "ok"); alog(what + ": licence obtained (" + response.data.byteLength + " bytes)"); }
+      });
+      // Axinom refuses with HTTP 400 or 403, which reaches the player as an error (never the response filter):
+      // its reason goes in the licence cell
+      const refused = (d) => { const why = axinomReason(d); if (why) set(p + "-lic", "refused by Axinom: " + why, "bad"); return why; };
+      player.addEventListener("error", (e) => { const d = e.detail || {}; const why = refused(d); alog(what + ": player error " + d.code + (d.data && d.data[0] && d.data[0].code ? " (inner " + d.data[0].code + ")" : "") + (why ? "; Axinom: " + why : "")); });
+      try {
+        await player.load(url);
+        const info = player.drmInfo();
+        set(p + "-ks", info ? info.keySystem : "none", info ? "ok" : "bad");
+        alog(what + ": loaded; key system " + (info ? info.keySystem : "none"));
+        v.play().catch((e) => alog(what + ": play() refused: " + e.message));
+        watch(v, p + "-play");
+      } catch (e) {
+        const why = refused(e);
+        set(p + "-play", "could not load: error " + (e.code || e.message), "bad");
+        alog(what + ": load failed, error " + (e.code || e.message) + (e.data && e.data[0] && e.data[0].code ? " (inner " + e.data[0].code + ")" : "") + (why ? "; Axinom: " + why : ""));
+      }
+    }
+    await protectedPlay("vp", "p", APPLE_FILM, "film (protected)");
+    await protectedPlay("vk", "k", CARD_FAIRPLAY.manifest, "our card (protected)");
+    let ownToken = null, ownBase = null, ownLicense = AXINOM_LICENSE, ownWhy = "not made yet: it needs our Axinom account", ownLog = "not made yet (needs the Axinom account's key in the repository's secrets)";
+    try {
+      const c = await fetch(CARD_FAIRPLAY_OWN + "current.json?v=" + Date.now(), { cache: "no-store" });
+      const cur = c.ok ? await c.json() : {};
+      const folder = String(cur.folder || "");
+      ownLicense = cur.license === undefined ? AXINOM_LICENSE : String(cur.license); // the account's own licence address, recorded with its card
+      if (!/^[0-9a-f]{8}$/.test(folder)) {} // not made yet (the reason above)
+      else if (!AXINOM_LICENSE_ADDRESS.test(ownLicense)) { ownWhy = "refused: its licence address is not Axinom's"; ownLog = "refused: current.json names a licence address that is not Axinom's, so its token is sent nowhere"; }
+      else if (Date.parse(cur.expires) <= Date.now()) { ownWhy = "its token expired on " + String(cur.expires).slice(0, 10); ownLog = "not offered: its token expired on " + String(cur.expires).slice(0, 10) + " (the date current.json records), so it can license nothing"; }
+      else { ownBase = CARD_FAIRPLAY_OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); else { ownWhy = "its token is missing"; ownLog = "its folder's token.txt could not be read (HTTP " + r.status + ")"; } }
+    } catch (e) { ownWhy = "could not be read"; ownLog = "current.json could not be read: " + e.message; }
+    if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken, ownLicense);
+    else { set("o-ks", "—"); set("o-play", ownWhy, "bad"); alog("our card, our account: " + ownLog); }
+  }
+
   shaka.polyfill.installAll();
+  // Apple's test runs beside the rule, never in its way: started here, not waited for, with its own log
+  if (APPLE_TEST) appleTest().catch((e) => set("r-fps", "Apple's test stopped: " + (e && e.message), "bad"));
   if (!shaka.Player.isBrowserSupported()) {
     set("r-ks", "held back — this browser cannot play protected video", "bad");
     set("r-expect", "the photo is not shown on this browser", "bad");
-    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here.");
+    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here. " + OPEN_INSTEAD);
     return;
   }
 
@@ -303,14 +481,14 @@
     if (APPLE && !FAIRPLAY_OK && !TEST) {
       set("r-ks", `held back — Apple FairPlay is not yet measured on ${PLATFORM}`, "bad");
       set("r-granted", "nothing yet: the photo waits until a screenshot of FairPlay video here is measured black", "bad");
-      set("r-expect", "the photo is not shown on this device yet, so there is nothing to capture", "bad");
-      showMsg("Apple devices aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The Apple test (?levels=fairplay) plays a test card for that measurement.");
+      set("r-expect", APPLE_TEST ? "the photo is not shown on this device yet: take the screenshot of Apple's test above instead" : "the photo is not shown on this device yet, so there is nothing to capture", "bad");
+      showMsg("Apple devices aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. " + WHERE);
       return;
     }
     set("r-ks", "held back — none of the protection this page accepts is available in this browser", "bad");
     set("r-granted", "nothing this page accepts", "bad");
     set("r-expect", "the photo is not shown on this browser, so there is nothing to capture", "bad");
-    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here.");
+    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here. " + OPEN_INSTEAD);
   }
 
   $("auto").addEventListener("click", () => play(ORDER));

@@ -27,7 +27,7 @@ jobs:
             line=$(curl -sS -m 20 -o /tmp/body -w '%{http_code} %{content_type}' "$B/$p?v=$(date +%s)")
             out="$out$line $(wc -c < /tmp/body) bytes $p%0A"
           done
-          ver=$(curl -sS -m 20 "$B/web/research/apple/?v=$(date +%s)" | grep -o 'PAGE_VERSION = "[^"]*"' | head -1)
+          ver=$(curl -sS -m 20 "$B/web/research/drm/?clip=card&v=$(date +%s)" | grep -o 'PAGE_VERSION = "[^"]*"' | head -1)
           key=$(curl -sS -m 20 "$B/web/research/drm/card-fairplay/video.m3u8?v=$(date +%s)" | grep -m1 '^#EXT-X-KEY' || echo "no key line")
           echo "::notice title=Apple files::$out$ver%0A$key"
       - name: The player library's integrity hash (for the pages' integrity attribute)

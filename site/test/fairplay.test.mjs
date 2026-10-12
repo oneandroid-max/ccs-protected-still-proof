@@ -172,44 +172,49 @@ test("the token check's own default cuts a silent server at the limit it is give
   assert.ok(took >= 90 && took < 600, `cut at 100 ms by the default signal: ${took} ms`);
 });
 
-test("the pages use Axinom's licence service, certificate and PUBLIC token, the same in both, and the token unlocks only the public test key", async () => {
+test("the route-1 page uses Axinom's licence service, certificate and PUBLIC token, held once; the token unlocks only the public test key", async () => {
   const route1 = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
-  const apple = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
-  const tok1 = route1.match(/const AXINOM_PUBLIC_TOKEN = "([^"]+)"/)[1], tok2 = apple.match(/const TOKEN = "([^"]+)"/)[1];
-  assert.equal(tok1, tok2, "one public token on both pages");
+  const tok1 = route1.match(/const AXINOM_PUBLIC_TOKEN = "([^"]+)"/)[1];
+  assert.equal(route1.split(tok1).length, 2, "the public token is written once on the page; Apple's test and the card's Apple form both use that one");
   const p = b64url(tok1.split(".")[1]);
   assert.equal(p.com_key_id, "69e54088-e9e0-4530-8c1a-1eb6dcd0d14e", "Axinom's own public test account");
   assert.deepEqual(p.message.content_keys_source.inline.map((x) => x.id), [kidToUuid(AXINOM_PUBLIC_TEST.kid)], "it licenses the public test key and nothing else");
   assert.equal(AXINOM_PUBLIC_TEST.key, "fc35340837310cc0fb53de97e22a69e0", "the key Axinom publishes for it (/DU0CDcxDMD7U96X4ipp4A==)");
-  for (const [page, re] of [[route1, /const AXINOM_LICENSE_ADDRESS = \/(.+)\/;/], [apple, /const LICENSE_ADDRESS = \/(.+)\/;/]]) assert.equal(page.match(re)[1], FAIRPLAY_LICENSE_ADDRESS.source, "the page sends a token only where site/axinom.mjs allows");
-  for (const [page, lic, cert] of [[route1, /const AXINOM_LICENSE = "([^"]+)"/, /const AXINOM_CERT = "([^"]+)"/], [apple, /const LICENSE = "([^"]+)"/, /const CERT = "([^"]+)"/]]) {
-    assert.equal(page.match(lic)[1], AXINOM_FAIRPLAY_LICENSE); assert.equal(page.match(cert)[1], AXINOM_FAIRPLAY_CERT);
-  }
+  assert.equal(route1.match(/const AXINOM_LICENSE_ADDRESS = \/(.+)\/;/)[1], FAIRPLAY_LICENSE_ADDRESS.source, "the page sends a token only where site/axinom.mjs allows");
+  assert.equal(route1.match(/const AXINOM_LICENSE = "([^"]+)"/)[1], AXINOM_FAIRPLAY_LICENSE); assert.equal(route1.match(/const AXINOM_CERT = "([^"]+)"/)[1], AXINOM_FAIRPLAY_CERT);
+  // Apple's test (the one link for every device): those same settings, and only public material, never the photo
+  assert.match(route1, /^ {4}async function protectedPlay\(videoId, p, url, what, token = AXINOM_PUBLIC_TOKEN, license = AXINOM_LICENSE\) \{$/m);
+  assert.match(route1, /^ {6}player\.configure\(\{ drm: \{ servers: \{ "com\.apple\.fps": license \}, advanced: \{ "com\.apple\.fps": \{ serverCertificateUri: AXINOM_CERT \} \} \} \}\);$/m);
+  const from = route1.indexOf("  async function appleTest() {"), to = route1.indexOf("\n  }\n", from);
+  assert.ok(from > 0 && to > from, "Apple's test is where this test reads it");
+  const body = route1.slice(from, to);
+  assert.ok(!/\bCLIP\b|\btryOne\b|\bORDER\b|\.mpd\b|photo\.enc/.test(body), "Apple's test names nothing of the photo's");
+  assert.deepEqual([...body.matchAll(/(?:protectedPlay\("v\w", "\w", |\.load\(|v\.src = )([^,);]+)/g)].map((m) => m[1]).sort(), ["APPLE_FILM", "APPLE_FILM_CLEAR", "APPLE_FILM_CLEAR", "CARD_FAIRPLAY.manifest", "ownBase + \"master.m3u8\"", "url"].sort(), "it plays the film, the film unprotected, the card's Apple form and the own card's: nothing else");
 });
 
-// The Apple check page's own lines for our account's card (read from the page, never copied): the card is
+// Apple's test's own lines for our account's card (read from the route-1 page, never copied): the card is
 // played only through the folder current.json names (8 hex characters, nothing else) and that folder's own
 // token; with nothing made yet, or a folder name of any other shape, or no token there, nothing is played.
-test("the Apple check page plays our account's card only from the folder current.json names, with that folder's token", async () => {
-  const page = await fs.readFile(join(REPO, "web", "research", "apple", "index.html"), "utf8");
-  const from = page.indexOf("  let ownToken = null, ownBase = null, ownLicense = LICENSE,"), to = page.indexOf("\n})();", from);
+test("Apple's test plays our account's card only from the folder current.json names, with that folder's token", async () => {
+  const page = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
+  const from = page.indexOf("    let ownToken = null, ownBase = null, ownLicense = AXINOM_LICENSE,"), to = page.indexOf("\n  }\n", from);
   assert.ok(from > 0 && to > from, "the page's own-card lines are where this test reads them");
-  const lines = page.slice(from, to), OWN = page.match(/const OWN = "([^"]+)";/)[1], LICENSE = page.match(/const LICENSE = "([^"]+)";/)[1];
-  const LICENSE_ADDRESS = new RegExp(page.match(/const LICENSE_ADDRESS = \/(.+)\/;/)[1]);
-  assert.equal(OWN, "../drm/card-fairplay-own/");
+  const lines = page.slice(from, to), OWN = page.match(/const CARD_FAIRPLAY_OWN = "([^"]+)";/)[1], LICENSE = page.match(/const AXINOM_LICENSE = "([^"]+)";/)[1];
+  const LICENSE_ADDRESS = new RegExp(page.match(/const AXINOM_LICENSE_ADDRESS = \/(.+)\/;/)[1]);
+  assert.equal(OWN, "card-fairplay-own/");
   const runWith = async (files) => {
     const seen = [], calls = [];
     const fetch = async (url) => { seen.push(url); const k = url.replace(/\?v=\d+$/, ""); const body = files[k];
       return body === undefined ? { ok: false, json: async () => { throw new Error("404"); }, text: async () => "" } : { ok: true, json: async () => JSON.parse(body), text: async () => body }; };
     const protectedPlay = async (...a) => { calls.push(a); };
     const set = (id, text) => calls.push(["set", id, text]);
-    await new Function("fetch", "OWN", "LICENSE", "LICENSE_ADDRESS", "protectedPlay", "set", "log", `return (async () => {${lines}\n})();`)(fetch, OWN, LICENSE, LICENSE_ADDRESS, protectedPlay, set, () => {});
+    await new Function("fetch", "CARD_FAIRPLAY_OWN", "AXINOM_LICENSE", "AXINOM_LICENSE_ADDRESS", "protectedPlay", "set", "alog", `return (async () => {${lines}\n})();`)(fetch, OWN, LICENSE, LICENSE_ADDRESS, protectedPlay, set, () => {});
     return { plays: calls.filter((c) => c[0] !== "set"), sets: calls.filter((c) => c[0] === "set"), seen };
   };
   // nothing made yet: the cell says so, nothing is played
   let r = await runWith({});
   assert.deepEqual(r.plays, []); assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /not made yet/.test(text)), JSON.stringify(r.sets));
-  assert.ok(/^\.\.\/drm\/card-fairplay-own\/current\.json\?v=\d+$/.test(r.seen[0]), "current.json is asked for fresh: " + r.seen[0]);
+  assert.ok(/^card-fairplay-own\/current\.json\?v=\d+$/.test(r.seen[0]), "current.json is asked for fresh: " + r.seen[0]);
   // a folder and its token: the card in that folder, with that token
   r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
   assert.deepEqual(r.plays.map((a) => [a[0], a[1], a[2], a[4], a[5]]), [["vo", "o", OWN + "1a2b3c4d/master.m3u8", "TOKEN-1", LICENSE]], "no address recorded: the shared one");
@@ -1006,14 +1011,13 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
   const httpError = { category: 1, code: 1001, data: ["https://x.drm-fairplay-licensing.axprod.net/AcquireLicense", 403, "", { "x-axdrm-errormessage": WHY }, 2] };
   const licenceError = { category: 6, code: 6007, data: [httpError] };
   const helpersOf = (page) => page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
-  for (const f of ["web/research/apple/index.html", "web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
     const page = await fs.readFile(join(REPO, f), "utf8");
     const axinomReason = new Function(`${helpersOf(page)}\nreturn axinomReason;`)();
     assert.equal(axinomReason(licenceError), WHY, `${f}: a licence error wrapping the HTTP error`);
     assert.equal(axinomReason(httpError), WHY, `${f}: the HTTP error itself`);
     assert.equal(axinomReason({ code: 6007, data: [{ code: 1001, data: ["u", 500, "", {}] }] }), "", `${f}: no reason without the header`);
     assert.equal(axinomReason({}), "", `${f}: nothing`);
-    if (f.includes("apple")) continue;
     // the route-1 page and the views built from it: the error listener and the failed load both fill the cell
     const line = page.match(/^ *const refused = \(d\) => \{ const why = fp \? axinomReason\(d\) : ""; if \(why\) set\("r-lic", `refused by Axinom: \$\{why\}`, "bad"\); return why; \};$/m);
     assert.ok(line, `${f}: a refusal goes in the licence cell`);
@@ -1023,9 +1027,9 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
     assert.match(page, /player\.addEventListener\("error", \(e\) => \{ refused\(\(e && e\.detail\) \|\| \{\}\);/, `${f}: from the player's error event`);
     assert.match(page, /\} catch \(e\) \{\n\s+refused\(e\);\n\s+log\(`\$\{tierName\}: not available here/, `${f}: and from a failed load`);
   }
-  // the Apple check page: its own protectedPlay, run with a stand-in player that fails the way Shaka does
-  const page = await fs.readFile(join(REPO, "web/research/apple/index.html"), "utf8");
-  const from = page.indexOf("  async function protectedPlay("), to = page.indexOf("\n  await protectedPlay(", from);
+  // Apple's test on the route-1 page: its own protectedPlay, run with a stand-in player that fails the way Shaka does
+  const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
+  const from = page.indexOf("    async function protectedPlay("), to = page.indexOf("\n    await protectedPlay(", from);
   assert.ok(from > 0 && to > from, "protectedPlay is where this test reads it");
   for (const how of ["the load fails", "an error event"]) {
     const sets = [];
@@ -1035,7 +1039,7 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
       addEventListener(type, f) { this.on[type] = f; }
       async load() { if (how === "an error event") { this.on.error({ detail: licenceError }); return; } throw licenceError; }
       drmInfo() { return null; } } };
-    const protectedPlay = new Function("shaka", "$", "CERT", "log", "set", "watch", "TOKEN", "LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+    const protectedPlay = new Function("shaka", "$", "AXINOM_CERT", "alog", "set", "watch", "AXINOM_PUBLIC_TOKEN", "AXINOM_LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
       shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, (id, text) => sets.push([id, text]), () => {}, "T", "https://drm-fairplay-licensing.axprod.net/AcquireLicense");
     await protectedPlay("vo", "o", "u", "our card, our account (protected)");
     assert.ok(sets.some(([id, text]) => id === "o-lic" && text === "refused by Axinom: " + WHY), `${how}: the licence cell names Axinom's reason: ${JSON.stringify(sets)}`);
@@ -1045,16 +1049,17 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
   const shaka2 = { net: { NetworkingEngine: { RequestType: { LICENSE: 2 } } }, Player: class {
     async attach() {} configure() {} addEventListener() {} async load() {} drmInfo() { return { keySystem: "com.apple.fps" }; }
     getNetworkingEngine() { return { registerRequestFilter() {}, registerResponseFilter(f) { responseFilters.push(f); } }; } } };
-  await new Function("shaka", "$", "CERT", "log", "set", "watch", "TOKEN", "LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+  await new Function("shaka", "$", "AXINOM_CERT", "alog", "set", "watch", "AXINOM_PUBLIC_TOKEN", "AXINOM_LICENSE", `${helpersOf(page)}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
     shaka2, () => ({ play: () => Promise.resolve() }), "cert", () => {}, (id, text) => sets.push([id, text]), () => {}, "T", "https://drm-fairplay-licensing.axprod.net/AcquireLicense")("vo", "o", "u", "x");
   responseFilters[0](1, { data: new ArrayBuffer(5) }); responseFilters[0](0, { data: new ArrayBuffer(6) });
-  assert.ok(!sets.some(([id]) => id === "o-lic"), "Apple page: no licence line for a manifest or a segment");
+  assert.ok(!sets.some(([id]) => id === "o-lic"), "Apple's test: no licence line for a manifest or a segment");
   responseFilters[0](2, { data: new ArrayBuffer(7) });
-  assert.deepEqual(sets.filter(([id]) => id === "o-lic"), [["o-lic", "obtained, 7 bytes"]], "Apple page: obtained, for the licence");
+  assert.deepEqual(sets.filter(([id]) => id === "o-lic"), [["o-lic", "obtained, 7 bytes"]], "Apple's test: obtained, for the licence");
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
-    const pg = await fs.readFile(join(REPO, f), "utf8"), at = pg.indexOf("player.getNetworkingEngine().registerResponseFilter("), end = pg.indexOf("\n    });", at);
-    assert.ok(at > 0 && end > at, `${f}: its response filter is where this test reads it`);
-    const got = [], filter = new Function("shaka", "set", "log", "tierName", `return ${pg.slice(at + "player.getNetworkingEngine().registerResponseFilter(".length, end)}\n    };`)(shaka2, (id, text) => got.push([id, text]), () => {}, "t");
+    // the page's own player (tryOne, at four spaces); Apple's test has its own, read above
+    const head = "\n    player.getNetworkingEngine().registerResponseFilter(", pg = await fs.readFile(join(REPO, f), "utf8"), at = pg.indexOf(head), end = pg.indexOf("\n    });", at + 1);
+    assert.ok(at > 0 && end > at && pg.indexOf(head, at + 1) < 0, `${f}: its response filter is where this test reads it, once`);
+    const got = [], filter = new Function("shaka", "set", "log", "tierName", `return ${pg.slice(at + head.length, end)}\n    };`)(shaka2, (id, text) => got.push([id, text]), () => {}, "t");
     filter(1, { data: new ArrayBuffer(5) }); filter(0, { data: new ArrayBuffer(6) });
     assert.deepEqual(got, [], `${f}: no licence line for a manifest or a segment`);
     filter(2, { data: new ArrayBuffer(9) });
@@ -1514,21 +1519,28 @@ test("the workflows' runner and the tests check the packager before they run it,
     assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
   }
   await assert.rejects(fs.access(marker), "the other file was never run");
-  // ... and every test file that names PACKAGER_BIN at all, in any spelling, is listed with what it does with it: a new
-  // file that read it, and ran it unchecked, fails here until it is listed (the fourteenth review: the CI steps' own check
-  // lines, which held any such file, are gone; the fifteenth: only one spelling of reading it was looked for)
+  // ... and every .js or .mjs file under site/test and service/test, subfolders included, whose text holds the name
+  // PACKAGER_BIN is listed with HOW MANY TIMES it holds it, and what it does with it: a new file that names it, or one
+  // more use in a listed file, fails here until the list is brought up to date, and so is read again (the fourteenth
+  // review: the CI steps' own check lines, which held any such file, are gone; the fifteenth: only one way of reading it
+  // was looked for; the sixteenth: a list of names alone let a listed file gain an unchecked reader). It reads the name
+  // as written: one built from parts (process.env["PACKAGER" + "_BIN"]) is not seen, and is for review.
   const NAMES = {
-    "site/test/site.test.mjs": "checks it as it loads (above)",
-    "site/test/fairplay.test.mjs": "checks it as it loads (above); sets it for the programs it runs, which check it",
-    "service/test/pipeline.test.mjs": "checks it as it loads (above)",
-    "service/test/helpers.mjs": "hands it to the service, which checks it itself (service/test/api.test.mjs)",
-    "site/test/jobs.test.mjs": "sets it for the real worker, which checks it",
-    "site/test/pages.test.mjs": "workflow text for the guard; runs nothing",
+    "site/test/site.test.mjs": [2, "checks it as it loads (above)"],
+    "site/test/fairplay.test.mjs": [18, "checks it as it loads (above); sets it for the programs it runs, which check it"],
+    "service/test/pipeline.test.mjs": [2, "checks it as it loads (above)"],
+    "service/test/helpers.mjs": [1, "hands it to the service, which checks it itself (service/test/api.test.mjs)"],
+    "site/test/jobs.test.mjs": [1, "sets it for the real worker, which checks it"],
+    "site/test/pages.test.mjs": [14, "workflow text for the guard; runs nothing"],
   };
-  const named = [];
+  const counted = {};
   for (const dir of ["site/test", "service/test"])
-    for (const f of await fs.readdir(join(REPO, dir))) if (/\.m?js$/.test(f) && (await fs.readFile(join(REPO, dir, f), "utf8")).includes("PACKAGER_BIN")) named.push(`${dir}/${f}`);
-  assert.deepEqual(named.sort(), Object.keys(NAMES).sort(), "every test file that names PACKAGER_BIN is listed, with what it does with it");
+    for (const f of await fs.readdir(join(REPO, dir), { recursive: true })) {
+      if (!/\.m?js$/.test(f) || f.split(/[\\/]/).includes("node_modules")) continue;
+      const n = (await fs.readFile(join(REPO, dir, f), "utf8")).split("PACKAGER_BIN").length - 1;
+      if (n) counted[`${dir}/${f.split("\\").join("/")}`] = n;
+    }
+  assert.deepEqual(counted, Object.fromEntries(Object.entries(NAMES).map(([f, [n]]) => [f, n])), "every test file that names PACKAGER_BIN is listed, with how many times, and what it does with it");
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
