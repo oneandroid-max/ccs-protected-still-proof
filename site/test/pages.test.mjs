@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const read = (f) => fs.readFile(join(REPO, f), "utf8");
@@ -113,13 +114,18 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 
 // The route-1 page's own words, as every visitor reads them before its script runs, held to what was measured (the
 // seventeenth and eighteenth reviews: the lede said screenshots were known to be black where software protection was
-// never measured): no such claim, and the places where it was measured named
+// never measured): no such claim, and the places where it was measured named. And the words are pinned by a
+// fingerprint (the nineteenth review: other over-claiming words passed the list of banned phrases), so any change to
+// them fails here until they are read again against the measurements and the fingerprint is brought up to date.
+const PAGE_WORDS = { "web/research/drm/index.html": "6d210c02aa1f2867", "site/view.html": "c37314fafa2650bb", "site/all.html": "d9cab58c80f51e28" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
     const html = await read(f);
     const words = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     for (const re of [/known to come out black/i, /measured black there/i, /where screenshots were measured black/i, /screenshots are known/i]) assert.ok(!re.test(words), `${f}: no claim beyond the measurements (${re})`);
     assert.match(words, /software protection in Chrome and Edge on Windows and Android \(screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)/, `${f}: the lede names where software protection was measured`);
+    const print = createHash("sha256").update(words).digest("hex").slice(0, 16);
+    assert.equal(print, PAGE_WORDS[f], `${f}: its words changed; read them against the measurements, then update the fingerprint (${print}):\n${words}`);
   }
 });
 
