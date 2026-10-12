@@ -1,0 +1,22 @@
+{
+  "content": "the route-1 test card (public by design; never a picture of the owner's)",
+  "key": "a random key of its own, as a picture gets; the licence token (token.txt) is minted by our Axinom account and unlocks only this card",
+  "kid": "22816f1e-f3af-1dac-d029-52e0facaeebc",
+  "iv": "e40afad53ff5f978b3b6773298ec25d8",
+  "keyUri": "skd://22816f1e-f3af-1dac-d029-52e0facaeebc:E40AFAD53FF5F978B3B6773298EC25D8",
+  "scheme": "cbcs",
+  "samples": 30,
+  "samplesEncrypted": 30,
+  "width": 720,
+  "height": 960,
+  "bytes": 34687,
+  "decryptCheck": {
+    "ffmpeg": 0,
+    "shakaPackager": 0,
+    "undecrypted": "no frame decoded"
+  },
+  "packager": "packager version v3.9.3-0a8ba4f-release",
+  "comKeyId": "3c26c7fb-a182-4af3-a3ad-b4e001070e77",
+  "expires": "2026-12-11T03:10:18.925Z",
+  "license": "https://eeb795d3.drm-fairplay-licensing.axprod.net/AcquireLicense"
+}
