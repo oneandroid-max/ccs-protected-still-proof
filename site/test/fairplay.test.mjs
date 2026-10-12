@@ -7,7 +7,7 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, delimiter } from "node:path";
+import { join, delimiter, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createDecipheriv, createHash, createHmac, randomBytes as nodeRandom } from "node:crypto";
 import { readCommunicationKey, readAxinomSettings, encryptContentKey, mintToken, newFairPlayIds, kidToUuid, checkTokenWithAxinom, checkKeyWithAxinom, tokenSignedWith, comKeyCheck, TOKEN_CHECK_BODY_BYTES, TOKEN_CHECK_TIMEOUT_MS, AXINOM_PUBLIC_TEST, AXINOM_FAIRPLAY_LICENSE, AXINOM_FAIRPLAY_CERT, FAIRPLAY_LICENSE_ADDRESS } from "../axinom.mjs";
@@ -977,7 +977,9 @@ globalThis.fetch = async (url, init) => {
 };
 `);
   const out = await fs.mkdtemp(join(tmp, "cli-card-")), own = await fs.mkdtemp(join(tmp, "cli-own-"));
-  const env = { ...process.env, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: tools.packager };
+  // a RELATIVE packager path: the card is packaged in a work folder, so it runs only if the command runs the path it checked
+  let rel = relative(process.cwd(), await checkPackager(tools.packager)); if (!rel.includes("/")) rel = "./" + rel;
+  const env = { ...process.env, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: rel };
   const go = (mode) => { const r = spawnSync(process.execPath, ["--import", pathToFileURL(stub).href, join(REPO, "tools", "fairplay-card.mjs"), "--out", out, "--own", own], { encoding: "utf8", env: { ...env, STUB_AXINOM: mode } }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
   const noKey = (r) => { for (const v of [COM.key.toString("base64"), COM.key.toString("hex")]) assert.ok(!r.out.includes(v), "the key is never printed"); };
   let r = go("accept");
@@ -1414,7 +1416,14 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
     const rr = spawnSync(process.execPath, [join(REPO, "site", "worker.mjs")], { cwd: base, encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", GITHUB_EVENT_PATH: evt, SITE_DIR: relSite, PACKAGER_BIN: "bin/packager", WORKER_BLOB_FILE: blob } });
     const ro = (rr.stdout || "") + (rr.stderr || "");
     assert.equal(rr.status, 0, ro); assert.match(ro, /^result: ready$/m, "the picture was packaged by the file checked: " + ro.slice(-400));
+    // an error inside the job is named on the run's page, and the job ends red
+    await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "mosaic", key: keyHex, ask: "XYZ" } }));
+    const re = spawnSync(process.execPath, [join(REPO, "site", "worker.mjs")], { encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", GITHUB_EVENT_PATH: evt, SITE_DIR: relSite, PACKAGER_BIN: real } });
+    assert.equal(re.status, 1, re.stdout + re.stderr); assert.match(re.stdout, /^::error title=Site job::bad request id$/m);
   }
+  // the backfill runs the path it checked: its runs in these tests never package (no picture of theirs needs a form with
+  // Axinom's acceptance), so this reads the line itself
+  assert.match(await fs.readFile(join(REPO, "site", "backfill.mjs"), "utf8"), /tools\.packager = await checkPackager\(tools\.packager\)/);
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

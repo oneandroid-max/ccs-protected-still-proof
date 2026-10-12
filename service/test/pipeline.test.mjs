@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { jpegOrientation, withOrientation } from "../lib/exif.mjs";
 import { renderClip, targetSize, checkBoxes, MAX_SIDE, probe } from "../lib/pipeline.mjs";
 import { run } from "../lib/util.mjs";
+import { checkPackager } from "../lib/packager-pin.mjs";
 import { startApp, login, upload, REPO } from "./helpers.mjs";
 
 const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
@@ -62,7 +63,10 @@ test("the whole pipeline through the API with the real packager: upload → read
     t.skip(`NOT RUN HERE: shaka-packager ("${tools.packager}") is not installed in this environment; CI runs it`);
     return;
   }
-  const app = await startApp({ maxUploadBytes: 5 * 1024 * 1024 });
+  // given as a RELATIVE path: each photo is packaged in its own folder, so it runs only if the service runs the very path it
+  // checked (the twelfth review: the check read one file and the run, from the photo's folder, looked for another)
+  let rel = relative(process.cwd(), await checkPackager(tools.packager)); if (!rel.includes("/")) rel = "./" + rel;
+  const app = await startApp({ maxUploadBytes: 5 * 1024 * 1024, tools: { ...tools, packager: rel } });
   try {
     const { cookie } = await login(app.base);
     const pic = await fs.readFile(await jpeg("card.jpg", 720, 960, "0x8c1f4e"));
