@@ -41,7 +41,7 @@
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
 <p class="detected" id="detected" hidden></p>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device, and software protection in Chrome and Edge on Windows and Android (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11). Software protection in other browsers is not accepted until each is measured the same way, and on Apple devices (FairPlay) the photo is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
+<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device, and software protection in Chrome and Edge on Windows and Android (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11). This page also accepts software protection, not yet measured, in Edge on Android and in other browsers on Windows and Android that report themselves as Chrome, apps' built-in browsers among them. Software protection anywhere else (Firefox, Samsung Internet and Opera; Macs, Linux and Chromebooks) is not accepted until measured the same way, and on Apple devices (FairPlay) the photo is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
 
 <div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
@@ -123,7 +123,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 08:28 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 09:38 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -228,8 +228,10 @@
   const DESKTOP_PHONE = PLATFORM === "Linux" && /SamsungBrowser\//.test(ua) && !/SMART-TV|Tizen/i.test(ua);
   const DEVICE_NAME = DESKTOP_PHONE ? "an Android phone or tablet asking for desktop sites"
     : { "iPhone/iPad": "an iPhone or iPad", "Mac": "a Mac", "Windows": "Windows", "Android": "Android", "ChromeOS": "a Chromebook", "Linux": "Linux" }[PLATFORM] || "this device";
+  // what the browser reports, said the same way on every line: an iPad asking for desktop sites reports itself as a Mac
+  const REPORTS = APPLE && PLATFORM === "iPhone/iPad" && !/iPhone|iPad|iPod/.test(ua) ? "it reports itself as a Mac, but has a touch screen" : "as the browser reports itself";
   // (an app's built-in browser reports the engine it is built on, and the rule reads that: said, so no claim about Chrome is read as one about it)
-  const SAYS = `${BROWSER_NAME} on ${PLATFORM} (as the browser reports itself${BROWSER !== "other" && BROWSER_NAME !== BROWSER ? `; the rule reads it as ${BROWSER}` : ""})`;
+  const SAYS = `${BROWSER_NAME} on ${PLATFORM} (${REPORTS}${BROWSER !== "other" && BROWSER_NAME !== BROWSER ? `; the rule reads it as ${BROWSER}` : ""})`;
   // where software protection was measured: screenshots of it black (2026-10-11); the rule accepts it more widely (the plan's side finding)
   const SOFTWARE_SEEN = "screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11";
   // WHAT THIS PAGE DETECTED, at the top in plain words (the owner, 2026-10-12: "the site needs to know automatically what
@@ -239,8 +241,8 @@
   const held = APPLE_TEST ? "the photo" : shown; // under Apple's test the card plays in the test, so the photo is what waits
   // Chrome or Edge by its own name (not an app's built-in browser reporting Chrome), where this page would accept even
   // software protection: offering none, its protected-content setting is most likely off
-  const SETTING_OFF = SOFTWARE_MEASURED && BROWSER_NAME === BROWSER && !TEST;
-  set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${DESKTOP_PHONE ? "it reports itself as Linux" : APPLE && PLATFORM === "iPhone/iPad" && !/iPhone|iPad|iPod/.test(ua) ? "it reports itself as a Mac, but has a touch screen" : "as the browser reports itself"}). `
+  const CHROME_ITSELF = SOFTWARE_MEASURED && BROWSER_NAME === BROWSER;
+  set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${DESKTOP_PHONE ? "it reports itself as Linux" : REPORTS}). `
     + (TEST ? "This link runs a test, on the test card: the box above says which."
       : APPLE_TEST ? "On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead."
       : FAIRPLAY_OK ? `${SHOWN} is shown here only through Apple's protected path (FairPlay), measured black on this kind of device.`
@@ -312,7 +314,7 @@
       const why = `offers no Apple FairPlay, so ${held} is held back and Apple's test cannot run in it`;
       set("apple-nofps", BROWSER_NAME === "Safari" ? `This Safari ${why}.` : `This browser ${why}. Open this link in Safari.`);
       $("apple-nofps").hidden = false;
-      set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (as the browser reports itself). It ${why}${BROWSER_NAME === "Safari" ? "" : ": open this link in Safari"}.`);
+      set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${REPORTS}). It ${why}${BROWSER_NAME === "Safari" ? "" : ": open this link in Safari"}.`);
       set("r-rule", `${SAYS}: Apple FairPlay is not available in this browser, so ${held} is held back and Apple's test cannot run here`);
       set("r-granted", "nothing: this browser offers no Apple FairPlay", "bad");
       set("r-ks", "held back — this browser offers no Apple FairPlay", "bad");
@@ -379,8 +381,8 @@
   if (APPLE_TEST) appleTest().catch((e) => set("r-fps", "Apple's test stopped: " + (e && e.message), "bad"));
   if (!shaka.Player.isBrowserSupported()) {
     set("r-ks", "held back — this browser cannot play protected video", "bad");
-    set("r-expect", `${shown} is not shown on this browser`, "bad");
-    showMsg(`This browser cannot play protected video, so ${shown} isn't shown here. ` + (SETTING_OFF ? "An up-to-date Chrome or Edge can play it." : ELSEWHERE));
+    set("r-expect", `${held} is not shown on this browser`, "bad");
+    showMsg(`This browser cannot play protected video, so ${held} isn't shown here.` + (TEST ? "" : CHROME_ITSELF ? " An up-to-date Chrome or Edge can play it." : " " + ELSEWHERE));
     return;
   }
 
@@ -523,7 +525,7 @@
     set("r-granted", "nothing this page accepts", "bad");
     set("r-expect", `${shown} is not shown on this browser, so there is nothing to capture`, "bad");
     showMsg(TEST ? `This browser doesn't offer what this test asks for (${TEST_FAIRPLAY ? "Apple's FairPlay" : TEST_SOFTWARE ? "software protection: Widevine or PlayReady" : "ClearKey"}), so the test card isn't shown here.`
-      : SETTING_OFF ? `This browser offered none of the protection this page accepts, so ${shown} isn't shown here. If its protected-content setting is off, turning it on lets ${shown} show here.`
+      : SOFTWARE_MEASURED ? `This browser offered none of the protection this page accepts, so ${shown} isn't shown here. ` + (CHROME_ITSELF ? `If its protected-content setting is off, turning it on lets ${shown} show here.` : ELSEWHERE)
       : `This browser hasn't been confirmed to keep ${shown} out of screenshots, so it isn't shown here. ${ELSEWHERE}`);
   }
 

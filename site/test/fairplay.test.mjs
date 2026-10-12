@@ -1070,7 +1070,9 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
 // A licence token goes only with a licence request (the seventeenth review: nothing held that, for Apple's test or for
 // the page's own player): every other request a player makes (a playlist, a segment, the certificate) carries none
 test("a licence token is added to licence requests only, by Apple's test and by the page's own player", async () => {
-  const LICENSE = 2, OTHERS = [0, 1, 3, 4, 5, 6, 7];
+  // every request type of the pinned player library (shaka 5.2.10: 0 to 13) and one more, all but the licence's (the
+  // twentieth review: a filter adding the token to types above 7 passed)
+  const LICENSE = 2, OTHERS = Array.from({ length: 15 }, (_, i) => i).filter((t) => t !== LICENSE);
   // requests as the player makes them, with an address (the eighteenth review: a filter that decided by the address
   // passed requests with none): a licence request to Axinom's licence service carries the token; no other request
   // type does, whatever its address; and a licence-type request to any other address may carry it or not (the
@@ -1081,14 +1083,16 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   const ask = (f, type, uri) => { const r = { headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" }; f(type, r); return r.headers; };
   const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
   const helpers = page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
+  // the page's own pattern of Axinom's licence addresses, given to the code under test (a stricter filter may use it)
+  const addressOf = (pg) => new Function(`return ${pg.match(/^ *const AXINOM_LICENSE_ADDRESS = (\/.*\/);$/m)[1]}`)();
   // Apple's test (the route-1 page): its own protectedPlay, with a stand-in player that keeps the filter it is given
   const from = page.indexOf("    async function protectedPlay("), to = page.indexOf("\n    await protectedPlay(", from);
   assert.ok(from > 0 && to > from, "protectedPlay is where this test reads it");
   const filters = [];
   const shaka = { net: { NetworkingEngine: { RequestType: { LICENSE } } }, Player: class { async attach() {} configure() {} addEventListener() {} async load() {} drmInfo() { return null; }
     getNetworkingEngine() { return { registerRequestFilter(f) { filters.push(f); }, registerResponseFilter() {} }; } } };
-  const protectedPlay = new Function("shaka", "$", "AXINOM_CERT", "alog", "set", "watch", "AXINOM_PUBLIC_TOKEN", "AXINOM_LICENSE", `${helpers}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
-    shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, () => {}, () => {}, "PUBLIC.TOKEN", "https://drm-fairplay-licensing.axprod.net/AcquireLicense");
+  const protectedPlay = new Function("shaka", "$", "AXINOM_CERT", "alog", "set", "watch", "AXINOM_PUBLIC_TOKEN", "AXINOM_LICENSE", "AXINOM_LICENSE_ADDRESS", `${helpers}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+    shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, () => {}, () => {}, "PUBLIC.TOKEN", "https://drm-fairplay-licensing.axprod.net/AcquireLicense", addressOf(page));
   await protectedPlay("vo", "o", "u", "x", "OWN.TOKEN");
   await protectedPlay("vp", "p", "u", "y");
   assert.equal(filters.length, 2, "one request filter per player");
@@ -1103,7 +1107,7 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     const pg = await fs.readFile(join(REPO, f), "utf8"), head = "    if (fp) player.getNetworkingEngine().registerRequestFilter(", at = pg.indexOf(head), end = pg.indexOf("\n    });", at);
     assert.ok(at > 0 && end > at && pg.indexOf(head, at + 1) < 0, `${f}: its request filter is where this test reads it, once`);
     const got = [];
-    new Function("fp", "player", "shaka", "log", "tierName", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t");
+    new Function("fp", "player", "shaka", "log", "tierName", "AXINOM_LICENSE_ADDRESS", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t", addressOf(pg));
     assert.equal(got.length, 1, f);
     for (const uri of URIS) {
       for (const type of OTHERS) assert.deepEqual(ask(got[0], type, uri), {}, `${f}, request type ${type} to ${uri}: no token`);
@@ -1574,14 +1578,15 @@ test("the workflows' runner and the tests check the packager before they run it,
   // file gain an unchecked reader; the seventeenth: a count of uses let one be swapped for another; the eighteenth: a
   // .mts helper or a shell script was not read; the nineteenth: a package in a node_modules folder inside them was
   // skipped, and a test calling configFromEnv(), the server's reader of the environment, got PACKAGER_BIN as given
-  // without naming it, so configFromEnv counts as naming it). It reads the names as written: one built from parts
+  // without naming it, so configFromEnv counts as naming it; the twentieth: renamed, it passed, so any line naming the
+  // server's file, server.mjs, counts too). It reads the names as written: one built from parts
   // (process.env["PACKAGER" + "_BIN"]) is not seen, and is for review; so is a file outside these two folders,
   // node_modules folders above them included.
   const NAMES = {
     "site/test/site.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
-    "site/test/fairplay.test.mjs": ["4d7df32dfcacfdae", "checks it as it loads (above); sets it for the programs it runs, which check it"],
+    "site/test/fairplay.test.mjs": ["49d653d0d36e1792", "checks it as it loads (above); sets it for the programs it runs, which check it"],
     "service/test/pipeline.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
-    "service/test/helpers.mjs": ["d9df89b37273dec5", "checks it, and hands the app only the checked path (or a name that runs nothing)"],
+    "service/test/helpers.mjs": ["5b6ebca3c151f743", "checks it, and hands the app only the checked path (or a name that runs nothing); imports the app (createApp), which checks it again before running it"],
     "site/test/jobs.test.mjs": ["1aff2a2b273ca84c", "sets it for the real worker, which checks it"],
     "site/test/pages.test.mjs": ["7d87c1b3516e031e", "workflow text for the guard; runs nothing"],
   };
@@ -1589,11 +1594,11 @@ test("the workflows' runner and the tests check the packager before they run it,
   for (const dir of ["site/test", "service/test"])
     for (const f of await fs.readdir(join(REPO, dir), { recursive: true })) {
       if (!(await fs.stat(join(REPO, dir, f))).isFile()) continue;
-      const lines = (await fs.readFile(join(REPO, dir, f), "utf8")).split("\n").filter((l) => /PACKAGER_BIN|configFromEnv/.test(l)).map((l) => l.trim());
+      const lines = (await fs.readFile(join(REPO, dir, f), "utf8")).split("\n").filter((l) => /PACKAGER_BIN|configFromEnv|server\.mjs/.test(l)).map((l) => l.trim());
       if (lines.length) named[`${dir}/${f.split("\\").join("/")}`] = { print: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16), lines };
     }
   assert.deepEqual(Object.fromEntries(Object.entries(named).map(([f, v]) => [f, v.print])), Object.fromEntries(Object.entries(NAMES).map(([f, [print]]) => [f, print])),
-    "every test file that names PACKAGER_BIN (or configFromEnv) is listed with the fingerprint of the lines that name it; read them, then update the list:\n" + Object.entries(named).map(([f, v]) => `${f} ${v.print}:\n  ${v.lines.join("\n  ")}`).join("\n"));
+    "every test file that names PACKAGER_BIN (or configFromEnv, or server.mjs) is listed with the fingerprint of the lines that name it; read them, then update the list:\n" + Object.entries(named).map(([f, v]) => `${f} ${v.print}:\n  ${v.lines.join("\n  ")}`).join("\n"));
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

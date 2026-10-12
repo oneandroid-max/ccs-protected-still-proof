@@ -117,7 +117,11 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // never measured): no such claim, and the places where it was measured named. And the words are pinned by a
 // fingerprint (the nineteenth review: other over-claiming words passed the list of banned phrases), so any change to
 // them fails here until they are read again against the measurements and the fingerprint is brought up to date.
-const PAGE_WORDS = { "web/research/drm/index.html": "6d210c02aa1f2867", "site/view.html": "c37314fafa2650bb", "site/all.html": "d9cab58c80f51e28" };
+// The script is pinned the same way (the twentieth review: a sentence the script writes was changed to an over-claim, and
+// every test passed), with the page version left out (it changes with every edit).
+const PAGE_SCRIPT = { "web/research/drm/index.html": "a51445bab44b1ad2", "site/view.html": "0c349c33e0557b2c", "site/all.html": "7b1224d008cf6a49" };
+const scriptOf = (html) => [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]).join("\n<script>\n").replace(/const PAGE_VERSION = "[^"]*"/, 'const PAGE_VERSION = ""');
+const PAGE_WORDS = { "web/research/drm/index.html": "e497e9dbdcaf3569", "site/view.html": "b22433d1aedbe0a9", "site/all.html": "38c6335cae836df0" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
     const html = await read(f);
@@ -126,6 +130,38 @@ test("the route-1 page's own words claim no measurement that was not made, and n
     assert.match(words, /software protection in Chrome and Edge on Windows and Android \(screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)/, `${f}: the lede names where software protection was measured`);
     const print = createHash("sha256").update(words).digest("hex").slice(0, 16);
     assert.equal(print, PAGE_WORDS[f], `${f}: its words changed; read them against the measurements, then update the fingerprint (${print}):\n${words}`);
+    const said = createHash("sha256").update(scriptOf(html)).digest("hex").slice(0, 16);
+    assert.equal(said, PAGE_SCRIPT[f], `${f}: its script changed; read every sentence it writes against the measurements, then update the fingerprint (${said})`);
+  }
+});
+
+// The lede's account of where software protection is accepted, held to the page's own decision (the twentieth review:
+// a lede stating a stricter rule than the one built passed every test): software protection in the order of attempts
+// for exactly the browsers the lede says accept it, measured or not yet measured, and for none of those it says refuse it
+test("the lede says where software protection is accepted, as the page's own decision block decides it", async () => {
+  const W = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ", A = "Mozilla/5.0 (Linux; Android 14; Pixel 8) ";
+  const GROUPS = {
+    "accepted, measured: Chrome and Edge on Windows, Chrome on Android": [`${W}${CR} Safari/537.36`, `${W}${CR} Safari/537.36 Edg/126.0.0.0`, `${A}${CR} Mobile Safari/537.36`],
+    "accepted, not yet measured: Edge on Android, and other browsers on Windows and Android reporting Chrome": [`${A}${CR} Mobile Safari/537.36 EdgA/126.0.0.0`,
+      `Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/470.0.0.0;]`,
+      `Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 LinkedInApp/9.30`,
+      `${A}AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile DuckDuckGo/5 Safari/537.36`, `${A}${CR} HuaweiBrowser/15.0.4.312 Mobile Safari/537.36`,
+      `${A}${CR} Mobile Safari/537.36 XiaoMi/MiuiBrowser/14.3.0-gn`, `${A}${CR} UCBrowser/13.6.0.1315 Mobile Safari/537.36`, `${W}${CR} YaBrowser/24.6.0.0 Safari/537.36`, `${W}${CR} Safari/537.36 Vivaldi/6.8`],
+    "not accepted: Firefox, Samsung Internet and Opera; Macs, Linux and Chromebooks": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+      "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0", DEVICES["Android Samsung Internet"][0], `${W}${CR} Safari/537.36 OPR/112.0.0.0`, `${A}${CR} Mobile Safari/537.36 OPR/83.0.0.0`,
+      DEVICES["Mac Chrome"][0], DEVICES["Mac Edge"][0], DEVICES["Mac Firefox"][0], DEVICES["Linux Chrome"][0], DEVICES["Linux Firefox"][0], DEVICES.ChromeOS[0]],
+  };
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const html = await read(f), fn = decide(html);
+    const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device, and software protection in Chrome and Edge on Windows and Android \(screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)\./, f);
+    assert.match(lede, /This page also accepts software protection, not yet measured, in Edge on Android and in other browsers on Windows and Android that report themselves as Chrome, apps' built-in browsers among them\./, f);
+    assert.match(lede, /Software protection anywhere else \(Firefox, Samsung Internet and Opera; Macs, Linux and Chromebooks\) is not accepted until measured the same way, and on Apple devices \(FairPlay\) the photo is held back/, f);
+    for (const [group, uas] of Object.entries(GROUPS)) for (const ua of uas) {
+      const r = fn({ userAgent: ua, maxTouchPoints: 0 }, { search: "" }, () => {}, CTX);
+      assert.equal(r.ORDER.includes("widevine-software"), !group.startsWith("not accepted"), `${f}: ${group}: ${ua}: ${r.ORDER.join(", ")}`);
+      assert.ok(r.ORDER.includes("widevine-hardware") && !r.APPLE, `${f}: ${ua}: hardware protection is accepted there too`);
+    }
   }
 });
 
