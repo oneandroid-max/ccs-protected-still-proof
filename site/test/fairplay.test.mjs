@@ -1180,7 +1180,7 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   const answer = (accepted, reached, message) => async () => ({ accepted, reached, status: reached ? (accepted ? 400 : 403) : 0, message });
   const accept = answer(true, true, "Invalid license request. (a test)"), refuse = answer(false, true, "Invalid DRM message. The signature is invalid.");
   const unreachable = answer(false, false, "Axinom could not be reached (3 tries): connect ECONNREFUSED (a test)");
-  const mosaic = (checkKey, ask, tl = tools) => worker({ payload: { key: KEY_HEX, ...(ask !== undefined ? { ask } : {}) }, action: "mosaic", siteDir, tools: tl, checkKey, com: COM });
+  const mosaic = (checkKey, ask, tl = tools, checkTool) => worker({ payload: { key: KEY_HEX, ...(ask !== undefined ? { ask } : {}) }, action: "mosaic", siteDir, tools: tl, checkKey, com: COM, ...(checkTool ? { checkTool } : {}) });
   const metaPath = join(siteDir, "mosaic", "meta.json.enc");
   const mosaicMeta = async () => JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(metaPath))));
   const setMeta = async (over) => fs.writeFile(metaPath, await sealText(KEY, JSON.stringify({ ...(await mosaicMeta()), ...over })));
@@ -1194,14 +1194,20 @@ test("the combined view answers each request by its id; a rebuild of the same pi
 
   // (1) the request id: refused unless 16 hex; written with every kind of answer, newest first; the job's own runs add none
   for (const bad of ["XYZ", "0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", 1234567890123456]) await assert.rejects(mosaic(accept, bad), /bad request id/, String(bad));
-  assert.equal((await mosaic(accept, ask(1))).status, "ready");
+  // the job's packager check, asked by the view just before it first packages: the path it RETURNS is the one run, for a
+  // rebuild and for a renewal of its form (the fourteenth review: discarding it passed every test). The path given here
+  // cannot run; the check answers with the real packager's.
+  const GIVEN = { ...tools, packager: "/nonexistent/the-path-given" }, asked = [];
+  const CHECKED = async (p) => { asked.push(p); return tools.packager; };
+  assert.equal((await mosaic(accept, ask(1), GIVEN, CHECKED)).status, "ready");
   assert.deepEqual((await mosaicMeta()).answered, [ask(1)], "a rebuild carries the id");
   assert.equal((await mosaic(accept, ask(2))).status, "current");
   assert.deepEqual((await mosaicMeta()).answered, [ask(2), ask(1)], "unchanged: the answer is still written");
   assert.equal((await mosaic(accept)).status, "current");
   assert.deepEqual((await mosaicMeta()).answered, [ask(2), ask(1)], "the job's own run adds none");
   await formExpires(10 * 86400000);
-  assert.equal((await mosaic(accept, ask(3))).fairplay, "renewed");
+  assert.equal((await mosaic(accept, ask(3), GIVEN, CHECKED)).fairplay, "renewed");
+  assert.deepEqual(asked, [GIVEN.packager, GIVEN.packager], "asked once by the rebuild and once by the renewal, with the path given");
   assert.deepEqual((await mosaicMeta()).answered.slice(0, 2), [ask(3), ask(2)], "a renewal carries the id");
   await formExpires(10 * 86400000);
   const f1 = await mosaic(accept, ask(4), failing);
@@ -1506,6 +1512,13 @@ test("the workflows' runner and the tests check the packager before they run it,
     assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
   }
   await assert.rejects(fs.access(marker), "the other file was never run");
+  // ... and every test file that reads PACKAGER_BIN is one of those three, or the service's helper (its value goes to the
+  // service, which checks it itself: service/test/api.test.mjs). A new test file that read it, and ran it unchecked,
+  // fails here (the fourteenth review: the CI steps' own check lines, which held any such file, are gone)
+  const readers = [];
+  for (const dir of ["site/test", "service/test"])
+    for (const f of await fs.readdir(join(REPO, dir))) if (/\.m?js$/.test(f) && (await fs.readFile(join(REPO, dir, f), "utf8")).includes("process.env.PACKAGER_BIN")) readers.push(`${dir}/${f}`);
+  assert.deepEqual(readers.sort(), ["service/test/helpers.mjs", "service/test/pipeline.test.mjs", "site/test/fairplay.test.mjs", "site/test/site.test.mjs"], "every test file that reads PACKAGER_BIN checks it, or hands it to the service");
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

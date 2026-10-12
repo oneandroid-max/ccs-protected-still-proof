@@ -160,9 +160,10 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 //       from anything but one of its own stages, or a build mount from an image). Passed: a YAML `name:` line (outside
 //       an action's inputs); a Dockerfile LABEL; an echo or printf (in a Dockerfile, after RUN) with nothing on it that
 //       could fetch. The pinned
-//       download is `curl -o <file> <pinned release>`, its only other options -f, -s, -S, -L or their long forms,
-//       quotes allowed (in a Dockerfile after RUN), and it may stand only in a workflow (.github/workflows/) or a
-//       Dockerfile.
+//       download is `curl -o <folder>/packager <pinned release>`, its only other options -f, -s, -S, -L or their long
+//       forms, quotes allowed (in a Dockerfile after RUN), and it may stand only in a workflow (.github/workflows/) or a
+//       Dockerfile. The file is saved under the name packager, so that rule (E) sees every later use of it (the
+//       fourteenth review: a download saved as `pk`, or as `packager-v3.9.3`, was invisible to (E)).
 //   (B) The very next line must be that file's SHA-256 check, exactly: in a workflow `echo "<sha256>  <file>" |
 //       sha256sum -c - || exit 1` (a trailing comment allowed); in a Dockerfile `&& echo "<sha256>  <file>" |
 //       sha256sum -c -`, after which the instruction may go on only with lines that start with '&&' and hold no ';',
@@ -173,11 +174,15 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 //   (E) In a workflow, the packager file may be named only where nothing runs it unchecked: its pinned download and check
 //       lines, `chmod +x <path>`, the value of PACKAGER_BIN (our programs and the tests check that file themselves),
 //       and right after `node tools/run-packager.mjs`, the one way a workflow runs it (it checks the file at that
-//       moment, then runs exactly that file). Any other word naming it is refused, whatever the shell around it (in
-//       quotes, after `if` or `timeout`, inside `$( )`, in a variable, a step in YAML's one-line form): its path
-//       (…/packager, …/shaka-packager, …/packager-<platform>), its bare name (packager, packager-<platform>: the PATH
-//       would decide which file), or PACKAGER_BIN read in the shell. Every run through the runner is counted
-//       (CHECKED_RUNS): a guard that stops reading a workflow fails.
+//       moment, then runs exactly that file). Any other word naming it is refused, in the ordinary shapes (in quotes,
+//       after `if` or `timeout`, inside `$( )`, in a variable, a step in YAML's one-line form): its path (…/packager,
+//       …/shaka-packager, …/packager-<platform>), its bare name (packager, packager-<platform>: the PATH would decide
+//       which file), or PACKAGER_BIN read in the shell. Every run through the runner is counted (CHECKED_RUNS): a guard
+//       that stops reading a workflow fails. It reads one line at a time, word by word, and judges an exception by the
+//       word before it: a deliberate shape is for review (the fourteenth review ran eight past it: a shell line that
+//       starts like a YAML `name:`, a YAML anchor or flow mapping that hides a run in a name, an exception's own word put
+//       before a run, a `chmod` shadowed by a shell function, a line continued so that the runner's argument goes to
+//       another command, a glob).
 // NOT seen, by design: a packager named only on a line that brings nothing in (a `COPY --from=<image> \` whose next
 // line names the packager; `cat file | tee …/packager`, though in a workflow (E) refuses that line), a script with no
 // extension or of a kind not read, a packager run from inside a script a step calls or from a composite action, a name
@@ -259,6 +264,7 @@ for (const f of repoFiles.filter((x) => !ignored.has(x) && kind(x)).sort()) {
     if (!inWith && !namesIt(code, docker) && !bringsIn(code, docker, stages)) return;
     const out = inWith ? null : pinnedDownload(code);
     if (!out) { bad.push(`${f}:${i + 1}: brings in a packager other than by the pinned download (curl -o <file> ${PACKAGER_URL}, checked on the next line): no other source, version, image, action, artifact, cache, copy, archive or install`); return; }
+    if (!/(^|\/)packager$/.test(out)) bad.push(`${f}:${i + 1}: the pinned download must be saved as <folder>/packager, so that every later use of the file is seen (rule E); ${out} is not`);
     downloads++; fetches++; counts[f] = (counts[f] || 0) + 1;
     if (k !== "workflow" && !docker) bad.push(`${f}:${i + 1}: downloads shaka-packager outside a workflow or a Dockerfile (an action or a script could be run where a failure passes)`);
     const check = docker ? new RegExp(`^\\s*&& echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c -(?:\\s+\\\\)?$`) : new RegExp(`^\\s*echo "${PACKAGER_SHA256}  ${esc(out)}" \\| sha256sum -c - \\|\\| exit 1(?:\\s+#.*)?$`);

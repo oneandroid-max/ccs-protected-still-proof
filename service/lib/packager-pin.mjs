@@ -4,8 +4,8 @@
 // whatever the PATH or the working folder, the file checked is the file run, and a file that is not this build is refused
 // before it is ever run: site/worker.mjs and site/backfill.mjs (as their jobs start; the combined view's job just before
 // it first packages, after a view of other pictures is removed), tools/fairplay-card.mjs, the service (at start, and
-// again before every photo), a workflow step (only through tools/run-packager.mjs: tools/check-workflow-links.mjs refuses
-// any other way), and the tests (before any test runs it).
+// again before every photo), a workflow step (through tools/run-packager.mjs: tools/check-workflow-links.mjs refuses the
+// ordinary other ways; a deliberate one is for review), and the tests (before any test runs it).
 import { promises as fs, constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { delimiter, resolve } from "node:path";

@@ -492,8 +492,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   const action = process.env.WORKER_ACTION || (event.client_payload || {}).action;
   // only the pinned build ever runs on a picture, by the path checked: checked here as the job starts, except for a deletion
-  // (it runs no packager, and is never held up) and the combined view (checked just before it first packages, so that a
-  // view of other pictures is removed first: buildMosaic)
+  // (it runs no packager, and is never held up: its job skips the tools' set-up, site-photos.yml) and the combined view
+  // (checked just before it first packages, so that a view of other pictures is removed first: buildMosaic)
   if (action !== "delete" && action !== "mosaic") {
     try { tools.packager = await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
   }

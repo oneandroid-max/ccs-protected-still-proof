@@ -36,6 +36,8 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: main }
       - name: ffmpeg and shaka-packager
+        # a deletion needs neither tool, so their set-up never holds it up (a failed download would leave the picture on the site)
+        if: github.event.client_payload.action != 'delete'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
@@ -71,6 +73,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Mask the key
+        id: mask
         run: |
           K=$(jq -r '.client_payload.key // empty' "$GITHUB_EVENT_PATH")
           if [ -n "$K" ]; then echo "::add-mask::$K"; fi
@@ -83,8 +86,9 @@ jobs:
           echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
           sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version
       - name: Make the combined view on the current tip of main and commit; refresh and redo if the push races
-        # also after a failed set-up: a view of other pictures (one deleted) must go all the same, and needs no tool
-        if: ${{ !cancelled() }}
+        # also after a failed set-up (a view of other pictures, one deleted, must go all the same, and needs no tool), but
+        # never when the key could not be masked
+        if: ${{ !cancelled() && steps.mask.outcome == 'success' }}
         env:
           PACKAGER_BIN: /usr/local/bin/packager
           AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}

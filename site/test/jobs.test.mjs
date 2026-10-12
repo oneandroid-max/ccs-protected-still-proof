@@ -165,7 +165,15 @@ test("a combined-view job whose rebuild fails commits what it left (a view of ot
 test("the combined-view job with the REAL worker: a view of other pictures goes even when the packager is refused or missing, after a failed set-up too; a clean-up followed by a failure answers no request", async () => {
   const lines = WF.split("\n"), at = lines.findIndex((l) => l.trim() === "- name: Make the combined view on the current tip of main and commit; refresh and redo if the push races");
   const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
-  assert.ok(lines.slice(at, runAt).some((l) => l.trim() === "if: ${{ !cancelled() }}"), "the step runs after a failed set-up");
+  assert.ok(lines.slice(at, runAt).some((l) => l.trim() === "if: ${{ !cancelled() && steps.mask.outcome == 'success' }}"), "the step runs after a failed set-up, never after a failed mask");
+  const job = (name) => { const from = lines.findIndex((l) => l === `  ${name}:`); const to = lines.findIndex((l, i) => i > from && /^  \S/.test(l)); return lines.slice(from, to < 0 ? lines.length : to); };
+  const mosaicJob = job("mosaic"), photoJob = job("photo");
+  const maskAt = mosaicJob.findIndex((l) => l.trim() === "- name: Mask the key");
+  assert.equal(mosaicJob[maskAt + 1].trim(), "id: mask", "the combined view's mask step is the one its condition reads");
+  // a deletion is never held up by the tools' set-up it does not need (the fourteenth review: a failed download left the
+  // deleted picture on the site, and the combined view's job, which needs the picture job's success, never ran)
+  const setupAt = photoJob.findIndex((l) => l.trim() === "- name: ffmpeg and shaka-packager");
+  assert.ok(photoJob.slice(setupAt, setupAt + 4).some((l) => l.trim() === "if: github.event.client_payload.action != 'delete'"), "the picture job skips the tools' set-up for a deletion");
   const { importKeyHex, sealText, openText } = await import(pathToFileURL(join(REPO, "site", "crypto.js")).href);
   const KEY_HEX = "5a".repeat(32), KEY = await importKeyHex(KEY_HEX), ASK = "00000000000000aa", GUID = "11111111-2222-3333-4444-555555555555";
   const A = "a".repeat(24), X = "c".repeat(24), Y = "e".repeat(24), OLDER = { at: "2026-10-01T10:00:00.000Z", why: "an older answer, to an earlier request" };
