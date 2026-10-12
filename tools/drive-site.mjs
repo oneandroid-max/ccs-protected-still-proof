@@ -5,7 +5,10 @@
 // rewritten with the repository's own salt and a sealed access key), and the protected view (files
 // decrypted in memory and served to a stand-in player through the mem:// scheme, byte ranges included),
 // and the combined view (asked for when none exists, offered once it is published, opened from its own
-// files, a tap on a picture opening that picture alone, and the password first when signed out).
+// files, a tap on a picture opening that picture alone, and the password first when signed out), and
+// the Apple path as an iPhone and an iPad see it: the picture held back while Apple is unmeasured, the
+// Apple test playing only the test card with Axinom's public token, and (with the switch flipped as it
+// would be after a measurement) the picture's own Apple form by its address with its own sealed token.
 // The sandbox's Chromium has no DRM module, so real playback is not exercised here.
 //   node tools/drive-site.mjs   (Playwright from PLAYWRIGHT_PKG's package, Chromium at CHROME)
 import { promises as fs } from "node:fs";
@@ -14,6 +17,8 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
 import { deriveKey, derivePhotoKey, exportKeyHex, seal, open, sealText, openText, toBase64, fromBase64 } from "../site/crypto.js";
 
 const require = createRequire(process.env.PLAYWRIGHT_PKG || "/home/user/QUICLINKS/package.json");
@@ -43,10 +48,17 @@ for (const [f, size] of [["widevine.mpd", 700], ["video-widevine.mp4", 50000], [
   const b = new Uint8Array(size); for (let i = 0; i < size; i++) b[i] = (i * 7 + size) & 255; fileBytes[f] = b;
   await fs.writeFile(join(photoDir, f + ".enc"), await seal(PHOTO, b));
 }
-await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
+// its Apple form: the files as the job writes them (not sealed), and the licence token, sealed
+const FP_MASTER = "fp-0a1b2c3d/master.m3u8", PICTURE_TOKEN = "PICTURE.TOKEN.VALUE";
+const OWN_LICENSE = "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense"; // an account's own licence address (a made-up prefix)
+await fs.mkdir(join(photoDir, "fp-0a1b2c3d"), { recursive: true });
+for (const f of ["master.m3u8", "video.m3u8", "video.mp4"]) await fs.writeFile(join(photoDir, "fp-0a1b2c3d", f), "#EXTM3U\n");
+await fs.writeFile(join(photoDir, "fp-0a1b2c3d", "token.enc"), await sealText(PHOTO, PICTURE_TOKEN));
+const writePhotoMeta = async (license = OWN_LICENSE, more = {}) => fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: { keyUri: "skd://00000000-0000-0000-0000-000000000000:00000000000000000000000000000000", master: FP_MASTER, license, ...more } })));
+await writePhotoMeta();
 // the combined view's files, written into the served copy only once the drive has seen the page ask for it
 const mosaicBytes = {};
-async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = []) {
+async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], skipped = [], fairplay = null, kept = null, answered = null) {
   const dir = join(www, "site", "mosaic");
   await fs.mkdir(dir, { recursive: true });
   for (const [f, size] of [["widevine.mpd", 640], ["video-widevine.mp4", 40000], ["playready.mpd", 650], ["video-playready.mp4", 40010]]) {
@@ -54,7 +66,8 @@ async function publishMosaic(builtAt = new Date().toISOString(), ids = [ID], ski
     await fs.writeFile(join(dir, f + ".enc"), await seal(PHOTO, b));
   }
   await fs.writeFile(join(dir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ kind: "mosaic", width: 1080, height: 1440, cols: 1, rows: 1, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", builtAt,
-    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped })));
+    ids, tiles: ids.map((id, i) => ({ id, name: i ? "picture " + i : "Cotton <Bowl>.jpg", x: 6, y: 8 + i * 10, w: 1068, h: i ? 8 : 1424 })), skipped, fairplay, ...(kept ? { kept } : {}), ...(answered ? { answered } : {}) })));
+  if (fairplay) { const f = join(dir, fairplay.master.split("/")[0]); await fs.mkdir(f, { recursive: true }); await fs.writeFile(join(f, "token.enc"), await sealText(PHOTO, "MOSAIC.TOKEN.VALUE")); }
 }
 const REPO_SALT = toBase64(new Uint8Array(16).fill(0x5a)); // what the repository holds, deliberately not what the served copy holds
 const HOUR_AGO = new Date(Date.now() - 3600 * 1000).toISOString();
@@ -70,15 +83,28 @@ const ID3 = "abcabcabcabcabcabcabcabc";
 await fs.mkdir(join(www, "site", "photos", ID3), { recursive: true });
 await fs.writeFile(join(www, "site", "photos", ID3, "widevine.mpd.enc"), await seal(PHOTO, new Uint8Array(10)));
 const threeSealed = await sealText(PHOTO, JSON.stringify({ photos: [...JSON.parse(galleryJson).photos, { id: ID2, name: "second.jpg", status: "ready", readyAt: HOUR_AGO }, { id: ID3, name: "third.jpg", status: "ready", readyAt: HOUR_AGO }] }));
-const JUST_NOW = new Date().toISOString();
-const freshSealed = await sealText(PHOTO, JSON.stringify({ updatedAt: JUST_NOW, photos: [{ ...JSON.parse(galleryJson).photos[0], readyAt: JUST_NOW }] }));
+// a picture ready "just now": sealed again when the scenario that uses it starts (the scenarios before it take real time,
+// and each page's clock starts at the real time; a stamp from the drive's start made that scenario depend on how long
+// the others took)
+const sealFresh = async () => { const now = new Date().toISOString(); return sealText(PHOTO, JSON.stringify({ updatedAt: now, photos: [{ ...JSON.parse(galleryJson).photos[0], readyAt: now }] })); };
+let freshSealed = await sealFresh();
 const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some other password here", cfg.salt, 1000)), galleryJson);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
 
-const PORT = 8766;
+// the drive's own server on a free port, and proof that the server answering is this drive's own: a
+// server left over from an earlier run on a fixed port once answered instead, and the drive judged the
+// wrong copy of the site (2026-10-11)
+const PORT = await new Promise((resolve, reject) => { const s = createServer(); s.on("error", reject); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+const DRIVE_ID = randomBytes(16).toString("hex");
+await fs.writeFile(join(www, "drive-id.txt"), DRIVE_ID);
 const server = spawn("python3", ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", www], { stdio: "ignore" });
-await new Promise((r) => setTimeout(r, 1200));
+let ours = false;
+for (let i = 0; i < 60 && !ours; i++) {
+  try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
+  if (!ours) await new Promise((r) => setTimeout(r, 100));
+}
+if (!ours) { server.kill(); console.error(`FAIL  the drive's own test server never answered on port ${PORT}`); process.exit(1); }
 const BASE = `http://127.0.0.1:${PORT}/site/`;
 
 const STUB = `
@@ -88,19 +114,28 @@ window.shaka = { polyfill: { installAll(){} },
   util: { AbortableOperation: { completed: (v) => ({ promise: Promise.resolve(v) }), failed: (e) => ({ promise: Promise.reject(e) }) },
           Error: class { constructor(...a) { this.args = a; } static get Severity() { return { CRITICAL: 2 }; } static get Category() { return { NETWORK: 1 }; } static get Code() { return { BAD_HTTP_STATUS: 1001 }; } } },
   Player: class extends EventTarget { static isBrowserSupported(){ return true; } async attach(v){ this.v = v; }
-    configure(c){ this.cfg = c; } getNetworkingEngine(){ return { registerResponseFilter(){} }; }
-    async load(m){ window.__manifests.push(m);
+    configure(c){ this.cfg = c; } getNetworkingEngine(){ return { registerResponseFilter(){}, registerRequestFilter(f){ (window.__reqFilters = window.__reqFilters || []).push(f); } }; }
+    async load(m){ window.__manifests.push(m); (window.__cfgs = window.__cfgs || []).push(JSON.parse(JSON.stringify(this.cfg)));
       if (m.startsWith("mem://")) { const r = await window.__scheme.fn(m, { headers: {} }).promise; window.__got.push([m, r.data.byteLength]);
         const seg = await window.__scheme.fn("mem://photo/video-widevine.mp4", { headers: { Range: "bytes=100-199" } }).promise; window.__got.push(["range", seg.data.byteLength, new Uint8Array(seg.data)[0]]);
         const nope = await window.__scheme.fn("mem://photo/missing.mp4", { headers: {} }).promise.then(() => "resolved", () => "rejected"); window.__got.push(["missing", nope]); }
-      this.ks = Object.keys(this.cfg.drm.advanced)[0]; setTimeout(() => this.v.dispatchEvent(new Event("playing")), 50); }
+      this.ks = Object.keys(this.cfg.drm.advanced)[0];
+      // a decoded 720x960 frame and moving time, as a real protected video reports them (the page needs both);
+      // window.__noFrames: "playing" with no frame at all, as a Mac without a working FairPlay did
+      const v = this.v, t0 = performance.now();
+      if (window.__noFrames) { setTimeout(() => v.dispatchEvent(new Event("playing")), 50); return; }
+      Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 720 });
+      Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 960 });
+      Object.defineProperty(v, "paused", { configurable: true, get: () => false });
+      Object.defineProperty(v, "currentTime", { configurable: true, get: () => ((performance.now() - t0) / 1000) % 2, set: () => {} });
+      setTimeout(() => v.dispatchEvent(new Event("playing")), 50); }
     drmInfo(){ return { keySystem: this.ks }; } async destroy(){} } };`;
 
 const api = { blobs: [], dispatches: [], puts: [], galleryMode: "normal" };
 const b = await chromium.launch({ executablePath: process.env.CHROME || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome", args: ["--no-sandbox"] });
 const errors = [];
-async function mockedContext() {
-  const ctx = await b.newContext();
+async function mockedContext(opts = {}) {
+  const ctx = await b.newContext(opts);
   ctx.on("page", (p) => p.on("pageerror", (e) => errors.push(e.message)));
   await ctx.route("https://api.github.com/**", async (route) => {
     const req = route.request(); const u = new URL(req.url()); const auth = req.headers()["authorization"];
@@ -113,11 +148,15 @@ async function mockedContext() {
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
-  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue());
+  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => { api.metaReads = (api.metaReads || 0) + 1; return api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue(); });
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
-  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
+  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); let body = (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "");
+    // the Apple switch as it would be after a measurement on an iPhone (only when the drive asks for it)
+    if (api.appleMeasured) { const before = body; body = body.replace('const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };', 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-11", "Mac": "" };'); if (body === before) throw new Error("the Apple switch was not found in the page"); }
+    r.fulfill({ response: res, body }); });
+  await ctx.route(/\/fp-[0-9a-f]{8}\/token\.enc/, (r) => { api.tokenReads = (api.tokenReads || 0) + 1; return api.noPictureToken ? r.fulfill({ status: 404, body: "" }) : r.continue(); });
   return ctx;
 }
 
@@ -143,7 +182,7 @@ try {
   // 1b. no combined view yet: the page asks the job for one, once, and says what is happening
   await page.waitForFunction(() => /Combining your 1 picture/.test(document.getElementById("all").textContent), null, { timeout: 15000 });
   const askedFor = api.dispatches.filter((x) => x.client_payload.action === "mosaic");
-  check(askedFor.length === 1 && askedFor[0].client_payload.key === PHOTO_HEX && Object.keys(askedFor[0].client_payload).sort().join() === "action,key", "with no combined view the page asks the job for one (action and picture key only)");
+  check(askedFor.length === 1 && askedFor[0].client_payload.key === PHOTO_HEX && Object.keys(askedFor[0].client_payload).sort().join() === "action,ask,key" && /^[0-9a-f]{16}$/.test(askedFor[0].client_payload.ask), "with no combined view the page asks the job for one (the action, the picture key and the request's own id only)");
   check((await page.$("#open-all")) === null, "nothing to open until it is published");
   await publishMosaic();
   await page.waitForSelector("#open-all", { timeout: 20000 });
@@ -181,7 +220,7 @@ try {
   await page.evaluate(() => sessionStorage.removeItem("ccs-pending")); // forget the pending delete for the view test
   // 4. the protected view (same session)
   await page.goto(BASE + "view.html?id=" + ID);
-  await page.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__photoShown || /held back|not opened/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const got = await page.evaluate(() => window.__got);
   const title = await page.textContent("#title");
   check(title === "Protected view: Cotton <Bowl>.jpg", "the view names the picture: " + title);
@@ -191,7 +230,7 @@ try {
   check((await page.textContent("#r-content")) === "your picture: Cotton <Bowl>.jpg", "the readout's Content line");
   // 4b. the combined view: its own files from memory, the list of pictures, and a tap opens one alone
   await page.goto(BASE + "all.html");
-  await page.waitForFunction(() => window.__photoShown, null, { timeout: 20000 });
+  await page.waitForFunction(() => window.__photoShown || /held back|not opened/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
   const gotAll = await page.evaluate(() => window.__got);
   check((await page.textContent("#title")) === "All your pictures, protected (1)", "the combined view says what it is: " + (await page.textContent("#title")));
   check((await page.textContent("#r-content")) === "your pictures: all 1, combined into one protected video", "its readout's Content line");
@@ -260,12 +299,12 @@ try {
   check(await until5(/Asked again at/, 15000) && asks() === b5 + 2, "Ask again asks and says so: " + (await t5()));
   await publishMosaic(undefined, [ID, ID2]);
   await p5.clock.fastForward("00:30");
-  check(await until5(/All 2 in one protected view/, 15000), "and the page keeps refreshing until the remade view arrives: " + (await t5()));
+  check(await until5(/All 2 in one protected view/, 15000) && !/being remade/.test(await t5()), "and the page keeps refreshing until the remade view arrives, then no longer says it is being remade (its clock twenty minutes ahead of the job's): " + (await t5()));
   await dctx.close();
   // the three timing rules, each on its own fresh page and fake clock
-  async function clockPage(mode) {
+  async function clockPage(mode, opts = {}) {
     api.galleryMode = mode;
-    const c = await mockedContext(); const pg = await c.newPage();
+    const c = await mockedContext(opts); const pg = await c.newPage();
     await pg.clock.install(); await pg.goto(BASE + "index.html");
     await pg.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
     await pg.goto(BASE + "index.html");
@@ -285,21 +324,87 @@ try {
   await settle(p0, "00:30");
   check(asks() === k0 + 1, "once the site answers that there is none, the page asks");
   await c0.close(); api.noMosaic = false;
-  // (t) a view that left a picture out counts as current, so the page would stop refreshing: "Try again"
-  // asks, says so, and keeps refreshing until a view made after it arrives
-  await publishMosaic(undefined, [ID], [{ id: ID2, name: "second.jpg", reason: "test" }]);
+  // (t) a view that left a picture out counts as current, so the page would stop refreshing: "Try again" asks, under
+  // its own request id, says so, and keeps refreshing until the job's answer carries that id. The job may keep the view
+  // as it is (a rebuild would remove its Apple form; the tenth review: the page then said "being remade" for ten minutes):
+  // the page shows that answer with its reason, at this device's own time (America/Chicago here), and stops waiting.
+  // Asked again, nothing else that changes the record counts as the answer (the eleventh review: another tab's answer,
+  // or the weekly renewal of its Apple form, did): only the view that carries the new id
+  const FORM = { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE, comKeyId: "0e2c58d1-7c4b-4f3e-9a51-3d1f0b7e6a42", verified: true, expires: new Date(Date.now() + 300 * 86400000).toISOString() };
+  const builtT = new Date().toISOString(), leftOutT = [{ id: ID2, name: "second.jpg", reason: "test" }];
+  const lastAsk = () => api.dispatches.filter((x) => x.client_payload.action === "mosaic").at(-1).client_payload.ask;
+  const inChicago = (iso, o) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", ...o }).format(new Date(iso));
+  const chicagoTime = (iso) => inChicago(iso, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+  await publishMosaic(builtT, [ID], leftOutT, FORM);
   const kt = asks();
-  const { c: ct, pg: pt } = await clockPage("two");
-  check(/Left out \(could not be read back\): second\.jpg/.test(await pt.textContent("#all")) && asks() === kt, "a picture left out is named, with Try again, and nothing is asked on its own: " + (await pt.textContent("#all")));
+  const { c: ct, pg: pt } = await clockPage("two", { timezoneId: "America/Chicago" });
+  const tt = async () => (await pt.textContent("#all")) || "";
+  check(/Left out \(could not be read back\): second\.jpg/.test(await tt()) && asks() === kt, "a picture left out is named, with Try again, and nothing is asked on its own: " + (await tt()));
   await pt.click("#ask-all");
   await new Promise((r) => setTimeout(r, 1500));
-  check(asks() === kt + 1 && /Asked again at/.test(await pt.textContent("#all")), "Try again asks and says so");
-  await publishMosaic(new Date(Date.now() + 60000).toISOString(), [ID, ID2]);
+  const ask1 = lastAsk();
+  check(asks() === kt + 1 && /^[0-9a-f]{16}$/.test(ask1 || "") && /Asked again at/.test(await tt()), "Try again asks, under its own request id, and says so: " + ask1);
+  const keptAt = new Date().toISOString(), WHY = "rebuilding it would remove its Apple form, and Axinom did not accept our key (Axinom: a test)";
+  await publishMosaic(builtT, [ID], leftOutT, FORM, { at: keptAt, why: WHY }, [ask1]);
   await settle(pt, "00:30");
-  check(/All 2 in one protected view/.test(await pt.textContent("#all")) && !/Left out/.test(await pt.textContent("#all")), "and the page keeps refreshing until the remade view arrives: " + (await pt.textContent("#all")));
+  const tk = await tt();
+  check(new RegExp(`Last tried at (?:[A-Z][a-z]{2} \\d\\d )?${chicagoTime(keptAt)}: kept as it is — rebuilding it would remove its Apple form, and Axinom did not accept our key \\(Axinom: a test\\)`).test(tk) && !/being remade/.test(tk) && /Try again/.test(tk), `the job's answer, kept as it is, is shown with its reason at this device's own time (${chicagoTime(keptAt)} in Chicago); nothing says it is being remade; Try again stays: ` + tk);
+  const reads = api.metaReads;
+  await settle(pt, "00:30"); await settle(pt, "00:30");
+  check(api.metaReads === reads, `and the page stops waiting for a remake that is not coming (${api.metaReads - reads} more reads of the view)`);
+  await pt.click("#ask-all");
+  await new Promise((r) => setTimeout(r, 1500));
+  const ask2 = lastAsk();
+  check(asks() === kt + 2 && ask2 !== ask1 && /Asked again at .*being remade/.test(await tt()), "asked again, under a new id: the earlier answer is not taken for this one: " + (await tt()));
+  // another tab's answer lands in the record meanwhile (a new note, another id): not this request's answer
+  await publishMosaic(builtT, [ID], leftOutT, FORM, { at: new Date().toISOString(), why: "another tab's answer (a test)" }, ["0123456789abcdef", ask1]);
+  await settle(pt, "00:30");
+  check(/Asked again at .*being remade/.test(await tt()), "another tab's answer in the record is not taken for this one: " + (await tt()));
+  // the weekly run renews the view's Apple form meanwhile (a new form, the note gone, no id added): not the answer either
+  const r0 = api.metaReads;
+  await publishMosaic(builtT, [ID], leftOutT, { ...FORM, master: "fp-5e6f7a8b/master.m3u8" }, null, ["0123456789abcdef", ask1]);
+  await settle(pt, "00:30");
+  check(/Asked again at .*being remade/.test(await tt()) && api.metaReads > r0, "nor is a renewal of its Apple form: the page keeps waiting, and reading: " + (await tt()));
+  // its own answer: a view remade with both pictures, carrying the new id
+  await publishMosaic(new Date((await pt.evaluate(() => Date.now())) + 60000).toISOString(), [ID, ID2], [], FORM, null, [ask2, "0123456789abcdef", ask1]);
+  await settle(pt, "00:30");
+  check(/All 2 in one protected view/.test(await tt()) && !/Left out|being remade|kept as it is/.test(await tt()), "and the page keeps refreshing until its own answer arrives: " + (await tt()));
   await ct.close();
+  // an answer from days ago reads with its day (Chicago time), never as if it were today
+  const oldAt = new Date(Date.now() - 3 * 86400000).toISOString();
+  await publishMosaic(builtT, [ID], leftOutT, FORM, { at: oldAt, why: WHY });
+  const { c: co, pg: po } = await clockPage("two", { timezoneId: "America/Chicago" });
+  const want = `Last tried at ${inChicago(oldAt, { month: "short", day: "2-digit" })} ${chicagoTime(oldAt)}: kept as it is`;
+  check(((await po.textContent("#all")) || "").includes(want), `an answer from three days ago shows its day: "${want}" in: ` + (await po.textContent("#all")));
+  await co.close();
+  // Try again, then the left-out picture deleted before the job runs: its answer drops the stale entry and changes
+  // nothing else (the same build time, no note); the view is then complete, so the page stops saying "being remade",
+  // id or no id (the eleventh review: it said so for ten minutes)
+  await publishMosaic(builtT, [ID], leftOutT, FORM);
+  const { c: cd, pg: pd } = await clockPage("two");
+  await pd.click("#ask-all"); await new Promise((r) => setTimeout(r, 1500));
+  const askD = lastAsk();
+  api.galleryMode = "normal";
+  await publishMosaic(builtT, [ID], [], FORM, null, [askD]);
+  await settle(pd, "00:30");
+  const td = (await pd.textContent("#all")) || "";
+  check(/All 1 in one protected view/.test(td) && !/being remade|Left out/.test(td), "Try again, then the left-out picture deleted: the answer (stale entry dropped, nothing else changed) leaves a complete view, and nothing says it is being remade: " + td);
+  await cd.close();
+  // an answer that never comes (the job failed, or GitHub replaced the waiting run with a newer request): after ten
+  // minutes the page stops saying "being remade" and stops reading the view (the twelfth review: no test held this)
+  await publishMosaic(builtT, [ID], leftOutT, FORM);
+  const { c: cz, pg: pz } = await clockPage("two");
+  await pz.click("#ask-all"); await new Promise((r) => setTimeout(r, 1500));
+  await settle(pz, "05:00");
+  check(/Asked again at .*being remade/.test((await pz.textContent("#all")) || ""), "no answer yet, five minutes on: still waiting");
+  await settle(pz, "05:30");
+  const tz = (await pz.textContent("#all")) || "", rz = api.metaReads;
+  await settle(pz, "00:30"); await settle(pz, "00:30");
+  check(!/being remade/.test(tz) && api.metaReads === rz, `no answer after ten minutes: it stops saying so, and stops reading the view (${api.metaReads - rz} more reads): ` + tz);
+  await cz.close();
   // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
   api.noMosaic = true;
+  freshSealed = await sealFresh();
   let n0 = asks(), { c: ca, pg: pa } = await clockPage("fresh");
   check(asks() === n0 && /Combining your 1 picture/.test(await pa.textContent("#all")), "a picture ready just now, no combined view: no request at once (the job's own run is on its way)");
   await settle(pa, "02:00");
@@ -324,6 +429,87 @@ try {
   await settle(pc, "03:30");
   check(asks() === n0 + 1, "three minutes after the page saw the set change, it asks");
   await cc.close(); api.galleryMode = "normal";
+  // 4e. APPLE, as an iPhone sees it (Safari's own engine; every iPhone browser is one)
+  const IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+  const MAC_SAFARI = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+  async function applePage(ua, path, init) {
+    const c = await mockedContext({ userAgent: ua }); const pg = await c.newPage();
+    if (init) await pg.addInitScript(init);
+    await pg.goto(BASE + "index.html");
+    await pg.evaluate((s) => sessionStorage.setItem("ccs-site", JSON.stringify({ ...s, at: Date.now() })), st);
+    await pg.goto(BASE + path);
+    return { c, pg };
+  }
+  const licenceHeaders = (pg) => pg.evaluate(() => { const r = { headers: {} }; for (const f of window.__reqFilters || []) f(2, r); return r.headers; });
+  const jwtKid = (t) => { try { return JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).message.content_keys_source.inline[0].id; } catch { return null; } };
+  // (1) unmeasured: the picture is held back, and never reaches the player
+  let { c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID);
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
+  check(/held back — Apple FairPlay is not yet measured on iPhone\/iPad/.test(await ap.textContent("#r-ks")) && /Apple FairPlay is not yet measured here/.test(await ap.textContent("#r-rule")), "an iPhone, Apple unmeasured: the picture is held back, and the readout says why: " + (await ap.textContent("#r-ks")));
+  check((await ap.evaluate(() => window.__manifests.length)) === 0 && !(await ap.evaluate(() => window.__photoShown)), "and nothing was given to the player");
+  check(/Apple devices aren't confirmed yet/.test(await ap.textContent("#msg")), "the picture's box says so");
+  await ac.close();
+  // (2) the Apple test: only the test card, through FairPlay, with Axinom's licence service, certificate and PUBLIC token
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay"));
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
+  const tc = (await ap.evaluate(() => window.__cfgs)).at(-1);
+  check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === "../web/research/drm/card-fairplay/master.m3u8", "the Apple test plays the test card's Apple form, and only that: " + (await ap.evaluate(() => window.__manifests)).join());
+  check(tc.drm.servers["com.apple.fps"] === "https://drm-fairplay-licensing.axprod.net/AcquireLicense" && tc.drm.advanced["com.apple.fps"].serverCertificateUri === "https://tools.axinom.com/FPScert/fairplay.cer", "with Axinom's licence service and evaluation certificate");
+  check(jwtKid((await licenceHeaders(ap))["X-AxDRM-Message"]) === "4060a865-8878-4267-9cbf-91ae5bae1e72", "and Axinom's public token for its public test key (the card's), never the picture's");
+  check((await ap.textContent("#r-content")) === "the test card (not the photo)" && /APPLE TEST MODE/.test(await ap.textContent("body")), "the readout and the banner say it is the test card");
+  await ac.close();
+  // (3) the switch flipped (as after a measurement on an iPhone): the picture's own Apple form, by its address, with its own token
+  api.appleMeasured = true;
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
+  check((await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === BASE + "photos/" + ID + "/" + FP_MASTER, "measured: the picture plays through its own Apple form, by its full address: " + (await ap.evaluate(() => window.__manifests)).join());
+  check((await licenceHeaders(ap))["X-AxDRM-Message"] === PICTURE_TOKEN, "with the picture's own licence token, unsealed in memory");
+  const pcfg = (await ap.evaluate(() => window.__cfgs)).at(-1);
+  check(pcfg.drm.servers["com.apple.fps"] === OWN_LICENSE, "sent to the licence address its form records (the account's own): " + pcfg.drm.servers["com.apple.fps"]);
+  check(/measured black on iPhone\/iPad \(2026-10-11\)/.test(await ap.textContent("#r-expect")), "and the readout names the measurement: " + (await ap.textContent("#r-expect")));
+  await ac.close();
+  // (4) the combined view, measured: its own Apple form and token
+  await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "all.html"));
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }); // either way, the checks below name what happened
+  check((await ap.evaluate(() => window.__manifests)).join() === BASE + "mosaic/fp-1a2b3c4d/master.m3u8" && (await licenceHeaders(ap))["X-AxDRM-Message"] === "MOSAIC.TOKEN.VALUE" && (await ap.evaluate(() => window.__cfgs)).at(-1).drm.servers["com.apple.fps"] === OWN_LICENSE, "the combined view plays through its own Apple form and token, at its licence address");
+  await ac.close(); await publishMosaic();
+  // (4b) a picture whose form names a licence address that is not Axinom's: its token is sent nowhere
+  await writePhotoMeta("https://licence.example.com/AcquireLicense");
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /licence address that is not Axinom's/.test(document.getElementById("log").textContent) || window.__photoShown, null, { timeout: 30000 }); // either way, the checks below name what happened
+  check(/this clip's Apple form names a licence address that is not Axinom's: refused/.test(await ap.textContent("#log")) && !(await ap.evaluate(() => window.__manifests)).length && !(await ap.evaluate(() => window.__photoShown)), "a form naming another licence address is refused, its token sent nowhere: " + (await ap.textContent("#log")).split("\n")[0]);
+  await ac.close();
+  // (4c) a picture whose form's token has expired (the date its job recorded): not offered, its token never fetched
+  await writePhotoMeta(OWN_LICENSE, { expires: "2026-01-02T03:04:05.000Z" });
+  api.tokenReads = 0;
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /Apple form could not be opened/.test(document.getElementById("log").textContent) || window.__photoShown, null, { timeout: 30000 }); // either way, the checks below name what happened
+  check(/this clip's Apple form could not be opened: its licence token expired on 2026-01-02/.test(await ap.textContent("#log")) && !(await ap.evaluate(() => window.__manifests)).length && !(await ap.evaluate(() => window.__photoShown)) && api.tokenReads === 0, `an expired form is not offered, and its token is never fetched (${api.tokenReads} reads): ` + (await ap.textContent("#log")).split("\n")[0]);
+  await ac.close(); await writePhotoMeta();
+  // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
+  api.noPictureToken = true;
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /Apple form could not be opened/.test(document.getElementById("log").textContent), null, { timeout: 20000 });
+  check(/this clip's Apple form could not be opened: its licence token is not on the site yet/.test(await ap.textContent("#log")), "a missing token is named in the attempts: " + (await ap.textContent("#log")).split("\n")[0]);
+  await ac.close(); api.noPictureToken = false; api.appleMeasured = false;
+  // (6) an iPad asks for desktop sites (it reports itself as a Mac); its touch screen gives it away
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID, () => Object.defineProperty(Navigator.prototype, "maxTouchPoints", { get: () => 5 })));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
+  check(/on iPhone\/iPad/.test(await ap.textContent("#r-rule")), "an iPad reporting itself as a Mac is treated as an iPad: " + (await ap.textContent("#r-rule")));
+  await ac.close();
+  // (7) a Mac in Safari: Apple's path too (held back while unmeasured); Chrome on a Mac keeps its old rule
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
+  check(/held back — Apple FairPlay is not yet measured on Mac/.test(await ap.textContent("#r-ks")), "a Mac in Safari: held back until Apple is measured on a Mac: " + (await ap.textContent("#r-ks")));
+  await ac.close();
+
+  // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing)
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay", () => { window.__noFrames = true; }));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 30000 });
+  check(!(await ap.evaluate(() => window.__photoShown)) && /no licence or no decoded frame \(size 0x0\)/.test(await ap.textContent("#log")), "\"playing\" with no frame is not counted as shown: " + (await ap.textContent("#r-ks")));
+  await ac.close();
+
   // 5. the view without a session goes to the password; an expired session too
   const fresh = await mockedContext();
   const p2 = await fresh.newPage(); await p2.goto(BASE + "view.html?id=" + ID); await p2.waitForURL(/index\.html\?then=/);

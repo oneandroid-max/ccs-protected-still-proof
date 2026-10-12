@@ -12,9 +12,14 @@ import { checkBoxes } from "../../service/lib/pipeline.mjs";
 import { derivePlayReadyTestKey } from "../../tools/playready-test-key.mjs";
 import { withOrientation } from "../../service/lib/exif.mjs";
 import { run as exec } from "../../service/lib/util.mjs";
+import { checkPackager } from "../../service/lib/packager-pin.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
-const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+// The packager the tests run: the pinned build only, checked by its SHA-256 before any test runs it, and run by the path
+// checked (the CI test step sets PACKAGER_BIN). Any other file is refused here, never run: with REQUIRE_PACKAGER=1 that
+// ends the run; without it the tests that need the packager are skipped.
+const pinnedPackager = await checkPackager(process.env.PACKAGER_BIN || "packager").catch((e) => { if (process.env.REQUIRE_PACKAGER === "1") throw e; return null; });
+const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: pinnedPackager || "/nonexistent/no-pinned-packager-here" };
 const SALT = toBase64(new Uint8Array(16).fill(7));
 const KEY = await deriveKey("a test password, twelve+", SALT, 1000);
 const KEY_HEX = await exportKeyHex(KEY);
@@ -76,8 +81,10 @@ test("site/view.html and site/all.html are generated from the route-1 page and a
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
   assert.equal(all, await fs.readFile(join(REPO, "site", "all.html"), "utf8"), "run node tools/build-site-view.mjs");
   for (const page of [out, all]) {
-    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-']) assert.ok(page.includes(s), s);
+    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-',
+      "fairplay: CTX.fairplay", 'manifest: "../web/research/drm/card-fairplay/master.m3u8"']) assert.ok(page.includes(s), s);
     assert.ok(!page.includes('"widevine.mpd"'), "no plain manifest name remains");
+    assert.ok(!page.includes('manifest: "card-fairplay/master.m3u8"') && !page.includes("fairplay: null"), "no route-1 Apple setting remains (the card's path, the photo's empty form)");
   }
   assert.ok(all.includes('window.__ccsMode = "all";') && !out.includes("__ccsMode"), "only the combined view runs the prelude in its 'all' mode");
   assert.throws(() => buildView(index.replace("<h1>Route 1", "<h1>Changed")), /heading/);
@@ -166,7 +173,7 @@ test("worker: bad payloads are refused; without a packager a picture fails visib
   assert.match(after.error, /packager/, "with a slot free the upload is attempted again (and fails here only for want of the packager)");
 });
 
-test("worker: a repeated request leaves a current combined view alone; an older version, another order or a left-out picture is remade", async () => {
+test("worker: a repeated request leaves a current combined view alone; an older version, another order or a left-out picture is remade; a left-out picture since deleted is only dropped from its record", async () => {
   const { MOSAIC_VERSION } = await import("../worker.mjs");
   const siteDir = await freshSite();
   const a = "1".repeat(24), b = "2".repeat(24);
@@ -178,10 +185,15 @@ test("worker: a repeated request leaves a current combined view alone; an older 
   assert.deepEqual(await ask(), { status: "current", count: 2 });
   // each of these must be remade (here the remake fails for want of the pictures' files, which is the point: it was attempted)
   for (const [m, why] of [[{ version: MOSAIC_VERSION - 1, ids: [a, b], skipped: [] }, "an older version"], [{ version: MOSAIC_VERSION, ids: [b, a], skipped: [] }, "another order"],
-    [{ version: MOSAIC_VERSION, ids: [a, b], skipped: [{ id: "3".repeat(24), name: "c", reason: "x" }] }, "a picture left out"], [{ version: MOSAIC_VERSION, ids: [a], skipped: [] }, "a different set"]]) {
+    [{ version: MOSAIC_VERSION, ids: [a], skipped: [{ id: b, name: "b", reason: "x" }] }, "a picture left out"], [{ version: MOSAIC_VERSION, ids: [a], skipped: [] }, "a different set"]]) {
     await meta(m);
     await assert.rejects(ask(), /no picture could be read back/, why + " is remade, not kept");
   }
+  // a left-out picture that has since been deleted (no longer in the list): the view already draws exactly the list,
+  // so nothing is remade; the stale entry is dropped from its record, and the page then counts it as current
+  await meta({ version: MOSAIC_VERSION, ids: [a, b], skipped: [{ id: "3".repeat(24), name: "c", reason: "x" }] });
+  assert.deepEqual(await ask(), { status: "current", count: 2 });
+  assert.deepEqual(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(dir, "meta.json.enc"))))).skipped, [], "the stale entry dropped");
 });
 
 test("worker with the real packager: a sideways upload becomes encrypted protected files and an encrypted gallery entry (needs shaka-packager)", async (t) => {
@@ -268,10 +280,12 @@ test("worker with the real packager: the combined view holds every ready picture
   assert.ok(near(at(1, 1), [0, 0, 0], 20), "the frame around the pictures is black: " + at(1, 1));
   // asked again for the same set with a picture left out: remade (a left-out picture is tried again)
   assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "ready");
-  // with nothing left out, a repeated request leaves the combined view exactly as it is (no new commit)
+  // the left-out picture deleted from the list: the view already draws exactly the list, so it is kept (nothing
+  // remade) and its record no longer names the deleted picture; then a repeated request leaves it exactly as it is
   const g2 = await readGallery(siteDir, KEY); g2.photos = g2.photos.filter((x) => x.id !== "d".repeat(24));
   await fs.writeFile(join(siteDir, "gallery.json.enc"), await sealText(KEY, JSON.stringify(g2)));
-  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "ready");
+  assert.equal((await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools })).status, "current");
+  assert.deepEqual(JSON.parse(await openText(KEY, new Uint8Array(await fs.readFile(join(dir, "meta.json.enc"))))).skipped, [], "the deleted picture no longer named");
   const snap = await Promise.all(names.map((n) => fs.readFile(join(dir, n))));
   const again = await worker({ payload: { key: KEY_HEX }, action: "mosaic", siteDir, tools });
   assert.equal(again.status, "current"); assert.equal(again.count, 2);

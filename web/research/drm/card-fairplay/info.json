@@ -1,0 +1,19 @@
+{
+  "content": "the route-1 test card (public by design; never a picture of the owner's)",
+  "key": "Axinom's PUBLIC test key (site/axinom.mjs, AXINOM_PUBLIC_TEST), unlocked by Axinom's public licence token",
+  "kid": "4060a865-8878-4267-9cbf-91ae5bae1e72",
+  "iv": "b27c1118d7a8240851694df62aee3b48",
+  "keyUri": "skd://4060a865-8878-4267-9cbf-91ae5bae1e72:B27C1118D7A8240851694DF62AEE3B48",
+  "scheme": "cbcs",
+  "samples": 30,
+  "samplesEncrypted": 30,
+  "width": 720,
+  "height": 960,
+  "bytes": 34687,
+  "decryptCheck": {
+    "ffmpeg": 0,
+    "shakaPackager": 0,
+    "undecrypted": "no frame decoded"
+  },
+  "packager": "packager version v3.9.3-0a8ba4f-release"
+}

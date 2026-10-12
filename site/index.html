@@ -44,13 +44,24 @@
 </section>
 
 <script type="module">
-import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js?v=89fabf9a7fa1"; // versioned: a cached app.js from before a change must not pair with this page
+import { session, pending, unlock, gallery, upload, retry, remove, published, mosaicMeta, mosaicCurrent, askMosaic, answeredAsk, mosaicAskedAt, MOSAIC_ASK_GAP, MAX_PHOTOS, STALL_MS } from "./app.js?v=85c3f5b4691e"; // versioned: a cached app.js from before a change must not pair with this page
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
 const ACTIONS = "https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml";
-let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, metaKnown = false, askError = "", askedAgainAt = 0;
+let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, metaKnown = false, askError = "", askedAgainAt = 0, myAsk = "";
+// The job's answer to "Try again" / "Ask again" has arrived when the view's record carries this request's own id
+// (remade, kept as it is with a note saying why, or found current): no other change to the record (another tab's
+// answer, the weekly renewal of its Apple form) is taken for it, and no clock is compared.
+const answered = (meta) => answeredAsk(meta, myAsk);
+// still waiting for that answer: asked in the last ten minutes, not answered, and the view not already complete (a view
+// that holds every ready picture with none left out, whoever remade it, leaves nothing to wait for). An answer can be lost
+// (the job failed and committed nothing, or GitHub replaced the waiting run with a newer request): the ten minutes end it.
+const awaiting = (meta, current) => !!askedAgainAt && Date.now() - askedAgainAt < 10 * 60 * 1000 && !answered(meta) && !(current && !(meta.skipped || []).length);
+// a time from the job, in this device's own time zone, with the day when it is not today
+const when = (iso) => { const t = Date.parse(iso); if (!t) return "?"; const d = new Date(t), hm = d.toTimeString().slice(0, 5);
+  return d.toDateString() === new Date().toDateString() ? hm : d.toDateString().slice(4, 10) + " " + hm; };
 const MOSAIC_GIVE_UP = 20 * 60 * 1000; // a combined view that has not caught up in twenty minutes is reported, not waited on
 const then = new URLSearchParams(location.search).get("then");
 
@@ -105,7 +116,7 @@ async function load() {
     renderAll(readyIds, meta, current, staleFor > MOSAIC_GIVE_UP, askError);
     const waiting = pend.length > 0 || g.photos.some((p) => p.status === "ready" && !pub[p.id] && !deleting.has(p.id))
       || (readyIds.length > 0 && !current && staleFor <= MOSAIC_GIVE_UP)
-      || (askedAgainAt && Date.now() - askedAgainAt < 10 * 60 * 1000 && !(meta && Date.parse(meta.builtAt) > askedAgainAt));
+      || awaiting(meta, current);
     if (waiting) timer = setTimeout(load, 6000);
   } catch (err) {
     $("list").innerHTML = '<p class="bad">' + esc(err.message) + "</p>";
@@ -121,15 +132,16 @@ function renderAll(readyIds, meta, current, gaveUp, askError) {
   const open = (label) => '<div class="row" style="margin-top:8px"><a class="btn primary" id="open-all" href="all.html">' + label + "</a></div>";
   let html = "<strong>All your pictures at once</strong>";
   if (current) html += '<div class="muted">All ' + k + " in one protected view, at the same protection as each picture on its own. Tap a picture there to open it alone.</div>"
-    + (meta.skipped && meta.skipped.length ? '<div class="warn">Left out (could not be read back): ' + esc(meta.skipped.map((x) => x.name).join(", ")) + ' <button id="ask-all">Try again</button></div>' : "") + open("Open all " + k + " at once");
+    + (meta.skipped && meta.skipped.length ? '<div class="warn">Left out (could not be read back): ' + esc(meta.skipped.map((x) => x.name).join(", ")) + ' <button id="ask-all">Try again</button></div>'
+      + (meta.kept ? '<div class="muted" id="kept">Last tried at ' + when(meta.kept.at) + ": kept as it is — " + esc(meta.kept.why) + ' (<a href="' + ACTIONS + '">see the job</a>)</div>' : "") : "") + open("Open all " + k + " at once");
   else if (meta) html += '<div class="muted">The combined view was made for an earlier set (' + k + " picture" + (k === 1 ? "" : "s") + "); it is being remade with your " + n + " (about two minutes)…</div>" + open("Open the earlier one (" + k + ")");
   else html += '<div class="muted">Combining your ' + n + " picture" + (n === 1 ? "" : "s") + " into one protected view (about two minutes)…</div>";
   if (gaveUp && !(current && meta.skipped && meta.skipped.length)) html += '<div class="warn">The combined view has not caught up after twenty minutes — <a href="' + ACTIONS + '">see the job</a> <button id="ask-all">Ask again</button></div>';
-  if (askedAgainAt && Date.now() - askedAgainAt < 10 * 60 * 1000 && !(meta && Date.parse(meta.builtAt) > askedAgainAt)) html += '<div class="muted">Asked again at ' + new Date(askedAgainAt).toTimeString().slice(0, 5) + "; the combined view is being remade (about two minutes)…</div>";
+  if (awaiting(meta, current)) html += '<div class="muted">Asked again at ' + new Date(askedAgainAt).toTimeString().slice(0, 5) + "; the combined view is being remade (about two minutes)…</div>";
   if (askError) html += '<div class="bad">GitHub did not take the request: ' + esc(askError) + "</div>";
   box.innerHTML = html;
   const again = $("ask-all");
-  if (again) again.addEventListener("click", async () => { try { await askMosaic(st); askError = ""; askedAgainAt = Date.now(); staleSince = Date.now(); } catch (err) { askError = err.message; } load(); });
+  if (again) again.addEventListener("click", async () => { try { myAsk = await askMosaic(st); askError = ""; askedAgainAt = Date.now(); staleSince = Date.now(); } catch (err) { askError = err.message; } load(); });
 }
 
 function render(photos, pend, pub) {

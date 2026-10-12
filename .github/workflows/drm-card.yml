@@ -7,9 +7,8 @@
 name: drm card
 
 on:
-  push:
-    branches: [main]
-    paths: [".github/workflows/drm-card.yml"]
+  # by hand only (2026-10-11): an edit to this file used to re-make the card, and every Apple form made from it
+  # with it; the card is re-made when someone means to
   workflow_dispatch:
 
 permissions:
@@ -46,10 +45,11 @@ jobs:
 
       - name: Package the card for Widevine and PlayReady
         run: |
-          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64
-          chmod +x /tmp/packager; /tmp/packager --version
+          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned
+          chmod +x /tmp/packager; node tools/run-packager.mjs /tmp/packager --version
           CID=$(printf '%s' "$CARD_WV_CONTENT_ID" | xxd -p | tr -d '\n')
-          /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-widevine.mp4 \
+          node tools/run-packager.mjs /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-widevine.mp4 \
             --enable_widevine_encryption \
             --key_server_url https://license.uat.widevine.com/cenc/getcontentkey/widevine_test \
             --content_id "$CID" --signer widevine_test \
@@ -59,7 +59,7 @@ jobs:
             --segment_duration 2 --fragment_duration 2 \
             --mpd_output web/research/drm/card-widevine.mpd
           LA="https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${CARD_KID_GUID},sl:2000)"
-          /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-playready.mp4 \
+          node tools/run-packager.mjs /tmp/packager in=/tmp/card/card.mp4,stream=video,output=web/research/drm/card-playready.mp4 \
             --enable_raw_key_encryption --keys "label=:key_id=${CARD_KID}:key=${CARD_KEY}" \
             --protection_systems PlayReady --protection_scheme cenc --clear_lead 0 \
             --segment_duration 2 --fragment_duration 2 \

@@ -8,9 +8,11 @@
 name: drm package
 
 on:
+  # a new sealed clip re-packages; an edit to this file does NOT (2026-10-11: re-processing the owner's photo is
+  # an explicit act, never a side effect of pinning a tool or changing a comment); by hand otherwise
   push:
     branches: [main]
-    paths: [".github/workflows/drm-package.yml", "web/research/drm/source.enc"]
+    paths: ["web/research/drm/source.enc"]
   workflow_dispatch:
 
 permissions:
@@ -60,10 +62,10 @@ jobs:
         if: env.SKIP != '1'
         run: |
           CID=$(printf '%s' "$WV_CONTENT_ID" | xxd -p | tr -d '\n')
-          /tmp/packager_or_install() { :; }
-          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64
-          chmod +x /tmp/packager; /tmp/packager --version | tee /tmp/packager-version.txt
-          /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-widevine.mp4 \
+          curl -sSL -o /tmp/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned: it runs on the owner's photo
+          chmod +x /tmp/packager; node tools/run-packager.mjs /tmp/packager --version | tee /tmp/packager-version.txt
+          node tools/run-packager.mjs /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-widevine.mp4 \
             --enable_widevine_encryption \
             --key_server_url https://license.uat.widevine.com/cenc/getcontentkey/widevine_test \
             --content_id "$CID" --signer widevine_test \
@@ -77,7 +79,7 @@ jobs:
         if: env.SKIP != '1'
         run: |
           LA="https://test.playready.microsoft.com/service/rightsmanager.asmx?cfg=(kid:${PR_KID_GUID},sl:2000)"
-          /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4 \
+          node tools/run-packager.mjs /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4 \
             --enable_raw_key_encryption --keys "label=:key_id=${PR_KID}:key=${PR_KEY}" \
             --protection_systems PlayReady --protection_scheme cenc --clear_lead 0 \
             --segment_duration 2 --fragment_duration 2 \

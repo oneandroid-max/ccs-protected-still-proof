@@ -19,6 +19,17 @@ jobs:
             printf '%s\t%s\t%s bytes\t%s\n' "$code" "$p" "$(wc -c < /tmp/body)" "$(head -c 120 /tmp/body | tr '\n' ' ')"
           done
           echo "--- config.json as served:"; curl -sS -m 20 "$B/site/config.json?v=$(date +%s)"; echo
+      - name: The Apple files as served (status, content type, size), written as a notice on the run
+        run: |
+          B="https://oneandroid-max.github.io/ccs-protected-still-proof"
+          out=""
+          for p in web/research/apple/index.html web/research/drm/card-fairplay/master.m3u8 web/research/drm/card-fairplay/video.m3u8 web/research/drm/card-fairplay/video.mp4 web/research/drm/card-fairplay/info.json; do
+            line=$(curl -sS -m 20 -o /tmp/body -w '%{http_code} %{content_type}' "$B/$p?v=$(date +%s)")
+            out="$out$line $(wc -c < /tmp/body) bytes $p%0A"
+          done
+          ver=$(curl -sS -m 20 "$B/web/research/apple/?v=$(date +%s)" | grep -o 'PAGE_VERSION = "[^"]*"' | head -1)
+          key=$(curl -sS -m 20 "$B/web/research/drm/card-fairplay/video.m3u8?v=$(date +%s)" | grep -m1 '^#EXT-X-KEY' || echo "no key line")
+          echo "::notice title=Apple files::$out$ver%0A$key"
       - name: The player library's integrity hash (for the pages' integrity attribute)
         run: |
           U="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js"

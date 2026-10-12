@@ -1,0 +1,58 @@
+# Route 1's TEST CARD in Apple's FairPlay form (tools/fairplay-card.mjs): the same packaging code as the
+# owner's pictures, under Axinom's PUBLIC test key, so a real iPhone, iPad or Mac can prove the packaging
+# through Axinom's public licence token before any account exists. The tool decrypts its output two
+# independent ways (ffmpeg, shaka-packager) and fails unless both give back exactly the clear card. The
+# public form is packaged with a fixed clock, so it comes out the same byte for byte from one run to the
+# next and a run with nothing new commits nothing (without it the files' timestamps differ every run).
+# With the Axinom evaluation key in the secrets it ALSO makes the card's own-account form
+# (card-fairplay-own/: a random key, a licence token minted by our account, in clear because it unlocks
+# only this public card), renewed weekly before its token runs out. Reads site/axinom.mjs for the key
+# handling; opens no page and never reads a picture of the owner's.
+name: card fairplay
+
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/card-fairplay.yml", "tools/fairplay-card.mjs", "service/lib/pipeline.mjs", "site/axinom.mjs", "site/axinom.json", "web/research/drm/card-playready.mp4"]
+  workflow_dispatch:
+  schedule:
+    - cron: "41 6 * * 1"   # Mondays 06:41 UTC: renew the own-account form's token before it runs out
+
+permissions:
+  contents: write
+
+concurrency: { group: card-fairplay, cancel-in-progress: false }
+
+jobs:
+  card:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: ffmpeg and shaka-packager
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
+          sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version
+      - name: Package the card for FairPlay (and, with the Axinom key, its own-account form), check, decrypt back; commit; redo on a push race
+        env:
+          PACKAGER_BIN: /usr/local/bin/packager
+          AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}
+          AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            node tools/fairplay-card.mjs
+            echo "::notice title=FairPlay card::$(node -e 'const i = require("./web/research/drm/card-fairplay/info.json"); console.log(i.keyUri + "; " + i.bytes + " bytes; decryptCheck " + JSON.stringify(i.decryptCheck))')"
+            for p in web/research/drm/card-fairplay web/research/drm/card-fairplay-own; do
+              if [ -e "$p" ] || git ls-files --error-unmatch "$p" > /dev/null 2>&1; then git add -A "$p"; fi
+            done
+            if git diff --cached --quiet; then echo "card unchanged"; exit 0; fi
+            git commit -q -m "research(apple): the test card in FairPlay form — our packaging (run ${{ github.run_number }})"
+            if git push -q origin HEAD:main; then echo "pushed"; exit 0; fi
+            echo "the push raced with another job; refreshing and running again ($i)"; sleep $((i * 5))
+          done
+          echo "could not push after five tries"; exit 1

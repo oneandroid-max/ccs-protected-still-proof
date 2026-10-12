@@ -2,13 +2,18 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { jpegOrientation, withOrientation } from "../lib/exif.mjs";
 import { renderClip, targetSize, checkBoxes, MAX_SIDE, probe } from "../lib/pipeline.mjs";
 import { run } from "../lib/util.mjs";
+import { checkPackager } from "../lib/packager-pin.mjs";
 import { startApp, login, upload, REPO } from "./helpers.mjs";
 
-const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+// The packager the tests run: the pinned build only, checked by its SHA-256 before any test runs it, and run by the path
+// checked (the CI test step sets PACKAGER_BIN). Any other file is refused here, never run: with REQUIRE_PACKAGER=1 that
+// ends the run; without it the tests that need the packager are skipped.
+const pinnedPackager = await checkPackager(process.env.PACKAGER_BIN || "packager").catch((e) => { if (process.env.REQUIRE_PACKAGER === "1") throw e; return null; });
+const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: pinnedPackager || "/nonexistent/no-pinned-packager-here" };
 const tmp = await fs.mkdtemp(join(tmpdir(), "proof-pipe-"));
 const jpeg = async (name, w, h, color = "0x1f4e8c") => { const f = join(tmp, name); await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${color}:s=${w}x${h}:d=1`, "-frames:v", "1", "-update", "1", f]); return f; };
 
@@ -26,6 +31,14 @@ test("the clip's size: upright, rotated, capped at the longest side, always even
   assert.deepEqual(targetSize({ width: 3000, height: 2000 }, 1), { width: MAX_SIDE, height: 854 });
   assert.deepEqual(targetSize({ width: 3000, height: 2000 }, 8), { width: 854, height: MAX_SIDE });
   assert.deepEqual(targetSize({ width: 333, height: 333 }, 1), { width: 334, height: 334 });
+  // a picture smaller than the minimum on its short side is drawn larger, so its keyframes have something to encrypt
+  assert.deepEqual(targetSize({ width: 2, height: 2 }, 1), { width: 64, height: 64 });
+  assert.deepEqual(targetSize({ width: 16, height: 16 }, 1), { width: 64, height: 64 });
+  assert.deepEqual(targetSize({ width: 100, height: 50 }, 1), { width: 128, height: 64 });
+  assert.deepEqual(targetSize({ width: 50, height: 100 }, 6), { width: 128, height: 64 });
+  assert.deepEqual(targetSize({ width: 2000, height: 3 }, 1), { width: MAX_SIDE, height: 2 }, "never past the largest size, even if the short side stays under the minimum");
+  for (const bad of [{ width: 0, height: 0 }, { width: 0, height: 600 }, { width: 900 }, { width: -4, height: 4 }, { width: NaN, height: 4 }])
+    assert.throws(() => targetSize(bad, 1), /the picture's size is/, JSON.stringify(bad)); // no clip is drawn from a size of nothing
 });
 
 test("ffmpeg renders a sideways phone photo upright and caps a large one (real ffmpeg)", async () => {
@@ -54,7 +67,10 @@ test("the whole pipeline through the API with the real packager: upload → read
     t.skip(`NOT RUN HERE: shaka-packager ("${tools.packager}") is not installed in this environment; CI runs it`);
     return;
   }
-  const app = await startApp({ maxUploadBytes: 5 * 1024 * 1024 });
+  // given as a RELATIVE path: each photo is packaged in its own folder, so it runs only if the service runs the very path it
+  // checked (the twelfth review: the check read one file and the run, from the photo's folder, looked for another)
+  let rel = relative(process.cwd(), await checkPackager(tools.packager)); if (!rel.includes("/")) rel = "./" + rel;
+  const app = await startApp({ maxUploadBytes: 5 * 1024 * 1024, tools: { ...tools, packager: rel } });
   try {
     const { cookie } = await login(app.base);
     const pic = await fs.readFile(await jpeg("card.jpg", 720, 960, "0x8c1f4e"));

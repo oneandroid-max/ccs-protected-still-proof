@@ -26,7 +26,7 @@
 <ol id="steps" class="muted" style="font-size:0.9rem"></ol>
 <script type="module">
 import { deriveKey, derivePhotoKey, sealText, toBase64, fromBase64, exportKeyHex, randomBytes } from "./crypto.js?v=aeb9bfd1fe59";
-import { REPO, api, checkToken, session } from "./app.js?v=89fabf9a7fa1";
+import { REPO, api, checkToken, session } from "./app.js?v=85c3f5b4691e";
 const $ = (id) => document.getElementById(id);
 const step = (t, cls) => { const li = document.createElement("li"); li.textContent = t; if (cls) li.className = cls; $("steps").appendChild(li); };
 $("f").addEventListener("submit", async (e) => {

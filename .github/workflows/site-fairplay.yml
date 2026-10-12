@@ -1,0 +1,59 @@
+# APPLE BACKFILL: started by hand once the Axinom key is in the repository's secrets (AXINOM_COM_KEY_ID,
+# AXINOM_COM_KEY), and weekly, so every licence token is renewed before it runs out (tokens last 60 days;
+# one with less than 14 left is renewed). Gives every picture without a good Apple form one, from its own
+# protected output, and remakes the combined view when it needs the same (site/backfill.mjs, then
+# site/worker.mjs). The picture key is derived on the runner from the site password, the way the page
+# derives it, and masked before anything is printed. Opens no page and takes no capture. Its own queue
+# (one backfill at a time, never cancelled by another workflow's jobs); it commits on the current tip of
+# main and redoes the work if its push races another job, so it may run beside a combined-view job.
+# A picture that did not get the form leaves the run red after the commit.
+name: site fairplay
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC: renew tokens before they run out
+
+permissions:
+  contents: write
+
+concurrency: { group: site-fairplay, cancel-in-progress: false }
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main }
+      - name: ffmpeg and shaka-packager
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
+          curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
+          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
+          sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version
+      - name: Give every picture and the combined view Apple's form, on the current tip of main; refresh and redo if the push races
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          AXINOM_COM_KEY_ID: ${{ secrets.AXINOM_COM_KEY_ID }}
+          AXINOM_COM_KEY: ${{ secrets.AXINOM_COM_KEY }}
+          PACKAGER_BIN: /usr/local/bin/packager
+          BACKFILL_RESULT: ${{ runner.temp }}/backfill.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for i in 1 2 3 4 5; do
+            git fetch -q origin main && git reset -q --hard origin/main
+            node site/backfill.mjs
+            # only what the backfill writes: the pictures' folders, the list, the combined view (each named
+            # only when it exists or was committed before; naming one that never existed fails)
+            for p in site/photos site/gallery.json.enc site/mosaic; do
+              if [ -e "$p" ] || git ls-files --error-unmatch "$p" > /dev/null 2>&1; then git add -A "$p"; fi
+            done
+            if git diff --cached --quiet; then echo "nothing to commit"; break; fi
+            git commit -q -m "site: Apple's form for every picture and the combined view"
+            if git push -q origin HEAD:main; then echo "pushed"; break; fi
+            [ "$i" = 5 ] && { echo "could not push after five tries"; exit 1; }
+            echo "the push raced with another job; refreshing and running again ($i)"; sleep $((i * 5))
+          done
+          node -e 'const fs = require("fs"), p = process.env.BACKFILL_RESULT; if (!fs.existsSync(p)) { console.log("the backfill wrote no result"); process.exit(1); } const r = JSON.parse(fs.readFileSync(p, "utf8")); if (r.failed) { console.log(r.failed + " form(s) not made or renewed (see above)"); process.exit(1); }'

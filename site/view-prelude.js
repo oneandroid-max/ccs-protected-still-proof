@@ -3,6 +3,10 @@
 // in-memory "mem://" scheme, so the public site only ever carries encrypted bytes and the player sees
 // the same files the proof page plays. Two pages use it: view.html (one picture, ?id=) and all.html
 // (window.__ccsMode = "all": the combined view of every ready picture, site/mosaic/, built by the job).
+// Apple's FairPlay form is the one exception to "from memory": Safari's own player fetches it by address,
+// so its files are served as they are (their samples are encrypted under a key that only the picture's
+// licence token carries, encrypted for the licence service), and only the token (token.enc, in the same
+// folder) is sealed.
 import { importKeyHex, open, openText } from "./crypto.js?v=aeb9bfd1fe59";
 
 const FILES = ["widevine.mpd", "video-widevine.mp4", "playready.mpd", "video-playready.mp4"];
@@ -97,11 +101,22 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const files = {};
       for (const f of FILES) files[f] = await open(key, await fetchSealed(base + f + ".enc", missing));
       registerMemScheme(window.shaka, files);
+      // the Apple form, when the job made one; a fault here touches Apple devices only, and is shown there
+      let fairplay = null;
+      if (meta.fairplay) {
+        try {
+          if (!/^fp-[0-9a-f]{8}\/master\.m3u8$/.test(String(meta.fairplay.master))) throw new Error("its address is not one the job writes");
+          // a token past the expiry date the job recorded for it can license nothing: the form is not offered (the job treats it as dead too)
+          if (Date.parse(meta.fairplay.expires) <= Date.now()) throw new Error(`its licence token expired on ${String(meta.fairplay.expires).slice(0, 10)}`);
+          const token = await openText(key, await fetchSealed(base + meta.fairplay.master.split("/")[0] + "/token.enc", "its licence token is not on the site yet"));
+          fairplay = { manifest: new URL(base + meta.fairplay.master, location.href).href, token, ...(meta.fairplay.license !== undefined ? { license: String(meta.fairplay.license) } : {}) };
+        } catch (e) { fairplay = { error: e.message }; }
+      }
       if (ALL) wireAll(meta);
       const n = ALL ? meta.tiles.length : 0;
       window.__ccsResolve(ALL
-        ? { id: "all", title: `All your pictures, protected (${n})`, content: `your pictures: all ${n}, combined into one protected video`, prKidGuid: meta.prKidGuid, width: meta.width, height: meta.height }
-        : { id, title: "Protected view: " + meta.name, content: "your picture: " + meta.name, prKidGuid: meta.prKidGuid, width: meta.width, height: meta.height });
+        ? { id: "all", title: `All your pictures, protected (${n})`, content: `your pictures: all ${n}, combined into one protected video`, prKidGuid: meta.prKidGuid, width: meta.width, height: meta.height, fairplay }
+        : { id, title: "Protected view: " + meta.name, content: "your picture: " + meta.name, prKidGuid: meta.prKidGuid, width: meta.width, height: meta.height, fairplay });
     } catch (e) {
       const msg = document.getElementById("msg"); if (msg) msg.textContent = (ALL ? "The combined view could not be opened: " : "This picture could not be opened: ") + e.message;
       for (const k of ["r-ks", "r-expect"]) { const el = document.getElementById(k); if (el) { el.textContent = "not opened — " + e.message; el.className = "bad"; } }
