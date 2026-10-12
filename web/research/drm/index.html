@@ -123,7 +123,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 18:20 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 18:59 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -420,8 +420,9 @@
   // whether this browser offers Apple's FairPlay at all, asked of the browser itself as Apple's test does above, after a
   // FairPlay attempt that did not play: on Apple's engine the player library plays FairPlay through Safari's own player,
   // where no code of its own says FairPlay is missing (the twenty-sixth review measured a 3016 media error in Chromium
-  // made to play HLS natively; a real WebKit may load and then not play, as GitHub's virtual Mac did: the
-  // twenty-seventh review)
+  // told to report native HLS: its own player then failed on the playlist, as it did with FairPlay offered, so the code
+  // says nothing about FairPlay (the twenty-eighth review); a real WebKit may load and then not play, as GitHub's
+  // virtual Mac did: the twenty-seventh review)
   const fairplayOffered = () => !navigator.requestMediaKeySystemAccess ? Promise.resolve(false)
     : navigator.requestMediaKeySystemAccess("com.apple.fps", [{ initDataTypes: ["skd", "sinf"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"' }] }]).then(() => true, () => false);
   // Try one tier (one key system, one kind of level). Returns "ok" when the photo plays, "unavailable"
@@ -491,11 +492,15 @@
     set("r-granted", t.system === "clearkey" ? "none — ClearKey: the browser decrypts the card in its own code (control)"
       : t.system === "fairplay" ? "Apple FairPlay — the device's own protected path (Apple offers no levels to choose)"
       : `${t.word} — the browser accepted a ${t.word}-only request (${t.levels.join(" or ")})`, t.word === "hardware" ? "ok" : (TEST ? "bad" : "ok"));
-    log(`${tierName}: ${t.system === "clearkey" ? "ClearKey accepted" : t.system === "fairplay" ? "the browser accepted FairPlay" : `the browser accepted the ${t.word}-only request`}; waiting for the licence and the first frame …`);
+    // FairPlay: only that the playlist loaded; through Safari's own player that says nothing of whether the browser offers
+    // FairPlay, which is asked after a failure (the twenty-eighth review: this said "the browser accepted FairPlay" where
+    // the box then said it offers none)
+    log(`${tierName}: ${t.system === "clearkey" ? "ClearKey accepted" : t.system === "fairplay" ? "the FairPlay playlist loaded" : `the browser accepted the ${t.word}-only request`}; waiting for the licence and the first frame …`);
     // Count it as shown only when the video is really playing: a decoded frame (a size above 0x0) and its
     // time moving. The "playing" event alone is not enough: a Mac without a working FairPlay fired it with
     // no frame at all, and a black screenshot of nothing measures nothing.
     video.style.visibility = "visible";
+    let endedByError = false; // the wait ended by a player error, not by the 15 s (the twenty-eighth review)
     const started = await new Promise((resolve) => {
       let done = false, t0 = null, poll = null;
       const finish = (v) => { if (!done) { done = true; clearInterval(poll); resolve(v); } };
@@ -503,12 +508,12 @@
         if (video.paused || !video.videoWidth) return;
         if (t0 === null) t0 = video.currentTime; else if (Math.abs(video.currentTime - t0) >= 0.2) finish(true);
       }, 200);
-      player.addEventListener("error", () => finish(false), { once: true });
+      player.addEventListener("error", () => { if (!done) endedByError = true; finish(false); }, { once: true });
       setTimeout(() => finish(false), 15000);
       video.play().catch(() => {});
     });
     if (!started) {
-      log(`${tierName}: no playback within 15 s${lastError ? " — last error " + lastError : video.videoWidth ? " — a frame, but its time did not move" : " — no licence or no decoded frame (size " + video.videoWidth + "x" + video.videoHeight + ")"}`);
+      log(`${tierName}: no playback${endedByError ? "" : " within 15 s"}${lastError ? " — last error " + lastError : video.videoWidth ? " — a frame, but its time did not move" : " — no licence or no decoded frame (size " + video.videoWidth + "x" + video.videoHeight + ")"}`);
       hidePhoto();
       try { await player.destroy(); } catch (x) {} current = null;
       return "failed-after-grant";

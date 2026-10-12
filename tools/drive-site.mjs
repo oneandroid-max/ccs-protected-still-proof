@@ -167,6 +167,8 @@ window.shaka = { polyfill: { installAll(){} },
       // a decoded 720x960 frame and moving time, as a real protected video reports them (the page needs both);
       // window.__noFrames: "playing" with no frame at all, as a Mac without a working FairPlay did
       const v = this.v, t0 = performance.now();
+      // window.__playError: a player error after the load (a code), which ends the page's wait for playback early
+      if (window.__playError) { setTimeout(() => this.dispatchEvent(Object.assign(new Event("error"), { detail: { code: window.__playError } })), 100); return; }
       if (window.__noFrames) { setTimeout(() => v.dispatchEvent(new Event("playing")), 50); return; }
       Object.defineProperty(v, "videoWidth", { configurable: true, get: () => 720 });
       Object.defineProperty(v, "videoHeight", { configurable: true, get: () => 960 });
@@ -942,8 +944,10 @@ try {
     "as built, an iPhone: only the FairPlay button, and the lines name the measurement: " + (await ap.textContent("#r-rule")));
   await ac.close();
   // ... and where its FairPlay load fails, the box says what happened, by asking the browser whether it offers FairPlay
-  // (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: on Apple's engine a missing
-  // FairPlay fails the load with a media error, 3016, as the stand-in does here, never with a code of its own)
+  // (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: the load's error code cannot
+  // tell. Its 3016 was measured in Chromium told to report native HLS, whose own player then failed on the playlist, as
+  // it did with FairPlay offered (the twenty-eighth review): a code that says nothing about FairPlay, given here both
+  // with FairPlay offered and without)
   const NO_FPS = "This browser doesn't offer Apple's protected path (FairPlay), so the test card isn't shown here.", LOAD_FAILED = "The test card couldn't load through Apple's protected path (FairPlay) right now, so it isn't shown. Try again in a moment.";
   for (const [ua, init, msg, ks, what] of [
     [IPHONE, SAFARI_PARTS(false) + "; window.__loadError = 3016;", NO_FPS, "held back — this browser offers no Apple FairPlay", "Safari with no FairPlay (the load failing with 3016): not told to open Safari"],
@@ -962,6 +966,23 @@ try {
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#msg")) === NO_FPS + " Open this link in Safari." && (await ap.textContent("#r-ks")) === "held back — this browser offers no Apple FairPlay",
     "as built, on an iPhone, an app's built-in browser with no FairPlay whose load succeeds and never plays: told so, and sent to Safari: " + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
+  // ... and its Attempts say only what happened, the playlist loaded, never that the browser accepted FairPlay (the
+  // twenty-eighth review)
+  check(/fairplay-apple: the FairPlay playlist loaded; waiting for the licence and the first frame/.test(await ap.textContent("#log")) && !/accepted FairPlay/.test(await ap.textContent("#log")),
+    "as built, on an iPhone, an app's built-in browser with no FairPlay whose load succeeds: the Attempts say the playlist loaded, not that FairPlay was accepted: " + (await ap.textContent("#log")).replace(/\n/g, " / "));
+  await ac.close();
+  // the Apple test link in a browser with no FairPlay whose load succeeds and never plays: told the browser does not offer
+  // what the test asks for, not that FairPlay was accepted (the twenty-eighth review: nothing checked it since (8) moved)
+  ({ c: ac, pg: ap } = await oneLink(IPHONE_APP, "?levels=fairplay", SAFARI_PARTS(false) + "; window.__noFrames = true;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "This browser doesn't offer what this test asks for (Apple's FairPlay), so the test card isn't shown here." && (await ap.textContent("#r-granted")) === "nothing this page accepts",
+    "the Apple test link in a browser with no FairPlay whose load succeeds and never plays: told the browser does not offer it: " + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-granted")));
+  await ac.close();
+  // where an error ends the wait for playback, the Attempts do not say the 15 s passed (the twenty-eighth review)
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true) + "; window.__playError = 6010;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check(/fairplay-apple: no playback — last error 6010/.test(await ap.textContent("#log")) && !/within 15 s/.test(await ap.textContent("#log")),
+    "as built, on an iPhone, an error ending the wait for playback: the Attempts name the error, not 15 s: " + (await ap.textContent("#log")).replace(/\n/g, " / "));
   await ac.close();
   // the Apple test link where FairPlay is offered and the card does not load (as in the iPhone simulator): not told the
   // browser lacks what the test asks for (the twenty-sixth review)
