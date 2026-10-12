@@ -204,6 +204,7 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, step('P=/usr/local/bin/packager; "$P" --version')], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, step("sh -c '/usr/local/bin/packager --version'")], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, (t) => t.replace(AT, "      - { name: v, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace(AT, "      - { env: { PACKAGER_BIN: /usr/local/bin/packager }, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")], // only PACKAGER_BIN's own value passes
     [[ST, step("${{ env.PACKAGER_BIN }} --version")], UNCHECKED_RUN("env.PACKAGER_BIN")],
     [[ST, (t) => t.replace("    steps:\n", "    steps: # the job's steps\n").replace(AT, "      - run: /usr/local/bin/packager --version\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, (t) => t.replace("node tools/run-packager.mjs /usr/local/bin/packager --version", "node tools/run-packager.mjs /usr/local/bin/packager --version; /usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
