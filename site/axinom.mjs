@@ -16,7 +16,8 @@ export const AXINOM_FAIRPLAY_CERT = "https://tools.axinom.com/FPScert/fairplay.c
 // An Axinom FairPlay licence address: the shared one above, or an environment's own, which carries the
 // environment's tenant prefix (https://<prefix>.drm-fairplay-licensing.axprod.net/AcquireLicense, as its DRM
 // Service page shows it; Axinom: "use the URLs exactly as shown"). A page sends a token to no other host: the
-// route-1 page and the Apple check page carry this same pattern (the tests compare them).
+// route-1 page (its Apple test included) carries this same pattern, and so do the site's two pages built from it
+// (a test compares the route-1 page's with this one; another, that the built pages are current).
 export const FAIRPLAY_LICENSE_ADDRESS = /^https:\/\/(?:[a-z0-9][a-z0-9-]{0,62}\.)?drm-fairplay-licensing\.axprod\.net\/AcquireLicense$/;
 // The account's own settings, committed in site/axinom.json (public by nature: Safari asks the licence address
 // in the open): its FairPlay licence address. Without the file, the shared address; anything that is not an
@@ -86,8 +87,8 @@ export const comKeyCheck = (com) => createHmac("sha256", com.key).update("ccs-pr
 // Axinom's PUBLIC test key: the content key of its own public FairPlay test stream ("v10 HLS H264
 // single key"), published with a licence token that never expires, in github.com/Axinom/public-test-vectors
 // (ContentKeys/Axinom-Encoding-Dash-Hls-H264-protected-SingleKey.txt; the token is the AXINOM_PUBLIC_TOKEN
-// of web/research/drm/index.html and the TOKEN of web/research/apple/index.html, checked equal by the
-// tests). Anyone can decrypt with it, so it protects ONLY the public test card (tools/fairplay-card.mjs),
+// of web/research/drm/index.html, written there once and used by its Apple test and the card's Apple form; the
+// tests check what it licenses). Anyone can decrypt with it, so it protects ONLY the public test card (tools/fairplay-card.mjs),
 // never a picture of the owner's.
 export const AXINOM_PUBLIC_TEST = {
   kid: "4060a865887842679cbf91ae5bae1e72",

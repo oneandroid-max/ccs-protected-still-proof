@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "18:11 UTC"
+  EXPECT_VERSION: "12:00 UTC"
 
 jobs:
   look:
@@ -40,7 +40,7 @@ jobs:
           xcrun simctl list devices available | awk -v u="$UDID" 'index($0,u){print}'
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b > /dev/null
-          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}#readout"
+          U="https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}#videos"
           xcrun simctl openurl "$UDID" "$U" || { echo "opening timed out; trying once more"; sleep 20; xcrun simctl openurl "$UDID" "$U"; }
           sleep 40
           xcrun simctl io "$UDID" screenshot web/research/drm/results/iphone-safari.png && echo iphone-safari.png >> "$RUNNER_TEMP/produced.txt"
@@ -54,7 +54,7 @@ jobs:
       - name: Mac, Safari — open the link and screenshot
         continue-on-error: true
         run: |
-          open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}m#readout"
+          open -a Safari "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card&v=${{ github.run_number }}m#videos"
           sleep 40
           caffeinate -u -t 2
           screencapture -x web/research/drm/results/mac-safari.png || { sleep 5; caffeinate -u -t 2; screencapture -x web/research/drm/results/mac-safari.png; }

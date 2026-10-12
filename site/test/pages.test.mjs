@@ -6,7 +6,9 @@
 //   - on Apple's engine (every iPhone or iPad browser, Safari on a Mac) nothing at all is tried for the
 //     picture until FAIRPLAY_MEASURED holds a date for that platform, and then only Apple's own form,
 //     with the picture's own form and token;
-//   - nowhere else is the Apple form tried outside its test, and the switch changes nothing there.
+//   - nowhere else is the Apple form tried outside its test, and the switch changes nothing there;
+//   - Apple's test (the one link for every device) runs on the route-1 page exactly where the picture is held back on
+//     Apple's engine, outside a test mode; never on the site's pages, never elsewhere.
 // Also: the workflow guard refuses a link whose first parameter is not the safe one, or that names a
 // second levels= or clip= (the page reads the first; the bypass a review found on 2026-10-11).
 import { test } from "node:test";
@@ -16,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const read = (f) => fs.readFile(join(REPO, f), "utf8");
@@ -31,7 +34,7 @@ function decide(html, measured) {
     body = body.replace(/const FAIRPLAY_MEASURED = \{[^}]*\};/, `const FAIRPLAY_MEASURED = ${JSON.stringify(measured)};`);
     assert.notEqual(body, before, "the Apple switch is found");
   }
-  return new Function("navigator", "location", "set", "CTX", body + "\nreturn { PLATFORM, APPLE, TEST, CARD, ORDER, CLIP, FAIRPLAY_OK };");
+  return new Function("navigator", "location", "set", "CTX", body + "\nreturn { PLATFORM, APPLE, TEST, CARD, ORDER, CLIP, FAIRPLAY_OK, APPLE_TEST, TIERS };");
 }
 
 const IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)";
@@ -66,7 +69,7 @@ const OTHER = ["", "?clip=card", "?v=3", "?levels=x&levels=fairplay", "?clip=pho
 const PICTURE = { manifest: "https://example.test/site/photos/ID/fp-0a1b2c3d/master.m3u8", token: "THE.PICTURES.OWN.TOKEN" };
 const CTX = { content: "your picture: P", prKidGuid: "0", fairplay: PICTURE };
 
-test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured; nothing else changes", async () => {
+test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured and, on the route-1 page only, runs Apple's test there; nothing else changes", async () => {
   const route1 = await read("web/research/drm/index.html");
   const publicToken = route1.match(/const AXINOM_PUBLIC_TOKEN = "([^"]+)"/)[1];
   const pages = { "route-1 page": route1, "site/view.html": await read("site/view.html"), "site/all.html": await read("site/all.html") };
@@ -76,8 +79,11 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
     for (const measured of [null, { "iPhone/iPad": "2026-10-11", "Mac": "" }, { "iPhone/iPad": "", "Mac": "2026-10-11" }]) {
       const fn = decide(html, measured);
       for (const [dev, [ua, touch, apple, platform]] of Object.entries(DEVICES)) {
-        const at = (q) => { runs++; return fn({ userAgent: ua, maxTouchPoints: touch }, { search: q }, () => {}, CTX); };
         const what = (q) => `${pageName}, ${dev}, "${q}", Apple switch ${JSON.stringify(measured)}`;
+        // Apple's test: on the route-1 page only, on Apple's engine where the switch holds no date, outside a test mode
+        const at = (q) => { runs++; const r = fn({ userAgent: ua, maxTouchPoints: touch }, { search: q }, () => {}, CTX);
+          assert.equal(r.APPLE_TEST, pageName === "route-1 page" && apple && !(measured && measured[platform]) && !r.TEST, what(q) + ": Apple's test where the picture is held back on Apple's engine, on the route-1 page only");
+          return r; };
         const plain = (q) => { // a link that is not a test
           const r = at(q);
           assert.equal(r.PLATFORM, platform, what(q)); assert.equal(r.APPLE, apple, what(q)); assert.equal(r.TEST, false, what(q));
@@ -104,6 +110,107 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
     }
   }
   assert.ok(runs > 1500, `${runs} combinations run`);
+});
+
+// The route-1 page's own words, as every visitor reads them before its script runs, held to what was measured (the
+// seventeenth and eighteenth reviews: the lede said screenshots were known to be black where software protection was
+// never measured): no such claim, and the places where it was measured named. And the words are pinned by a
+// fingerprint (the nineteenth review: other over-claiming words passed the list of banned phrases), so any change to
+// them fails here until they are read again against the measurements and the fingerprint is brought up to date.
+// The script is pinned the same way (the twentieth review: a sentence the script writes was changed to an over-claim, and
+// every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
+// twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
+// unchanged), with only the page version's date and time left out.
+const PAGE_FILE = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "122a654145dc9aab", "site/view.html": "640ff6e36325a968", "site/all.html": "a28cf3c86afd8190" };
+const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
+const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "fdcf76dd4e70f807", "site/view.html": "7ac40067a2558dc1", "site/all.html": "d272dc661fc402cf" };
+// every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
+// twenty-first review: a sentence in a module script or in the rest of the page version passed)
+const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
+const PAGE_WORDS = { "web/research/drm/index.html": "8e1f4e01d0e8fe91", "site/view.html": "78c0c25ce1b175d8", "site/all.html": "db55d56180213dec" };
+test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const html = await read(f);
+    const words = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    for (const re of [/known to come out black/i, /measured black there/i, /where screenshots were measured black/i, /screenshots are known/i]) assert.ok(!re.test(words), `${f}: no claim beyond the measurements (${re})`);
+    assert.match(words, /software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)/, `${f}: the lede names where software protection was measured`);
+    const print = createHash("sha256").update(words).digest("hex").slice(0, 16);
+    assert.equal(print, PAGE_WORDS[f], `${f}: its words changed; read them against the measurements, then update the fingerprint (${print}):\n${words}`);
+    const said = createHash("sha256").update(scriptOf(html)).digest("hex").slice(0, 16);
+    assert.equal(said, PAGE_SCRIPT[f], `${f}: its script changed; read every sentence it writes against the measurements, then update the fingerprint (${said})`);
+    const whole = createHash("sha256").update(wholeOf(html)).digest("hex").slice(0, 16);
+    assert.equal(whole, PAGE_FILE[f], `${f}: the file changed (its style, an attribute, anything); read what a visitor sees against the measurements, then update the fingerprint (${whole})`);
+  }
+  const preludeWhole = createHash("sha256").update(wholeOf(await read("site/view-prelude.js"))).digest("hex").slice(0, 16);
+  assert.equal(preludeWhole, PAGE_FILE["site/view-prelude.js"], `site/view-prelude.js changed; read every sentence it writes, then update the fingerprint (${preludeWhole})`);
+  // the site pages' prelude, which writes the box on those pages before their script runs
+  const prelude = createHash("sha256").update(await read("site/view-prelude.js")).digest("hex").slice(0, 16);
+  assert.equal(prelude, PAGE_SCRIPT["site/view-prelude.js"], `site/view-prelude.js changed; read every sentence it writes, then update the fingerprint (${prelude})`);
+});
+
+// The lede's account of where software protection is accepted, held to the page's own decision (the twentieth review:
+// a lede stating a stricter rule than the one built passed every test): software protection in the order of attempts
+// for exactly the browsers the lede says accept it, measured or not yet measured, and for none of those it says refuse it
+test("the lede says where software protection is accepted, as the page's own decision block decides it", async () => {
+  const W = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ", A = "Mozilla/5.0 (Linux; Android 14; Pixel 8) ";
+  const GROUPS = {
+    "accepted, measured: Chrome and Edge on Windows, Chrome on Android": [`${W}${CR} Safari/537.36`, `${W}${CR} Safari/537.36 Edg/126.0.0.0`, `${A}${CR} Mobile Safari/537.36`],
+    "accepted, not yet measured: Edge on Android, and the other browsers on Windows and Android the page reads as Chrome": [`${A}${CR} Mobile Safari/537.36 EdgA/126.0.0.0`,
+      `Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/470.0.0.0;]`,
+      `Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 LinkedInApp/9.30`,
+      `${A}AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile DuckDuckGo/5 Safari/537.36`, `${A}${CR} HuaweiBrowser/15.0.4.312 Mobile Safari/537.36`,
+      `${A}${CR} Mobile Safari/537.36 XiaoMi/MiuiBrowser/14.3.0-gn`, `${A}${CR} UCBrowser/13.6.0.1315 Mobile Safari/537.36`, `${W}${CR} YaBrowser/24.6.0.0 Safari/537.36`, `${W}${CR} Safari/537.36 Vivaldi/6.8`,
+      `${W}${CR} Whale/3.27.254.15 Safari/537.36`, `${A}${CR} Mobile Safari/537.36 SomeBrowserNoOneNamed/1.0`,
+      // each named one on both platforms where it exists on both (the twenty-second review: Whale held to hardware on
+      // Android only passed)
+      `${A}${CR} Mobile Safari/537.36 Whale/3.27.254.15`, `${A}${CR} YaBrowser/24.6.0.0 Mobile Safari/537.36`, `${A}${CR} Mobile Safari/537.36 Vivaldi/6.8`,
+      `${W}${CR} Safari/537.36 DuckDuckGo/1.0`, `${W}${CR} Safari/537.36 SomeBrowserNoOneNamed/1.0`],
+    "not accepted: anywhere else, Samsung Internet, Opera and Firefox included (Macs, Linux and Chromebooks too)": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+      "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0", DEVICES["Android Samsung Internet"][0], `${W}${CR} Safari/537.36 OPR/112.0.0.0`, `${A}${CR} Mobile Safari/537.36 OPR/83.0.0.0`,
+      DEVICES["Mac Chrome"][0], DEVICES["Mac Edge"][0], DEVICES["Mac Firefox"][0], DEVICES["Linux Chrome"][0], DEVICES["Linux Firefox"][0], DEVICES.ChromeOS[0],
+      `Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Safari/537.36`],
+  };
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const html = await read(f), fn = decide(html);
+    const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome \(apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others\)\./, f);
+    assert.match(lede, /Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device\./, f);
+    assert.match(lede, /On Apple devices \(FairPlay\) the photo is held back until a screenshot there is measured black\./, f);
+    // the levels each tier asks for, as the lede's words mean them (the twenty-first review: a software level added to
+    // the hardware tier passed), on every browser below (the twenty-second review: changed on Linux only, it passed);
+    // what a request actually carries is checked by the drive
+    const TIERS_AS_BUILT = {
+      "widevine-hardware": { system: "widevine", word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
+      "widevine-software": { system: "widevine", word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
+      "playready-hardware": { system: "playready", word: "hardware", levels: ["3000"], sl: 3000 },
+      "playready-software": { system: "playready", word: "software", levels: ["2000"], sl: 2000 },
+      "clearkey-card": { system: "clearkey", word: "no protection", levels: ["ClearKey, decrypted in the browser's own code"] },
+      "fairplay-apple": { system: "fairplay", word: "Apple FairPlay", levels: ["FairPlay Streaming"] },
+    };
+    for (const [group, uas] of Object.entries(GROUPS)) for (const ua of uas) {
+      const r = fn({ userAgent: ua, maxTouchPoints: 0 }, { search: "" }, () => {}, CTX);
+      // any tier that asks for software protection counts (Widevine or PlayReady), not one name
+      assert.equal(r.ORDER.some((t) => r.TIERS[t].word === "software"), !group.startsWith("not accepted"), `${f}: ${group}: ${ua}: ${r.ORDER.join(", ")}`);
+      assert.ok(r.ORDER.includes("widevine-hardware") && !r.APPLE, `${f}: ${ua}: hardware protection is accepted there too`);
+      assert.deepEqual(r.TIERS, TIERS_AS_BUILT, `${f}: ${ua}: the tiers and the levels each asks for`);
+    }
+  }
+});
+
+// The Apple check's old address (sent before its test moved onto the route-1 page) forwards there, to the test card:
+// never a picture; and it holds no player, token or key system of its own that could drift from the page's
+test("the Apple check's old address forwards to the one test page, on the test card, and holds nothing of its own", async () => {
+  const old = await read("web/research/apple/index.html");
+  assert.match(old, /<meta http-equiv="refresh" content="0; url=\.\.\/drm\/\?clip=card">/);
+  assert.match(old, /<script>location\.replace\("\.\.\/drm\/\?clip=card"\);<\/script>/);
+  const targets = [...old.matchAll(/(?:url=|href="|replace\(")([^"]+)/g)].map((m) => m[1]);
+  assert.deepEqual([...new Set(targets)], ["../drm/?clip=card"], "every way out goes to the test card: " + targets.join(", "));
+  assert.equal(targets.length, 3, "the refresh, the script and the link");
+  // and no other way out (the seventeenth review: a second script before this one sent the page to the photo): one
+  // script, one location, one link, one refresh, and nothing else that loads or navigates
+  for (const [re, n, what] of [[/<script/g, 1, "script"], [/location/g, 1, "location"], [/href=/g, 1, "link"], [/http-equiv/g, 1, "refresh"]]) assert.equal((old.match(re) || []).length, n, `exactly one ${what}`);
+  assert.ok(!/\bsrc=|action=|<iframe|<form|<link|<object|<embed|<base|window\.|document\.|open\(|assign\(|onload|onerror/i.test(old), "nothing else that loads or navigates");
+  assert.ok(!/shaka|AxDRM|eyJhbGci|requestMediaKeySystemAccess|<video/.test(old), "no player, token, key system or video of its own");
 });
 
 // The guard, run in a copy of the repository's workflows and tools with one extra workflow, or with one
@@ -182,7 +289,7 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, step("curl -sSL -o /usr/local/bin/PACKAGER https://mirror.example.com/bin/x64")], NAMED], // the name only in capitals, nowhere else on the line
     [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      TOOL_IMAGE: SOMEORG/SHAKA-PACKAGER:LATEST")], NAMED], // shaka-packager named in capitals
     // (E), the thirteenth review: a workflow runs the packager only through tools/run-packager.mjs (it checks the file at
-    // that moment, then runs exactly that file); any other word naming the file is refused, whatever the shell around it
+    // that moment, then runs exactly that file); any other word naming the file is refused, in the ordinary shapes
     [[".github/workflows/drm-package.yml", (t) => t.replace("node tools/run-packager.mjs /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4", "/tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4")], /drm-package\.yml:\d+: names the packager file \(\/tmp\/packager\) where it could run unchecked/],
     [[ST, (t) => t.replace("sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/packager && packager --version")], UNCHECKED_RUN("packager")],
     [[ST, step("/usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
@@ -204,7 +311,7 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, step('P=/usr/local/bin/packager; "$P" --version')], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, step("sh -c '/usr/local/bin/packager --version'")], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, (t) => t.replace(AT, "      - { name: v, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
-    [[ST, (t) => t.replace(AT, "      - { env: { PACKAGER_BIN: /usr/local/bin/packager }, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")], // only PACKAGER_BIN's own value passes
+    [[ST, (t) => t.replace(AT, "      - { env: { PACKAGER_BIN: /usr/local/bin/packager }, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")], // only PACKAGER_BIN's own value passes (in the ordinary shapes)
     [[ST, step("${{ env.PACKAGER_BIN }} --version")], UNCHECKED_RUN("env.PACKAGER_BIN")],
     [[ST, (t) => t.replace("    steps:\n", "    steps: # the job's steps\n").replace(AT, "      - run: /usr/local/bin/packager --version\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
     [[ST, (t) => t.replace("node tools/run-packager.mjs /usr/local/bin/packager --version", "node tools/run-packager.mjs /usr/local/bin/packager --version; /usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
@@ -214,6 +321,12 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/pk ${PIN}`).replace(/(echo "7a3cf35a[0-9a-f]+  )\/usr\/local\/bin\/packager(" \| sha256sum)/, "$1/usr/local/bin/pk$2").replace("sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/pk").replace(AT, "      - run: /usr/local/bin/pk --version\n" + AT)], /site-test\.yml:\d+: the pinned download must be saved as <folder>\/packager, so that every later use of the file is seen \(rule E\); \/usr\/local\/bin\/pk is not/],
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/pk ${PIN}`).replace(/(echo "7a3cf35a[0-9a-f]+  )\/usr\/local\/bin\/packager(" \| sha256sum)/, "$1/usr/local/bin/pk$2").replace("sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/pk").replace(AT, "      - run: cp /bin/true /usr/local/bin/pk && /usr/local/bin/pk --version\n" + AT)], /site-test\.yml:\d+: the pinned download must be saved as <folder>\/packager/],
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager-v3.9.3 ${PIN}`).replace(/(echo "7a3cf35a[0-9a-f]+  )\/usr\/local\/bin\/packager(" \| sha256sum)/, "$1/usr/local/bin/packager-v3.9.3$2").replace("sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/packager-v3.9.3").replace(AT, "      - run: /usr/local/bin/packager-v3.9.3 --version\n" + AT)], /site-test\.yml:\d+: the pinned download must be saved as <folder>\/packager, so that every later use of the file is seen \(rule E\); \/usr\/local\/bin\/packager-v3\.9\.3 is not/],
+    // the fifteenth review: ordinary shapes that touched a bracket or a backslash (a flow sequence in a job's matrix, run
+    // as ${{ matrix.tool }}; a backslash before a name, the shell's way past an alias; no space before a line's continuation)
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        tool: [ffmpeg, packager]").replace(AT, "      - run: ${{ matrix.tool }} --version\n" + AT)], UNCHECKED_RUN("packager")],
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        tool: [/usr/local/bin/packager]").replace(AT, "      - run: ${{ matrix.tool }} --version\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("\\packager --version")], UNCHECKED_RUN("packager")],
+    [[ST, (t) => t.replace(AT, "      - run: |\n          /usr/local/bin/packager\\\n            --version\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
     // every run through the runner counted: one gone (or a guard that stops reading a workflow) fails
     [[".github/workflows/site-photos.yml", (t) => t.replace(" && node tools/run-packager.mjs /usr/local/bin/packager --version", "")], /site-photos\.yml: expected 2 runs of the packager through tools\/run-packager\.mjs, read 1/],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)

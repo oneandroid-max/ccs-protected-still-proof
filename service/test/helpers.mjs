@@ -7,8 +7,13 @@ import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { createApp } from "../server.mjs";
+import { checkPackager } from "../lib/packager-pin.mjs";
 
 export const REPO = fileURLToPath(new URL("../../", import.meta.url));
+// The packager handed to the app (and so to any test that reads it from the app's settings): the pinned file's
+// checked path, or, when it is not there, a name that runs nothing. A test that took this value and ran it runs only
+// the checked file (the eighteenth review: the value used to be PACKAGER_BIN as given).
+const PACKAGER = await checkPackager(process.env.PACKAGER_BIN || "packager").catch(() => "/nonexistent/unchecked-packager");
 
 export async function mockUpstream(reply = Buffer.from("LICENCE-OK"), contentType = "application/octet-stream") {
   const seen = [];
@@ -28,7 +33,7 @@ export async function startApp(over = {}) {
   const cfg = {
     port: 0, dataDir, password: "correct horse battery", sessionSecret: "s".repeat(32),
     maxPhotos: 10, maxUploadBytes: 200000, trustProxy: false, secureCookies: false,
-    tools: { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" },
+    tools: { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: PACKAGER },
     upstream: { widevine: wv.url + "/wv", playready: pr.url + "/pr" },
     indexHtml: join(REPO, "web", "research", "drm", "index.html"),
     ...over,

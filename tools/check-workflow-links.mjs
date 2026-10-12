@@ -129,8 +129,8 @@ for (const f of toolFiles) {
 const PINNED = {
   ".github/workflows/site-walk.yml": "143eb290c37498e84c3ecd128fe36845197ac1164751b9242e0152be36f8f1d0",
   "tools/walk-site.mjs": "4b2222eaa660a66bd8aa75eaf46f9821063cfa20f6f374b78e0250cf0bf1e5ce",
-  ".github/workflows/site-drive.yml": "561f8bb83320ec4c3981fb399b5f09dbd4edf669fcb5826fee480f793a3dfbe7",
-  "tools/drive-site.mjs": "fd6a4b1b7f4feb9050ba7630321e2b1ac3195a1ceb5c669be10dcdfe9f498caa",
+  ".github/workflows/site-drive.yml": "0993f64c22ef8c329b9a6a8ec8e9df5c35e4accfd4dfc8285b98ea25a4d8da90",
+  "tools/drive-site.mjs": "7f6e5ec3eb971b71e10f968ec468f71ac68c52e4fa38c44b5ba2f647dfc07575",
 };
 for (const [f, want] of Object.entries(PINNED)) {
   const got = createHash("sha256").update(read(f)).digest("hex");
@@ -142,13 +142,14 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 
 // THIRD RULE (2026-10-11; the sixth review found three of nine downloads unpinned while the plan said all were; the
 // seventh to eleventh each found the version before stepped around). shaka-packager is the one program the jobs fetch
-// and run on pictures. THE GUARANTEE IS NOT THIS TEXT RULE: every run of the packager first checks the file it is about
-// to run against the pinned build's SHA-256, at that moment (service/lib/packager-pin.mjs, the same value as
+// and run on pictures. FOR OUR PROGRAMS AND THE TESTS THE GUARANTEE IS NOT THIS TEXT RULE: each one checks the file it is
+// about to run against the pinned build's SHA-256, at that moment (service/lib/packager-pin.mjs, the same value as
 // PACKAGER_SHA256 below, a test keeps them equal), refuses any other, however it got there, before it is ever run, and
-// runs exactly the path it checked: our programs (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the
-// service), a workflow step (only through tools/run-packager.mjs: rule (E) below), and the tests (before any test runs
-// it). The rest of this rule only catches the obvious slips: a workflow, image or script that brings in a packager some
-// other way. It reads every file in the repository
+// runs exactly the path it checked: site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the service, and the
+// tests (before any test runs it). A workflow step runs it through tools/run-packager.mjs, which does the same; that a
+// step runs it only so is this text rule's to keep, rule (E) below, in the ordinary shapes (a deliberate shape is for
+// review). The rest of this rule only catches the obvious slips: a workflow, image or script that brings in a packager
+// some other way. It reads every file in the repository
 // but what git ignores (where git cannot say, nothing is left out) of these kinds: YAML anywhere (workflows, actions,
 // compose files), Dockerfiles and Containerfiles, Makefiles, package.json, and shell, PowerShell and batch scripts.
 // NOT read: JavaScript, Python, lock files, files of other kinds, installed packages. Whole-line comments are left out,
@@ -296,8 +297,8 @@ for (const f of repoFiles.filter((x) => !ignored.has(x) && kind(x) === "workflow
     const code = uncomment(line);
     if (/^\s*(?:-\s+)?name\s*:/.test(code) || pinnedDownload(code) || CHECK_LINE.test(code)) return; // a name; (A) and (B) judge the rest
     // the words, split at spaces and at the shell's and YAML's punctuation (quotes, `$( )`, a variable's '=', a flow
-    // mapping's braces stand apart; ${NAME} is read as $NAME)
-    const words = code.replace(/\$\{(\w+)\}/g, "$$$1").split(/[\s;&|()<>`'"=,{}]+/).filter(Boolean);
+    // mapping's braces, a flow sequence's brackets, a backslash stand apart; ${NAME} is read as $NAME)
+    const words = code.replace(/\$\{(\w+)\}/g, "$$$1").split(/[\s;&|()<>`'"=,{}[\]\\]+/).filter(Boolean);
     words.forEach((w, k) => {
       if (w === RUNNER && words[k - 1] === "node") { runsSeen++; runCounts[f] = (runCounts[f] || 0) + 1; return; }
       if (!(PATH_WORD.test(w) || BARE_WORD.test(w) || /PACKAGER_BIN/.test(w))) return;
