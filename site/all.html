@@ -139,7 +139,9 @@
   //   - hardware protection, anywhere: Widevine HW_SECURE_ALL / HW_SECURE_DECODE, PlayReady SL3000
   //     (HW_SECURE_CRYPTO is excluded: it decodes into ordinary memory);
   //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) only in Chrome and Edge on
-  //     Windows and Android, where the owner's screenshots under software protection were black.
+  //     Windows and Android. Screenshots under it were measured black in Chrome and Edge on the owner's Windows
+  //     PC and in Chrome on his Android phone; Edge on Android, and apps' built-in browsers there (they report
+  //     themselves as Chrome), follow the same rule unmeasured (a side finding in PLAN.md, the owner's to decide).
   // Everywhere else the photo is held back until that browser and platform are measured the same way.
   // How a level is known: each request names levels of ONE kind, and a browser can only grant a level
   // it was asked for — so a grant tells which kind was granted. (The player library's
