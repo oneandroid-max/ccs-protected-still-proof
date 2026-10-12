@@ -127,7 +127,10 @@ const SERVE = [
 // before its watch has deleted the copy (the twenty-fourth review: a group SIGQUIT or SIGKILL left the copy)
 const server = spawn("python3", ["-I", "-c", SERVE, String(PORT), www, String(process.pid)], { stdio: "ignore", detached: true });
 process.on("exit", () => { try { server.kill(); } catch {} try { rmSync(www, { recursive: true, force: true }); } catch {} }); // also when the drive dies (an error in a route, a failed browser launch)
-for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n)); // and when it is stopped so; any other way, the server's own watch
+// and when it is stopped by any signal it can catch: SIGQUIT (Ctrl-\ in a terminal), SIGUSR2 and SIGALRM too, so the
+// browser's profile folder is removed as well (Playwright removes it only on the drive's own way out; measured left by
+// them before); SIGKILL cannot be caught: then the server's own watch removes the copy, and the profile folder is left
+for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGQUIT", 3], ["SIGUSR2", 12], ["SIGALRM", 14], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n));
 let ours = false;
 for (let i = 0; i < 60 && !ours; i++) {
   try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
