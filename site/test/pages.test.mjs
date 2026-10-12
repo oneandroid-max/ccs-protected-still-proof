@@ -188,6 +188,9 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, (t) => t.replace(AT, '      - env: { PACKAGER_BIN: /usr/local/bin/packager }\n        run: "$PACKAGER_BIN" --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
     [[ST, step('echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true; /usr/local/bin/packager --version')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
     [[ST, step('echo "built with $(/usr/local/bin/packager --version)"')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    // a check line on its own line but made harmless, or with a run after it on the same line, is no check
+    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true\n          /usr/local/bin/packager --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1; /usr/local/bin/packager --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
     [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
     // a curl that is not only the pinned download: another address beside it, another option, an output built by a command

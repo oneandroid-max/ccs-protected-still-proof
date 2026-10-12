@@ -1285,6 +1285,12 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   // the view's own output missing (a file, not a program): unreadable, so rebuilt (Axinom accepting), swapped in whole
   await formExpires(10 * 86400000);
   await fs.rm(join(siteDir, "mosaic", "video-playready.mp4.enc"));
+  // ... and when that rebuild fails after its new files were begun beside the view (a manifest gone after packaging),
+  // the old view stays exactly as it was and nothing half-made is left beside it
+  const before5 = await mosaicMeta();
+  const dropsManifest = await script("packager-drops-manifest", `const s = spawnSync(${JSON.stringify(tools.packager)}, process.argv.slice(2), { stdio: "inherit" }).status ?? 1;\nif (!s && process.argv.includes("playready.mpd")) fs.rmSync("playready.mpd");\nprocess.exit(s);`);
+  await assert.rejects(mosaic(accept, ask(29), { ...tools, packager: dropsManifest }), /playready\.mpd/);
+  assert.deepEqual(await mosaicMeta(), before5, "the old view stays as it was"); await noSideBuild();
   const r5 = await mosaic(accept, ask(30));
   assert.equal(r5.status, "ready", JSON.stringify(r5)); assert.ok((await mosaicMeta()).fairplay.verified); await noSideBuild();
 
