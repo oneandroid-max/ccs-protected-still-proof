@@ -553,11 +553,11 @@ try {
   check((await ap.textContent("#r-granted")) === "nothing: Apple FairPlay was not asked, the form could not be used" && (await ap.textContent("#msg")) === "The photo couldn't be opened for Apple's protected path right now, so it isn't shown.",
     "and the readout does not say FairPlay was accepted: no player was made (the twenty-fourth review): " + (await ap.textContent("#r-granted")) + " | " + (await ap.textContent("#msg")));
   await ac.close();
-  // ... and such a picture is not said to be offered on iPhones and iPads, where it is refused (the twenty-sixth review)
+  // ... and such a picture is not said to show on an iPhone, where it is refused (the twenty-sixth review)
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
-    "and a Mac is not told it is offered on an iPhone or iPad: " + (await ap.textContent("#msg")));
+    "and a Mac is not told it shows on an iPhone: " + (await ap.textContent("#msg")));
   await ac.close();
   // (4c) a picture whose form's token has expired (the date its job recorded): not offered, its token never fetched
   await writePhotoMeta(OWN_LICENSE, { expires: "2026-01-02T03:04:05.000Z" });
@@ -570,7 +570,7 @@ try {
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
-    "an expired form: a Mac is not told it is offered on an iPhone or iPad (the twenty-seventh review): " + (await ap.textContent("#msg")));
+    "an expired form: a Mac is not told it shows on an iPhone (the twenty-seventh review): " + (await ap.textContent("#msg")));
   await ac.close();
   await writePhotoMeta();
   // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
@@ -583,7 +583,7 @@ try {
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
-    "a missing token: a Mac is not told it is offered on an iPhone or iPad (the twenty-seventh review): " + (await ap.textContent("#msg")));
+    "a missing token: a Mac is not told it shows on an iPhone (the twenty-seventh review): " + (await ap.textContent("#msg")));
   await ac.close();
   api.noPictureToken = false;
   // (5b) as built, a picture and a combined view with no Apple form at all: each named, with "yet" (their jobs make one)
@@ -615,9 +615,9 @@ try {
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
-  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge. On an iPhone or iPad it is offered through Apple's protected path (FairPlay), not yet seen playing there."
+  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, on an iPhone, or on a Windows PC in Chrome or Edge."
     && (await ap.textContent("#detected")).endsWith(". On a Mac the photo is held back until a screenshot there is measured black.") && !(await ap.evaluate(() => (window.__players || []).length)),
-    "as built, a Mac in Safari on a site page: its box names Macs, and says a picture is offered on an iPhone or iPad but not yet seen playing there (the twenty-fifth review): " + (await ap.textContent("#msg")));
+    "as built, a Mac in Safari on a site page: its box names Macs, and an iPhone where a picture shows (seen playing on the owner's iPhone, 2026-10-12; until then said apart: the twenty-fifth review): " + (await ap.textContent("#msg")));
   await ac.close(); api.appleMeasured = false;
 
   // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing);

@@ -42,7 +42,7 @@
 <body>
 <h1 id="title">Protected view</h1>
 <p class="detected" id="detected" hidden></p>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone, 2026-10-12; a screen recording, an iPad and other iOS versions are not yet measured, and a clip licensed by our own Axinom account, as the pictures are, is not yet seen playing on a real device); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
+<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone, 2026-10-12, both of Apple's test videos and of one of the test site's pictures, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
 
 <div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
@@ -128,7 +128,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 18:59 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 19:08 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone, one of his own pictures too; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -279,15 +279,16 @@
     + (APPLE_TEST_HERE && !APPLE && !TEST && APPLE_TEST_WHERE ? (PLATFORM === "Mac" ? (FAIRPLAY_MEASURED.Mac ? "" : " In Safari on this Mac, this same link runs Apple's own test.") : ` On ${APPLE_TEST_WHERE}, this same link runs Apple's own test in Safari.`) : ""));
   $("detected").hidden = false;
   // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured), as
-  // seen: the test card was seen playing through FairPlay on an iPhone (under Axinom's public licence); a site picture,
-  // licensed by our own Axinom account, has an Apple form but has not yet been seen playing on an Apple device, so it is
-  // said apart (the twenty-fifth review); the route-1 page's test photo has no Apple form
+  // seen: the test card was seen playing through FairPlay on an iPhone (under Axinom's public licence), and one of the
+  // owner's own pictures on the test site, licensed by our own Axinom account as every site picture and the combined view
+  // are, played through its Apple form on his iPhone, its screenshot black (2026-10-12; until then a site picture was said
+  // apart: the twenty-fifth review); so each with a usable form names an iPhone, not an iPad; the route-1 page's test
+  // photo has no Apple form
   // (a form as tryOne uses it: a playlist, no error, and a licence address that is Axinom's; the twenty-sixth review: a form
   // tryOne refuses was said to be offered)
   const usableForm = (fp) => !!(fp && fp.manifest && !fp.error && AXINOM_LICENSE_ADDRESS.test(fp.license === undefined ? AXINOM_LICENSE : String(fp.license)));
   const APPLE_FORM = !!FAIRPLAY_MEASURED["iPhone/iPad"] && usableForm(CLIP.fairplay);
-  const WHERE = `${SHOWN} shows on an Android phone${APPLE_FORM && CARD ? ", on an iPhone" : ""}, or on a Windows PC in Chrome or Edge.`
-    + (APPLE_FORM && !CARD ? " On an iPhone or iPad it is offered through Apple's protected path (FairPlay), not yet seen playing there." : "");
+  const WHERE = `${SHOWN} shows on an Android phone${APPLE_FORM ? ", on an iPhone" : ""}, or on a Windows PC in Chrome or Edge.`;
   const ELSEWHERE = PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
     : PLATFORM === "Android" || DESKTOP_PHONE ? "On this phone or tablet, open this link in Chrome (screenshots measured black there)."
     : PLATFORM === "Mac" && APPLE_TEST_HERE ? `On this Mac, open this link in Safari: Apple's test runs there. ${WHERE}`
