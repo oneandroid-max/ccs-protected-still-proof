@@ -1,13 +1,14 @@
 # Proves the test site's GitHub half before a picture is ever uploaded: the shared crypto, the
 # in-memory scheme's byte ranges, the generated view page's freshness, and the worker end to end with
 # the real shaka-packager (REQUIRED here, never skipped), decrypting its outputs and checking their
-# sample-encryption boxes.
+# sample-encryption boxes. It also runs when only service/test changes: its list of the test files that name
+# PACKAGER_BIN reads that folder too.
 name: site test
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "tools/fairplay-card.mjs", "tools/check-workflow-links.mjs", "tools/run-packager.mjs", "web/research/drm/index.html", "web/research/drm/card-playready.mp4", "web/research/apple/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml", ".github/workflows/site-fairplay.yml"]
+    paths: ["site/**", "service/lib/**", "service/test/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "tools/fairplay-card.mjs", "tools/check-workflow-links.mjs", "tools/run-packager.mjs", "web/research/drm/index.html", "web/research/drm/card-playready.mp4", "web/research/apple/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml", ".github/workflows/site-fairplay.yml"]
   workflow_dispatch:
 
 jobs:
