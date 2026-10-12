@@ -51,8 +51,9 @@ export async function createApp(cfg, log = (m) => console.log(`${nowIso()} ${m}`
 
   (async () => {
     try { tools.ffmpeg = (await run(cfg.tools.ffmpeg, ["-version"])).stdout.split("\n")[0]; } catch (e) { tools.problem = `ffmpeg: ${e.message}`; }
-    try { tools.packager = (await run(cfg.tools.packager, ["--version"])).stdout.trim(); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; }
-    try { await checkPackager(cfg.tools.packager); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; } // each photo is refused too (pipeline)
+    let packager = null; // checked before it is ever run, and only the checked file is run (each photo is checked again: pipeline)
+    try { packager = await checkPackager(cfg.tools.packager); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; }
+    if (packager) { try { tools.packager = (await run(packager, ["--version"])).stdout.trim(); } catch (e) { tools.problem = (tools.problem ? tools.problem + "; " : "") + `packager: ${e.message}`; } }
     log(`tools: ffmpeg "${tools.ffmpeg}" packager "${tools.packager}"${tools.problem ? " PROBLEM " + tools.problem : ""}`);
   })();
 

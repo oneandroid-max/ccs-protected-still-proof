@@ -183,6 +183,7 @@
     ownLicense = cur.license === undefined ? LICENSE : String(cur.license); // the account's own licence address, recorded with its card
     if (!/^[0-9a-f]{8}$/.test(folder)) {} // not made yet (the reason above)
     else if (!LICENSE_ADDRESS.test(ownLicense)) { ownWhy = "refused: its licence address is not Axinom's"; ownLog = "refused: current.json names a licence address that is not Axinom's, so its token is sent nowhere"; }
+    else if (Date.parse(cur.expires) <= Date.now()) { ownWhy = "its token expired on " + String(cur.expires).slice(0, 10); ownLog = "not offered: its token expired on " + String(cur.expires).slice(0, 10) + " (the date current.json records), so it can license nothing"; }
     else { ownBase = OWN + folder + "/"; const r = await fetch(ownBase + "token.txt"); if (r.ok) ownToken = (await r.text()).trim(); else { ownWhy = "its token is missing"; ownLog = "its folder's token.txt could not be read (HTTP " + r.status + ")"; } }
   } catch (e) { ownWhy = "could not be read"; ownLog = "current.json could not be read: " + e.message; }
   if (ownToken) await protectedPlay("vo", "o", ownBase + "master.m3u8", "our card, our account (protected)", ownToken, ownLicense);

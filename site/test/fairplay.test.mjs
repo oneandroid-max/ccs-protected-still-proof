@@ -226,6 +226,12 @@ test("the Apple check page plays our account's card only from the folder current
   r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d" }) });
   assert.deepEqual(r.plays, [], "no token there: nothing played");
   assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /its token is missing/.test(text)), JSON.stringify(r.sets));
+  // a token past the expiry date current.json records: not offered, its token never fetched; one still good: played
+  r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", expires: "2026-01-02T03:04:05.000Z" }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
+  assert.deepEqual(r.plays, [], "an expired token: nothing played"); assert.ok(!r.seen.some((u) => /token\.txt/.test(u)), "and its token never fetched");
+  assert.ok(r.sets.some(([, id, text]) => id === "o-play" && /its token expired on 2026-01-02/.test(text)), JSON.stringify(r.sets));
+  r = await runWith({ [OWN + "current.json"]: JSON.stringify({ folder: "1a2b3c4d", expires: new Date(Date.now() + 30 * 86400000).toISOString() }), [OWN + "1a2b3c4d/token.txt"]: "TOKEN-1\n" });
+  assert.equal(r.plays.length, 1, "a token still good: played");
   r = await runWith({ [OWN + "current.json"]: "not json" });
   assert.deepEqual(r.plays, [], "an unreadable current.json: nothing played");
 });
@@ -1206,6 +1212,11 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   for (let i = 6; i <= 17; i++) await mosaic(refuse, ask(i));
   await mosaic(refuse, ask(16));
   assert.deepEqual((await mosaicMeta()).answered, [16, 17, 15, 14, 13, 12, 11, 10, 9, 8].map(ask));
+  // the job's own runs (no request) add nothing, whatever their answer: kept, or a renewal (a rebuild: below)
+  const own = (await mosaicMeta()).answered;
+  assert.deepEqual([(await mosaic(refuse)).fairplay, (await mosaicMeta()).answered], ["kept", own], "a kept answer of the job's own adds nothing");
+  await formExpires(10 * 86400000);
+  assert.deepEqual([(await mosaic(accept)).fairplay, (await mosaicMeta()).answered], ["renewed", own], "a renewal of the job's own adds nothing");
 
   // (2) a picture REALLY left out, the view with a verified form; "Try again" with Axinom accepting rebuilds the same
   // pictures, and Apple's packaging fails in the rebuild: the view is kept whole, its form with it, the failure said
@@ -1229,18 +1240,26 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   assert.ok(rebuilt.fairplay.verified && rebuilt.fairplay.master !== whole.fairplay.master && rebuilt.answered[0] === ask(22), JSON.stringify(rebuilt.fairplay));
   assert.deepEqual((await fs.readdir(join(siteDir, "mosaic"))).filter((f) => /^fp-/.test(f)), [rebuilt.fairplay.master.split("/")[0]]);
   await noSideBuild();
+  // Try again, then the left-out picture deleted before the job runs: the answer is the stale entry dropped with nothing
+  // else to do (its form is current), and it carries the request's id (written on that path alone)
+  await worker({ payload: { action: "delete", id: C, key: KEY_HEX }, siteDir, tools });
+  const r3b = await mosaic(accept, ask(23));
+  const after3b = await mosaicMeta();
+  assert.deepEqual([r3b.status, after3b.skipped, after3b.answered[0], after3b.builtAt], ["current", [], ask(23), rebuilt.builtAt], JSON.stringify(r3b));
   // a view of OTHER pictures (D added) whose Apple packaging fails: swapped in without a form (its old content must go), warned
   assert.equal((await add(D, "0x8e44ad")).status, "ready");
+  const beforeR4 = (await mosaicMeta()).answered;
   const r4 = await mosaic(accept, undefined, failing);
   assert.deepEqual([r4.status, r4.fairplay], ["ready", false], JSON.stringify(r4));
   const other = await mosaicMeta();
   assert.ok(other.ids.includes(D) && other.fairplay === null, JSON.stringify(other.ids));
+  assert.deepEqual(other.answered, beforeR4, "a rebuild of the job's own adds nothing");
+  assert.ok(other.answered.every((x) => /^[0-9a-f]{16}$/.test(x)), "and the list holds request ids only: " + JSON.stringify(other.answered));
   assert.ok(resultLines(r4, { com: COM, action: "mosaic" }).some((l) => /^::warning title=Apple form::the combined view was made without its Apple form/.test(l)));
   await noSideBuild();
 
-  // (3) only the view's own output unreadable sends a renewal to a rebuild. C deleted, so nothing is left out and only
-  // the form is renewed from here on
-  await worker({ payload: { action: "delete", id: C, key: KEY_HEX }, siteDir, tools });
+  // (3) only the view's own output unreadable sends a renewal to a rebuild (C is gone, so nothing is left out and only the
+  // form is renewed from here on)
   assert.equal((await mosaic(accept)).fairplay, "renewed");
   const keepsView = async (tl, re, what) => {
     await formExpires(10 * 86400000);
@@ -1280,6 +1299,13 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   assert.deepEqual([r7.status, r7.fairplay], ["ready", false], JSON.stringify(r7));
   assert.equal((await mosaicMeta()).fairplay, null, "the dead form went with the old view");
 
+  // a picture the view DRAWS deleted, and the rebuild then failing (no picture can be read back: ffmpeg cannot be
+  // started): the old view is gone all the same (its content must not stay on the site), and nothing half-built is left
+  await worker({ payload: { action: "delete", id: D, key: KEY_HEX }, siteDir, tools });
+  await assert.rejects(mosaic(accept, undefined, { ...tools, ffmpeg: "/nonexistent/ffmpeg" }), /no picture could be read back/);
+  await assert.rejects(fs.access(join(siteDir, "mosaic")), "the old view is gone");
+  await noSideBuild();
+
   // (6) a form whose copy fails (its master playlist gone after packaging): no half-made folder is left to publish
   const noMaster = await script("packager-drops-master", afterApple("fs.rmSync(master);"));
   const rg = await add(G, "0x7f8c8d", { ...tools, packager: noMaster });
@@ -1294,7 +1320,7 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   const cli = spawnSync(process.execPath, ["--import", pathToFileURL(refuseStub).href, join(REPO, "site", "worker.mjs")], { encoding: "utf8", env: { ...process.env, GITHUB_EVENT_PATH: evt, SITE_DIR: siteDir, PACKAGER_BIN: tools.packager, WORKER_ACTION: "mosaic", AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64") } });
   const cliOut = (cli.stdout || "") + (cli.stderr || "");
   assert.equal(cli.status, 0, cliOut);
-  assert.match(cliOut, /^result: ready \(4 picture\(s\)\); Apple form: false$/m);
+  assert.match(cliOut, /^result: ready \(3 picture\(s\)\); Apple form: false$/m);
   assert.match(cliOut, /^::warning title=Apple form::the combined view was made without its Apple form \(see the log above\); Apple devices are held back until it has one$/m);
   assert.equal((await mosaicMeta()).answered[0], ask(40), "the command passes the request's id on");
   notice("FairPlay eleventh review", "request ids on every answer (last ten); a failed same-pictures rebuild kept the view whole; render / check / missing-program failures kept the view; a missing output rebuilt; an expired form renewed while Axinom was out of reach and rebuilt while it refused; a failed copy left nothing");
@@ -1320,7 +1346,7 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   const wf = join(REPO, ".github", "workflows"); let lines = 0;
   for (const f of [...(await fs.readdir(wf)).map((x) => join(wf, x)), join(REPO, "service", "Dockerfile")])
     for (const m of (await fs.readFile(f, "utf8")).matchAll(/echo "([0-9a-f]{64})  [^"]*packager" \| sha256sum -c -/g)) { assert.equal(m[1], PACKAGER_SHA256, f); lines++; }
-  assert.equal(lines, 10, "every check line names the same build (9 after a download, 1 where drm-package.yml runs it again)");
+  assert.equal(lines, 12, "every check line names the same build (9 after a download; 3 where a step that runs it checks it again: drm-package.yml's PlayReady step and the two test steps)");
   const wrong = join(tmp, "not-the-packager"); await fs.writeFile(wrong, "#!/bin/sh\necho 'packager version v3.9.3'\n"); await fs.chmod(wrong, 0o755);
   const REFUSED = /is not the pinned shaka-packager v3\.9\.3 \(sha256 [0-9a-f]{16}…, pinned 7a3cf35ad146fd78…\): refused/;
   await assert.rejects(checkPackager(wrong), REFUSED);
@@ -1329,6 +1355,17 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   const onPath = await fs.mkdtemp(join(tmp, "path-")); await fs.copyFile(wrong, join(onPath, "packager")); await fs.chmod(join(onPath, "packager"), 0o755);
   const savedPath = process.env.PATH; process.env.PATH = onPath + delimiter + savedPath;
   try { await assert.rejects(checkPackager("packager"), (e) => e.message.includes(`the packager at ${join(onPath, "packager")} is not the pinned`)); } finally { process.env.PATH = savedPath; }
+  // ... as the shell looks it up: in PATH order, the first executable FILE (a file that cannot run, or a folder, is passed
+  // over), an empty entry meaning the current folder, a relative entry read from it; the path found is absolute
+  const pd = async (name, mode, text) => { const d = await fs.mkdtemp(join(tmp, name)); if (mode === "dir") await fs.mkdir(join(d, "packager")); else { await fs.writeFile(join(d, "packager"), text); await fs.chmod(join(d, "packager"), mode); } return d; };
+  const noExec = await pd("p-noexec-", 0o644, "#!/bin/sh\necho A\n"), folder = await pd("p-dir-", "dir"), first = await pd("p-first-", 0o755, "#!/bin/sh\necho C\n"), later = await pd("p-later-", 0o755, "#!/bin/sh\necho D\n");
+  const relBase = await fs.mkdtemp(join(tmp, "p-rel-")); await fs.mkdir(join(relBase, "rel")); await fs.writeFile(join(relBase, "rel", "packager"), "#!/bin/sh\necho R\n"); await fs.chmod(join(relBase, "rel", "packager"), 0o755);
+  const named = async (PATH, cwd) => { const p = process.env.PATH, c = process.cwd(); process.env.PATH = PATH; if (cwd) process.chdir(cwd);
+    try { return await checkPackager("packager").then(() => "accepted", (e) => e.message); } finally { process.env.PATH = p; process.chdir(c); } };
+  const at = (file) => (m) => m.startsWith(`the packager at ${file} is not the pinned`);
+  assert.ok(at(join(first, "packager"))(await named([noExec, folder, first, later].join(delimiter))), "the first executable file on the PATH, not one that cannot run, a folder, or a later one");
+  assert.ok(at(join(first, "packager"))(await named(["", later].join(delimiter), first)), "an empty entry is the current folder");
+  assert.ok(at(join(relBase, "rel", "packager"))(await named(["rel", later].join(delimiter), relBase)), "a relative entry is read from the current folder, and named absolute");
   // asked every time, never remembered: the real build passes, and the same path changed afterwards is refused
   let real = null; try { await exec(tools.packager, ["--version"]); real = tools.packager; } catch {}
   if (real) {
@@ -1367,6 +1404,17 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "delete", id: P, key: keyHex } }));
   const d = go([join(REPO, "site", "worker.mjs")], { GITHUB_EVENT_PATH: evt, SITE_DIR: site, PACKAGER_BIN: wrong });
   assert.equal(d.code, 0, d.out); assert.match(d.out, /^result: deleted$/m); await assert.rejects(fs.access(join(site, "photos", P)));
+  // a program given a RELATIVE path runs the very file it checked, though its packaging runs in another folder (the
+  // twelfth review: the check read one file and the run, from the work folder, looked for another)
+  if (real) {
+    const base = await fs.mkdtemp(join(tmp, "rel-run-")), relSite = await fs.mkdtemp(join(tmp, "rel-site-")), blob = join(tmp, "rel-blob");
+    await fs.mkdir(join(base, "bin")); await fs.copyFile(await checkPackager(real), join(base, "bin", "packager")); await fs.chmod(join(base, "bin", "packager"), 0o755);
+    await fs.writeFile(blob, await seal(photoKey, await fs.readFile(await solid("rel.png", 320, 240, "0x2980b9"))));
+    await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "add", id: "8".repeat(24), name: "rel.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: keyHex } }));
+    const rr = spawnSync(process.execPath, [join(REPO, "site", "worker.mjs")], { cwd: base, encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", GITHUB_EVENT_PATH: evt, SITE_DIR: relSite, PACKAGER_BIN: "bin/packager", WORKER_BLOB_FILE: blob } });
+    const ro = (rr.stdout || "") + (rr.stderr || "");
+    assert.equal(rr.status, 0, ro); assert.match(ro, /^result: ready$/m, "the picture was packaged by the file checked: " + ro.slice(-400));
+  }
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

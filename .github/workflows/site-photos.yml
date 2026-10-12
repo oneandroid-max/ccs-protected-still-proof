@@ -40,7 +40,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
           echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
-          sudo chmod +x /usr/local/bin/packager && packager --version
+          sudo chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version
       - name: Prepare the picture on the current tip of main and commit; refresh and redo if the push races
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,7 +81,7 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
           echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
-          sudo chmod +x /usr/local/bin/packager && packager --version
+          sudo chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version
       - name: Make the combined view on the current tip of main and commit; refresh and redo if the push races
         env:
           PACKAGER_BIN: /usr/local/bin/packager
@@ -93,13 +93,13 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           for i in 1 2 3 4 5; do
             git fetch -q origin main && git reset -q --hard origin/main
-            node site/worker.mjs
+            rc=0; node site/worker.mjs || rc=$? # a rebuild that fails has left the old view whole, or (other pictures) removed: commit that, then end red
             # only the combined view is ever committed here, even if this job ran the wrong path; the folder
             # is named only when it exists or was committed before (naming a folder that never existed fails)
             if [ -e site/mosaic ] || git ls-files --error-unmatch site/mosaic > /dev/null 2>&1; then git add -A site/mosaic; fi
-            if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+            if git diff --cached --quiet; then echo "nothing to commit"; exit $rc; fi
             git commit -q -m "site: combined view"
-            if git push -q origin HEAD:main; then echo "pushed"; exit 0; fi
+            if git push -q origin HEAD:main; then echo "pushed"; exit $rc; fi
             echo "the push raced with another job; refreshing and making it again ($i)"; sleep $((i * 5))
           done
           echo "could not push after five tries"; exit 1

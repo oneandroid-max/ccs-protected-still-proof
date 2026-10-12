@@ -1,27 +1,30 @@
 // The one shaka-packager build the jobs may run: v3.9.3 for Linux x64, by its SHA-256 (the release's own file, the same
 // pin as every download line that tools/check-workflow-links.mjs checks). Every program of ours that runs the packager
-// on a picture or the card asks checkPackager first (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the
-// service's pipeline), so whatever put the file there (a download, an image, a cache, a copy), a file that is not this
-// build is refused before it touches anything. The jobs that call the packager from a shell instead (drm-package.yml,
-// drm-card.yml) check this same SHA-256 on the line after the download, and again first in any later step that runs it.
+// on a picture or the card asks checkPackager first and then runs EXACTLY the path it returns, so whatever put the file
+// there (a download, an image, a cache, a copy) and whatever the PATH or the working folder, the file checked is the file
+// run, and a file that is not this build is refused before it is ever run: site/worker.mjs and site/backfill.mjs (as
+// their jobs start), tools/fairplay-card.mjs, and the service (at start, and again before every photo). A workflow step
+// that runs it itself (a shell step, or the tests) checks the same SHA-256 on an earlier line of that step
+// (tools/check-workflow-links.mjs refuses one that does not).
 import { promises as fs, constants } from "node:fs";
 import { createHash } from "node:crypto";
-import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 
 export const PACKAGER_SHA256 = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
 
-// A name with no slash is looked up on the PATH, as the shell would run it.
+// The file a name stands for, as an absolute path: a name with a slash from the current folder; a name without one on
+// the PATH the way the shell looks it up (in order, an empty entry meaning the current folder, the first executable FILE).
 async function locate(bin) {
-  if (/[\\/]/.test(bin)) return isAbsolute(bin) ? bin : resolve(bin);
-  for (const dir of String(process.env.PATH || "").split(delimiter).filter(Boolean)) {
-    const p = join(dir, bin);
-    try { await fs.access(p, constants.X_OK); return p; } catch {}
+  if (/[\\/]/.test(bin)) return resolve(bin);
+  for (const dir of String(process.env.PATH || "").split(delimiter)) {
+    const p = resolve(dir || ".", bin);
+    try { if (!(await fs.stat(p)).isFile()) continue; await fs.access(p, constants.X_OK); return p; } catch {}
   }
   return null;
 }
 
-// Resolves to the packager's path when its bytes are the pinned build; rejects with the reason otherwise. Asked every
-// time and never remembered (about 10 MB to hash): what passes is the file as it is at that moment.
+// Resolves to the packager's absolute path when its bytes are the pinned build (the caller runs that path and no other);
+// rejects with the reason otherwise. Never remembered (about 10 MB to hash): what passes is the file as it is when asked.
 export async function checkPackager(bin) {
   const path = await locate(bin);
   if (!path) throw new Error(`the packager "${bin}" was not found`);

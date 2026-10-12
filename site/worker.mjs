@@ -239,7 +239,8 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
     if (!answer || !mayReplace(answer)) return keep(`rebuilding it would remove its Apple form, and ${cause(answer)}`, "kept");
   }
   // A rebuild is made beside the old view (.mosaic-next) and swapped in only once complete. A view of OTHER pictures
-  // goes first, whatever happens next (its content must not stay on the site). For the SAME pictures the old view
+  // goes first, whatever happens next (its content must not stay on the site: when the rebuild then fails, the job still
+  // commits that removal, and ends red; .github/workflows/site-photos.yml). For the SAME pictures the old view
   // stays until the swap, and a new view that came out without an Apple form while the old one has a working form is
   // not swapped in at all: the old view is kept whole and the failure said.
   await fs.rm(next, { recursive: true, force: true });
@@ -484,7 +485,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   const action = process.env.WORKER_ACTION || (event.client_payload || {}).action;
   if (action !== "delete") { // only the pinned build ever runs on a picture (a deletion runs no packager, and is never held up)
-    try { await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
+    try { tools.packager = await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); } // runs the path checked
   }
   // Apple's form needs the Axinom key; without a usable one every picture is still prepared for the rest
   let com = null;
@@ -492,6 +493,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     try { com = readCommunicationKey(process.env.AXINOM_COM_KEY_ID, process.env.AXINOM_COM_KEY, (await readAxinomSettings(siteDir)).fairplayLicense); }
     catch (e) { console.log(`::warning title=Apple form::the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
   } else console.log("the Axinom key is not set: no Apple (FairPlay) form (Apple devices stay held back)");
-  const r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com });
+  let r; // a job that fails is named on the run's page (a page's request then gets no answer, and the page stops waiting after ten minutes)
+  try { r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com }); }
+  catch (e) { console.log(`::error title=Site job::${String(e.message || e).slice(0, 400)}`); process.exit(1); }
   for (const line of resultLines(r, { com, action })) console.log(line);
 }

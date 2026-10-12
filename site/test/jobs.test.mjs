@@ -66,7 +66,9 @@ if (mode === "backfill") { // what the Apple backfill writes, and its counts
   await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "done", added: 1, already: 0, failed: Number(process.env.FAILED || 0) }));
 }
 if (mode === "backfill-none") await fs.writeFile(process.env.BACKFILL_RESULT, JSON.stringify({ status: "done", added: 0, already: 3, failed: 0 }));
+if (mode === "fail-removed") await fs.rm("site/mosaic", { recursive: true, force: true }); // a rebuild of other pictures that failed
 console.log("stand-in worker run " + n + " (" + mode + ")");
+if (mode === "fail" || mode === "fail-removed") process.exit(1);
 `;
 
 async function scratch() {
@@ -141,6 +143,19 @@ test("when the last picture goes, the combined view's committed folder is remove
   const r = runJob(d, script, { STANDIN: "none" });
   assert.equal(r.code, 0, r.out); assert.match(r.out, /pushed/);
   assert.ok(!remoteFiles(d).some((f) => f.startsWith("site/mosaic/")), "the folder is gone from the remote");
+});
+
+// The twelfth review: a rebuild of OTHER pictures removes the old view first; when it then fails, that removal must still
+// reach the site (the deleted picture's pixels were left there), and the job must still end red
+test("a combined-view job whose rebuild fails commits what it left (a view of other pictures removed), then ends red; with nothing changed it commits nothing, and ends red", async () => {
+  const d = await scratch();
+  assert.equal(runJob(d, MOSAIC, { STANDIN: "mosaic" }).code, 0);
+  assert.ok(remoteFiles(d).includes("site/mosaic/meta.json.enc"));
+  const f = runJob(d, MOSAIC, { STANDIN: "fail" });
+  assert.equal(f.code, 1, f.out); assert.match(f.out, /nothing to commit/); assert.ok(remoteFiles(d).includes("site/mosaic/meta.json.enc"), "the view, untouched, stays");
+  const r = runJob(d, MOSAIC, { STANDIN: "fail-removed" });
+  assert.equal(r.code, 1, r.out); assert.match(r.out, /pushed/);
+  assert.ok(!remoteFiles(d).some((x) => x.startsWith("site/mosaic/")), "the old view is gone from the remote");
 });
 
 test("the Apple backfill commits what it wrote (the pictures' folders, the list, the combined view) and nothing else; a race is redone", async () => {

@@ -125,7 +125,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const outDir = at > 0 ? process.argv[at + 1] : join(REPO, "web", "research", "drm", "card-fairplay");
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   // only the pinned build packages the card: any other file ends the job red, named on the run's page, before anything is written
-  try { await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
+  try { tools.packager = await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
   console.log(JSON.stringify(await buildFairPlayCard({ tools, outDir }), null, 2));
   const ownAt = process.argv.indexOf("--own");
   if (at < 0 || ownAt > 0) {

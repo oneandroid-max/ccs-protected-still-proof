@@ -83,8 +83,11 @@ const ID3 = "abcabcabcabcabcabcabcabc";
 await fs.mkdir(join(www, "site", "photos", ID3), { recursive: true });
 await fs.writeFile(join(www, "site", "photos", ID3, "widevine.mpd.enc"), await seal(PHOTO, new Uint8Array(10)));
 const threeSealed = await sealText(PHOTO, JSON.stringify({ photos: [...JSON.parse(galleryJson).photos, { id: ID2, name: "second.jpg", status: "ready", readyAt: HOUR_AGO }, { id: ID3, name: "third.jpg", status: "ready", readyAt: HOUR_AGO }] }));
-const JUST_NOW = new Date().toISOString();
-const freshSealed = await sealText(PHOTO, JSON.stringify({ updatedAt: JUST_NOW, photos: [{ ...JSON.parse(galleryJson).photos[0], readyAt: JUST_NOW }] }));
+// a picture ready "just now": sealed again when the scenario that uses it starts (the scenarios before it take real time,
+// and each page's clock starts at the real time; a stamp from the drive's start made that scenario depend on how long
+// the others took)
+const sealFresh = async () => { const now = new Date().toISOString(); return sealText(PHOTO, JSON.stringify({ updatedAt: now, photos: [{ ...JSON.parse(galleryJson).photos[0], readyAt: now }] })); };
+let freshSealed = await sealFresh();
 const foreignSealed = await sealText(await derivePhotoKey(await deriveKey("some other password here", cfg.salt, 1000)), galleryJson);
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 await fs.writeFile(join(www, "pic.png"), png);
@@ -375,8 +378,8 @@ try {
   check(((await po.textContent("#all")) || "").includes(want), `an answer from three days ago shows its day: "${want}" in: ` + (await po.textContent("#all")));
   await co.close();
   // Try again, then the left-out picture deleted before the job runs: its answer drops the stale entry and changes
-  // nothing else (the same build time, no note); the page takes it by its id and stops saying "being remade" (the
-  // eleventh review: it said so for ten minutes)
+  // nothing else (the same build time, no note); the view is then complete, so the page stops saying "being remade",
+  // id or no id (the eleventh review: it said so for ten minutes)
   await publishMosaic(builtT, [ID], leftOutT, FORM);
   const { c: cd, pg: pd } = await clockPage("two");
   await pd.click("#ask-all"); await new Promise((r) => setTimeout(r, 1500));
@@ -385,10 +388,23 @@ try {
   await publishMosaic(builtT, [ID], [], FORM, null, [askD]);
   await settle(pd, "00:30");
   const td = (await pd.textContent("#all")) || "";
-  check(/All 1 in one protected view/.test(td) && !/being remade|Left out/.test(td), "Try again, then the left-out picture deleted: the answer (stale entry dropped, nothing else changed) is taken: " + td);
+  check(/All 1 in one protected view/.test(td) && !/being remade|Left out/.test(td), "Try again, then the left-out picture deleted: the answer (stale entry dropped, nothing else changed) leaves a complete view, and nothing says it is being remade: " + td);
   await cd.close();
+  // an answer that never comes (the job failed, or GitHub replaced the waiting run with a newer request): after ten
+  // minutes the page stops saying "being remade" and stops reading the view (the twelfth review: no test held this)
+  await publishMosaic(builtT, [ID], leftOutT, FORM);
+  const { c: cz, pg: pz } = await clockPage("two");
+  await pz.click("#ask-all"); await new Promise((r) => setTimeout(r, 1500));
+  await settle(pz, "05:00");
+  check(/Asked again at .*being remade/.test((await pz.textContent("#all")) || ""), "no answer yet, five minutes on: still waiting");
+  await settle(pz, "05:30");
+  const tz = (await pz.textContent("#all")) || "", rz = api.metaReads;
+  await settle(pz, "00:30"); await settle(pz, "00:30");
+  check(!/being remade/.test(tz) && api.metaReads === rz, `no answer after ten minutes: it stops saying so, and stops reading the view (${api.metaReads - rz} more reads): ` + tz);
+  await cz.close();
   // (a) a picture ready just now and no combined view yet: the job's own run gets three minutes first
   api.noMosaic = true;
+  freshSealed = await sealFresh();
   let n0 = asks(), { c: ca, pg: pa } = await clockPage("fresh");
   check(asks() === n0 && /Combining your 1 picture/.test(await pa.textContent("#all")), "a picture ready just now, no combined view: no request at once (the job's own run is on its way)");
   await settle(pa, "02:00");

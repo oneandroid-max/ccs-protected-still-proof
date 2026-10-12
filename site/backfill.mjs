@@ -33,7 +33,7 @@ let sealed = null;
 try { sealed = new Uint8Array(await fs.readFile(join(siteDir, "gallery.json.enc"))); } catch {}
 if (sealed) { try { await open(photoKey, sealed); } catch { stop("SITE_PASSWORD does not open the gallery (was the site's password changed? update the secret)"); } }
 const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
-try { await checkPackager(tools.packager); } catch (e) { stop(e.message); } // only the pinned build runs on the pictures
+try { tools.packager = await checkPackager(tools.packager); } catch (e) { stop(e.message); } // only the pinned build runs on the pictures, by the path checked
 // a run that stops (Axinom refusing our key, or out of reach, before anything is replaced) is named on the run's
 // page (::error) and ends red, so the workflow commits nothing; its result file says "stopped" for any caller
 // that reads one (the workflow's own reader is never reached: its step ends on the error)

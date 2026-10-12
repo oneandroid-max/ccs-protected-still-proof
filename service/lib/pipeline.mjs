@@ -392,7 +392,7 @@ export async function processPhoto(tools, store, id) {
   const dir = store.dir(id);
   await store.update(id, { status: "processing", error: null });
   try {
-    await checkPackager(tools.packager); // only the pinned build runs on a photo
+    tools = { ...tools, packager: await checkPackager(tools.packager) }; // only the pinned build runs on a photo, by the path checked
     const original = join(dir, `original.${rec.ext}`);
     const orientation = rec.type === "image/jpeg" ? jpegOrientation(await fs.readFile(original)) : 1;
     const clip = await renderClip(tools, original, join(dir, "clip.mp4"), { orientation });

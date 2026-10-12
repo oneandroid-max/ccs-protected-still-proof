@@ -179,6 +179,15 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "ARG BASE=google/shaka-packager:latest\nFROM $1")], NAMED],
     [[ST, (t) => t.replace(AT, `      - run: |\n          docker build -t tools - <<'EOF'\n          FROM google/shaka-packager:latest\n          EOF\n${AT}`)], NAMED],
     [[ST, step("curl -sSL -o /usr/local/bin/PACKAGER https://mirror.example.com/bin/x64")], NAMED], // the name only in capitals, nowhere else on the line
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      TOOL_IMAGE: SOMEORG/SHAKA-PACKAGER:LATEST")], NAMED], // shaka-packager named in capitals
+    // (E), the twelfth review: a step that runs the packager checks that very file first, and never runs it by a bare name
+    [[".github/workflows/drm-package.yml", (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/tmp\/packager" \| sha256sum -c - \|\| exit 1 # checked again where it runs/, "")], /drm-package\.yml:\d+: runs \/tmp\/packager before this step checks it/],
+    [[ST, (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c - \|\| exit 1 # the tests run it: checked again where it runs/, "")], /site-test\.yml:\d+: runs the tests with PACKAGER_BIN=\/usr\/local\/bin\/packager before this step checks it/],
+    [[ST, (t) => t.replace("sudo chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/packager && packager --version")], /site-test\.yml:\d+: runs a packager by its bare name/],
+    [[ST, step("/usr/local/bin/packager --version")], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    [[ST, (t) => t.replace(AT, '      - env: { PACKAGER_BIN: /usr/local/bin/packager }\n        run: "$PACKAGER_BIN" --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    [[ST, step('echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true; /usr/local/bin/packager --version')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    [[ST, step('echo "built with $(/usr/local/bin/packager --version)"')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
     [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
     // a curl that is not only the pinned download: another address beside it, another option, an output built by a command
@@ -228,6 +237,10 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     ["scripts/package.json", `{ "scripts": { "postinstall": "curl -sSL -o bin/packager ${PIN}" } }\n`, /scripts\/package\.json:1: brings in a packager other than by the pinned download/],
     // the eleventh review: every kind it claims to read, in either case (batch, module and Makefile names were not tested)
     ...["tools/get.bat", "tools/GET.BAT", "tools/get.cmd", "tools/get.psm1", "makefile", "GNUmakefile", "build/tools.mk", "MAKEFILE"].map((f) => [f, `${down("/tmp/packager").split("\n")[0]}\n`, OUTSIDE(f)]),
+    // the twelfth review: the other kinds it claims to read, each tested (zsh, YAML outside the workflows in either case,
+    // a Dockerfile of another name or folder, a .containerfile)
+    ...["tools/get.zsh", "deploy/tools.yaml", "deploy/compose.YML"].map((f) => [f, `${down("/tmp/packager").split("\n")[0]}\n`, OUTSIDE(f)]),
+    ...["docker/Dockerfile.ci", "docker/Dockerfile", "docker/tools.containerfile"].map((f) => [f, `FROM debian:bookworm-slim\nRUN curl -sSL -o /usr/local/bin/packager ${PIN}\n`, new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+: the downloaded packager must be checked`)]),
   ]) { const g = await guardWith(null, null, { [file]: text }); assert.equal(g.code, 1, `${file}: ${g.out}`); assert.match(g.out, re); }
   // a pinned, checked download in a workflow that DOWNLOADERS does not list: refused until it is listed
   const unlisted = await guardWith(null, null, { ".github/workflows/zz-new.yml": `name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          curl -sSL -o /tmp/packager ${PIN}\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /tmp/packager" | sha256sum -c - || exit 1\n` });
@@ -237,15 +250,16 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
   assert.equal(lock.code, 0, lock.out);
   // legitimate text: accepted (the tenth review: the version before refused the last five)
   const accepted = [
-    [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: packager --version\n${AT}`)]],
+    [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: echo the build is named in the log above\n${AT}`)]], // a name line (running the packager here would need its check: rule E)
     [[ST, (t) => t.replace(AT, `      # https://github.com/shaka-project/shaka-packager/releases/tag/v3.9.3\n${AT}`)]],
     [[ST, (t) => t.replace(AT, `      - name: x\n        continue-on-error: false\n        run: echo x\n${AT}`)]],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager")]],
     [[DF, (t) => t.replace(/ \\\n  && chmod \+x \/usr\/local\/bin\/packager && \/usr\/local\/bin\/packager --version/, "\nRUN chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version")]],
     [[ST, step("echo hi # shaka-packager runs below; see https://github.com/shaka-project/shaka-packager")]],
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -fsSL -o /usr/local/bin/packager ${PIN}`)]],
-    [[ST, step('echo "shaka-packager $(packager --version)"')]],
+    [[ST, step('echo "built with shaka-packager v3.9.3"')]], // a print line (one that RUNS the packager, $(packager --version), is refused: rule E)
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, 'FROM $1\nLABEL description="ffmpeg and shaka-packager v3.9.3"')]],
+    [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, 'FROM $1\nRUN echo "built with shaka-packager v3.9.3"')]], // a print line in a Dockerfile (the twelfth review)
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager "${PIN}"`)]],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager") + "FROM node:22-bookworm-slim\nCOPY --from=packager /usr/local/bin/packager /usr/local/bin/packager\n"]],
   ];
