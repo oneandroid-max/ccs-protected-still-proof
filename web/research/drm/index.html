@@ -123,7 +123,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 16:46 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 17:45 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -277,7 +277,10 @@
   // seen: the test card was seen playing through FairPlay on an iPhone (under Axinom's public licence); a site picture,
   // licensed by our own Axinom account, has an Apple form but has not yet been seen playing on an Apple device, so it is
   // said apart (the twenty-fifth review); the route-1 page's test photo has no Apple form
-  const APPLE_FORM = !!FAIRPLAY_MEASURED["iPhone/iPad"] && (CARD || !!(CLIP.fairplay && !CLIP.fairplay.error));
+  // (a form as tryOne uses it: a playlist, no error, and a licence address that is Axinom's; the twenty-sixth review: a form
+  // tryOne refuses was said to be offered)
+  const usableForm = (fp) => !!(fp && fp.manifest && !fp.error && AXINOM_LICENSE_ADDRESS.test(fp.license === undefined ? AXINOM_LICENSE : String(fp.license)));
+  const APPLE_FORM = !!FAIRPLAY_MEASURED["iPhone/iPad"] && usableForm(CLIP.fairplay);
   const WHERE = `${SHOWN} shows on an Android phone${APPLE_FORM && CARD ? ", on an iPhone" : ""}, or on a Windows PC in Chrome or Edge.`
     + (APPLE_FORM && !CARD ? " On an iPhone or iPad it is offered through Apple's protected path (FairPlay), not yet seen playing there." : "");
   const ELSEWHERE = PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
@@ -413,7 +416,12 @@
     return;
   }
 
-  let current = null, noAppleForm = false, fpLoadCode = null; // fpLoadCode: the error code of a FairPlay load that failed
+  let current = null, noAppleForm = false, fpLoadFailed = false; // fpLoadFailed: a FairPlay load failed
+  // whether this browser offers Apple's FairPlay at all, asked of the browser itself as Apple's test does above (the
+  // twenty-sixth review: on Apple's engine the player library plays FairPlay through Safari's own player, where a missing
+  // FairPlay shows as a media error, 3016, never as a code of its own)
+  const fairplayOffered = () => !navigator.requestMediaKeySystemAccess ? Promise.resolve(false)
+    : navigator.requestMediaKeySystemAccess("com.apple.fps", [{ initDataTypes: ["skd", "sinf"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"' }] }]).then(() => true, () => false);
   // Try one tier (one key system, one kind of level). Returns "ok" when the photo plays, "unavailable"
   // when the browser offers no such level, "failed-after-grant" when it did but no licence/frame came, and
   // "form-unusable" when the clip's Apple form cannot be used (no player is made, nothing is asked of the browser).
@@ -473,7 +481,7 @@
       refused(e);
       log(`${tierName}: not available here (error ${errText(e)})`);
       try { await player.destroy(); } catch (x) {} current = null;
-      if (fp) fpLoadCode = ((e && e.detail) || e || {}).code;
+      if (fp) fpLoadFailed = true;
       return "unavailable";
     }
     const info = player.drmInfo();
@@ -519,7 +527,7 @@
   }
 
   async function play(order) {
-    $("log").textContent = ""; noAppleForm = false; fpLoadCode = null; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
+    $("log").textContent = ""; noAppleForm = false; fpLoadFailed = false; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
     let grantedButNoLicence = false, grantedSystem = null, formUnusable = false;
     for (let i = 0; i < order.length; i++) {
@@ -530,6 +538,7 @@
       if (i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
     hidePhoto();
+    const fpsHere = fpLoadFailed ? await fairplayOffered() : null; // where a FairPlay load failed: is FairPlay offered here at all?
     if (formUnusable && !grantedButNoLicence) {
       // the twenty-fourth review: this said FairPlay was accepted, though no player was made
       set("r-ks", "held back — this clip's Apple form could not be used (see Attempts)", "bad");
@@ -558,11 +567,11 @@
     }
     if (FAIRPLAY_OK && !TEST) {
       // an iPhone or iPad, switched on: FairPlay is the only protection used there, and its load failed (the twenty-fourth
-      // review: this fell through to a box that contradicted the top line). Said by the load's error (the twenty-fifth
-      // review: one box for every error blamed the browser): 6001, the player library's REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE,
-      // is a browser without FairPlay; any other is a load that failed (a file not found, a media error, a licence
-      // refused while loading), named in the Attempts
-      const none = fpLoadCode === 6001;
+      // review: this fell through to a box that contradicted the top line). Said by asking the browser whether it offers
+      // FairPlay at all (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: the load's
+      // error code cannot tell): if not, it offers none; if it does, the load failed (a file not found, a media error, a
+      // licence refused while loading), named in the Attempts
+      const none = fpsHere === false;
       set("r-ks", none ? "held back — this browser offers no Apple FairPlay" : "held back — it did not load through Apple FairPlay (see Attempts)", "bad");
       set("r-granted", none ? "nothing: Apple FairPlay is the only protection used here, and this browser has none" : "nothing: the load through Apple FairPlay failed (see Attempts)", "bad");
       set("r-expect", `${shown} is not shown on this browser, so there is nothing to capture`, "bad");
@@ -575,6 +584,15 @@
       set("r-granted", `nothing yet: ${held} waits until a screenshot of FairPlay video here is measured black`, "bad");
       set("r-expect", APPLE_TEST ? `${held} is not shown on this device yet: take the screenshot of Apple's test above instead` : `${held} is not shown on this device yet, so there is nothing to capture`, "bad");
       showMsg(`${APPLE_KINDS} aren't confirmed yet to keep ${held} out of screenshots, so it isn't shown here yet. ` + WHERE);
+      return;
+    }
+    if (TEST_FAIRPLAY && fpsHere) {
+      // the Apple test link where FairPlay is offered and the card did not load through it (the twenty-sixth review: this
+      // said the browser does not offer what the test asks for, whatever the error)
+      set("r-ks", "held back — the test card did not load through Apple FairPlay (see Attempts)", "bad");
+      set("r-granted", "nothing: the load through Apple FairPlay failed (see Attempts)", "bad");
+      set("r-expect", "the test card is not shown, so there is nothing to capture", "bad");
+      showMsg("The test card couldn't load through Apple's protected path (FairPlay) right now, so it isn't shown. Try again in a moment.");
       return;
     }
     set("r-ks", "held back — none of the protection this page accepts is available in this browser", "bad");

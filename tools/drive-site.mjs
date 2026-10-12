@@ -32,8 +32,9 @@ const REPO = "oneandroid-max/ccs-protected-still-proof";
 const PASSWORD = "a test password, twelve+", TOKEN = "ghp_TESTTOKEN0123456789";
 const ID = "0123456789abcdef01234567";
 let failed = 0;
-// a check of a page the drive served with the Apple switch off says so (the twenty-fourth and twenty-fifth reviews: such
-// lines read as if they were the page as built): OFF is set around each stretch of checks of such pages below
+// a check of a page the drive served with the Apple switch off says so, wherever the lines it checks depend on the switch
+// (the twenty-fourth and twenty-fifth reviews: such lines read as if they were the page as built): OFF is set around each
+// stretch of such checks below; the other checks of such pages check nothing the switch changes
 let OFF = false;
 const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"}  ${what}${OFF ? " [page served with the Apple switch off, as before the measurement]" : ""}`); if (!ok) failed++; };
 
@@ -134,8 +135,9 @@ process.on("exit", () => { try { server.kill(); } catch {} try { rmSync(www, { r
 // caught with Node 22.22.0), but SIGUSR1 (Node's own, for its inspector), SIGPIPE (which Node ignores) and the four a real
 // fault raises (SIGILL, SIGBUS, SIGFPE, SIGSEGV): the drive leaves through its exit handler, and Playwright removes the
 // browser's profile folder too (removed only on the drive's own way out: the twenty-fifth review measured SIGABRT,
-// SIGVTALRM and SIGXCPU leaving it). SIGKILL cannot be caught, and the signals left out are not handled: the server's own
-// watch still removes the copy, and the profile folder is left
+// SIGVTALRM and SIGXCPU leaving it). SIGUSR1 and SIGPIPE do not stop the drive at all; SIGKILL (which cannot be caught)
+// and the four fault signals stop it without its exit handler: the server's own watch still removes the copy, and the
+// profile folder is left
 for (const sig of ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTRAP", "SIGABRT", "SIGUSR2", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGIO", "SIGPWR", "SIGSYS"])
   process.on(sig, () => process.exit(128 + osConstants.signals[sig]));
 let ours = false;
@@ -625,11 +627,13 @@ try {
   const shown = (pg, id) => pg.evaluate((i) => { const e = document.getElementById(i); return !!e && !e.closest("[hidden]"); }, id);
   // every request type the pinned player library has (shaka 5.2.10: 0 to 13) and one more, all but the licence's (2)
   const NOT_LICENCE = Array.from({ length: 15 }, (_, i) => i).filter((t) => t !== 2);
-  // and the contexts it passes with a request (shaka 5.2.10: none; {isPreload}; {type} with a playlist request;
-  // {type, stream, segment, isPreload} with a segment request; type one of its AdvancedRequestType values, 0 to 13), and an
-  // empty one; null stands for none (the twenty-fifth review: a filter keyed on {type} passed). A filter keyed on any
-  // other value of a context is outside this check
+  // and the contexts it passes with a request (shaka 5.2.10: none; {isPreload}; {type, isPreload} with a playlist or a
+  // segment its manifest parser reads itself; {type, stream, segment, isPreload} with a segment request; type one of its
+  // AdvancedRequestType values, 0 to 13), {type} alone, and an empty one; null stands for none (the twenty-fifth review: a
+  // filter keyed on {type} passed; the twenty-sixth: one keyed on {type, isPreload} passed). A filter keyed on any other
+  // value of a context is outside this check
   const FILTER_CONTEXTS = [null, {}, { isPreload: false }, { isPreload: true }, ...Array.from({ length: 14 }, (_, t) => ({ type: t })),
+    ...Array.from({ length: 14 }, (_, t) => [false, true].map((p) => ({ type: t, isPreload: p }))).flat(),
     ...[0, 1].flatMap((t) => [false, true].map((p) => ({ type: t, stream: {}, segment: {}, isPreload: p })))];
   const players = (pg) => pg.evaluate(() => (window.__players || []).map((p) => { const r = { headers: {}, uris: ["https://drm-fairplay-licensing.axprod.net/AcquireLicense"], method: "POST" }; for (const f of p.reqFilters || []) f(2, r);
     const d = (p.cfg && p.cfg.drm) || {}; return { m: p.m, server: (d.servers || {})["com.apple.fps"] || null, cert: ((d.advanced || {})["com.apple.fps"] || {}).serverCertificateUri || null, token: r.headers["X-AxDRM-Message"] || null }; }));
@@ -916,12 +920,13 @@ try {
     && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay (screenshots measured black on an iPhone, 2026-10-12)"),
     "as built, an iPhone: only the FairPlay button, and the lines name the measurement: " + (await ap.textContent("#r-rule")));
   await ac.close();
-  // ... and where its FairPlay load fails, the box says what happened by the load's error (the twenty-fifth review: one
-  // box for every error blamed the browser): 6001 is a browser with no FairPlay; any other is a load that failed
+  // ... and where its FairPlay load fails, the box says what happened, by asking the browser whether it offers FairPlay
+  // (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: on Apple's engine a missing
+  // FairPlay fails the load with a media error, 3016, as the stand-in does here, never with a code of its own)
   const NO_FPS = "This browser doesn't offer Apple's protected path (FairPlay), so the test card isn't shown here.", LOAD_FAILED = "The test card couldn't load through Apple's protected path (FairPlay) right now, so it isn't shown. Try again in a moment.";
   for (const [ua, init, msg, ks, what] of [
-    [IPHONE, SAFARI_PARTS(false) + "; window.__refuseAll = true;", NO_FPS, "held back — this browser offers no Apple FairPlay", "Safari with no FairPlay (6001): not told to open Safari"],
-    [IPHONE_APP, SAFARI_PARTS(false) + "; window.__refuseAll = true;", NO_FPS + " Open this link in Safari.", "held back — this browser offers no Apple FairPlay", "an app's built-in browser with no FairPlay (6001)"],
+    [IPHONE, SAFARI_PARTS(false) + "; window.__loadError = 3016;", NO_FPS, "held back — this browser offers no Apple FairPlay", "Safari with no FairPlay (the load failing with 3016): not told to open Safari"],
+    [IPHONE_APP, SAFARI_PARTS(false) + "; window.__loadError = 3016;", NO_FPS + " Open this link in Safari.", "held back — this browser offers no Apple FairPlay", "an app's built-in browser with no FairPlay (the load failing with 3016)"],
     [IPHONE, SAFARI_PARTS(true) + "; window.__loadError = 1001;", LOAD_FAILED, "held back — it did not load through Apple FairPlay (see Attempts)", "Safari whose load fails (1001, a file not found)"],
     [IPHONE_APP, SAFARI_PARTS(true) + "; window.__loadError = 3016;", LOAD_FAILED, "held back — it did not load through Apple FairPlay (see Attempts)", "an app's built-in browser whose load fails (3016, a media error): not sent to Safari"]]) {
     ({ c: ac, pg: ap } = await oneLink(ua, "?clip=card", init));
@@ -930,6 +935,13 @@ try {
       `as built, on an iPhone, ${what}: the box and the readout say what happened: ` + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
     await ac.close();
   }
+  // the Apple test link where FairPlay is offered and the card does not load (as on GitHub's virtual Mac): not told the
+  // browser lacks what the test asks for (the twenty-sixth review)
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "?levels=fairplay", SAFARI_PARTS(true) + "; window.__loadError = 3016;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === LOAD_FAILED && (await ap.textContent("#r-ks")) === "held back — the test card did not load through Apple FairPlay (see Attempts)",
+    "the Apple test link where FairPlay is offered and the load fails (3016): the box says it did not load, not that the browser lacks FairPlay: " + (await ap.textContent("#msg")));
+  await ac.close();
   api.r1AsBuilt = false;
   // (6d) the catch-all itself: a page asking another host (the drive's own server by another name, and its address on
   // another port), also by an address one of the drive's own page routes would match, and by a WebSocket, is answered here
