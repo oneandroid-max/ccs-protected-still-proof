@@ -394,7 +394,7 @@ device for it; no outside service is in the chain.
     - the PATH cases;
     - the service, the card job and the site's job command each given a RELATIVE path while they package in another folder. They work only if they run the very file they checked.
     - The backfill's runs in the tests never package, so for it the line itself is checked in its source. *(Corrected by the thirteenth review: a match on its source, which still passed with the line kept and undone right after it. Replaced in the thirteenth round by a real backfill run that makes a form.)*
-  - **Should-fix 2: the CI test steps ran the packager with no check, and the set-up steps ran it by its bare name.** **Now:** both test steps check the file first, and the six set-up steps run it by its path. A new rule in the guard, (E), refuses any workflow step that runs the packager before checking that same file in that step, or that runs it by a bare name. A run counts whether it is by its path, by `$PACKAGER_BIN`, or through the tests. Today 11 steps run it, and each checks it first. *(Corrected by the thirteenth review: rule (E) missed ordinary shapes (a comment after `steps:`, PACKAGER_BIN set for the whole job, a quoted path, `if`, `timeout`, a bare name in an `if`), counted check lines that checked nothing, and no test held that the file checked was the file run. Replaced in the thirteenth round: every run goes through `tools/run-packager.mjs`, and (E) refuses any other word naming the file.)*
+  - **Should-fix 2: the CI test steps ran the packager with no check, and the set-up steps ran it by its bare name.** **Now:** both test steps check the file first, and the six set-up steps run it by its path. A new rule in the guard, (E), refuses any workflow step that runs the packager before checking that same file in that step, or that runs it by a bare name. A run counts whether it is by its path, by `$PACKAGER_BIN`, or through the tests. Today 11 steps run it, and each checks it first. *(Corrected by the thirteenth review: rule (E) missed ordinary shapes (a comment after `steps:`, PACKAGER_BIN set for the whole job, a quoted path, `if`, `timeout`, a bare name in an `if`), counted check lines that checked nothing, and no test held that the file checked was the file run. Replaced in the thirteenth round: every run goes through `tools/run-packager.mjs`, and (E) refuses any other word naming the file, in the ordinary shapes.)*
   - **Should-fix 3: a deleted picture stayed on the site when the rebuild of the view then failed.** The old view was removed first, but the job then failed before its commit. **Now:** the job commits what a failed rebuild left (a view of other pictures removed) and still ends red. Tested on a scratch copy of the repository. *(Corrected by the thirteenth review: with a stand-in worker, never the real one. And the old view still stayed when the job failed before the rebuild: at its set-up, or at the packager check. Both fixed in the thirteenth round, tested with the real worker.)*
   - **Should-fix 4: breaks that no test caught.** Each now has a test:
     - the drm-package check line moved after the run (U1);
@@ -458,7 +458,7 @@ device for it; no outside service is in the chain.
     - **Tested** directly, and with the real worker in the step script.
   - **Minor 2: rule (E) counted check lines that checked nothing.** Gone with the step rule: no check line makes a run acceptable. Only the runner's check, at the moment it runs, does.
   - **Measured here:** site 48 of 48 with the real packager, none skipped; service 16 of 16; the drive 93 checks, none failed; the guard (9 pinned downloads, 12 runs, all through the runner) and the generated-page check pass. All on `16d6927`, 02:05Z to 02:09Z.
-  - **Watched failing:** 24 deliberate breaks, each in a scratch copy of `16d6927`, 01:56Z to 02:05Z: all 24 caught, each by the test meant for it (the failing test is named in each break's log line, `mutate16-*.log` in the session's scratch folder). First, the same commands were run on that commit with no break: green. *(Corrected by the fourteenth review: only the combined view's commands were (6 photo tests, 10 job tests). The guard's and the runner's were not run alone first; their green run on that commit came after the breaks, 02:05Z to 02:07Z. From the fourteenth round, every group's command runs first.)* The breaks:
+  - **Watched failing:** 24 deliberate breaks, each in a scratch copy of `16d6927`, 01:56Z to 02:05Z: all 24 caught, each by the test meant for it (the failing test is named in each break's log line, `mutate16-*.log` in the session's scratch folder). First, the same commands were run on that commit with no break: green. *(Corrected by the fourteenth and fifteenth reviews: the commands run first were 6 photo tests, the runner's among them, and the 10 job tests. Only the guard's command had no green run before its breaks; its first on that commit came at 02:05Z to 02:07Z. From the fourteenth round, every group's command runs first.)* The breaks:
     - the combined view: the packager checked before a view of other pictures is removed; checked up front by the job command; no check passed to it; the renewal of its form unchecked; a refusal not named as the packager's; the clean-up writing the request's id; no id written after a clean-up;
     - the runner: running what it is given, unchecked; ending green whatever the packager's exit; dropping the arguments;
     - each of the three test files running PACKAGER_BIN unchecked;
@@ -469,14 +469,14 @@ device for it; no outside service is in the chain.
 - 2026-10-12T02:42Z: **the reviewer's fourteenth pass, on `f1e1cc5..9e9b5b2`: no blocker, three should-fix, four minor. Nothing of it was pushed; all fixed here, the fix to be reviewed again before any push.** The reviewer confirmed the thirteenth review's findings fixed for the cases it named. It re-ran that review's two scenarios on `9e9b5b2`: the view that drew a deleted picture is gone from main, and a failed run answers no request. Its report is kept in the session's scratch folder (`r14-review/REPORT.md`).
   - **Should-fix 1: a download saved under another name was invisible to the guard's run rule.**
     - Saved as `pk` and run directly, the guard passed. Saved as `packager-v3.9.3`, it passed too: a regression of the thirteenth round, which had narrowed the names the rule knows.
-    - **Now:** the pinned download must be saved as `<folder>/packager`, so every later use is seen by name. Tested with the review's three shapes.
+    - **Now:** the pinned download must be saved as `<folder>/packager`, so every later use is seen by name. Tested with the review's three shapes. *(Corrected by the fifteenth review: not when a bracket or a backslash touches the name, as in a job's matrix; fixed in the fifteenth round.)*
   - **Should-fix 2: nothing tested that the combined view runs the path its check returns.** Discarding the answer, at the rebuild or at the renewal of the form, passed every test.
-    - **Now:** a test gives the view a path that cannot run, and a check that answers with the real packager's. The rebuild and the renewal both succeed only by running the path returned.
+    - **Now:** a test gives the view a path that cannot run, and a check that answers with the real packager's. The rebuild and the renewal both succeed only by running the path returned. *(Corrected by the fifteenth review: the rebuild's Apple form was not asserted, and a form run by the path given only logged its failure; fixed in the fifteenth round.)*
   - **Should-fix 3 (older than this work): a deletion waited on the tools' set-up it does not need.** A failed download left the deleted picture on the site. The combined view's job, which needs the picture job's success, then never ran.
     - **Now:** the picture job skips the set-up for a deletion.
     - GitHub's skipping cannot be run here: the test reads the step's condition.
   - **Minor 1: the combined view's step ran after any failed step, the key's mask included.**
-    - **Now:** it runs after a failed set-up, never after a failed mask (`steps.mask.outcome == 'success'`).
+    - **Now:** it runs after a failed set-up, never after a failed mask (`steps.mask.outcome == 'success'`). *(The fifteenth review: then a view that still draws a deleted picture stays until the next combined-view job; the step's comment says so since.)*
     - The review found no line that prints the key: a lost guard, not a leak.
   - **Minor 2: the guard was said to see more than it does.** The review ran eight deliberate shapes past it, each one really running the file:
     - a shell line that starts like a YAML `name:`;
@@ -486,10 +486,10 @@ device for it; no outside service is in the chain.
     - a continuation that hands the runner's argument to another command;
     - a glob.
 
-    **Now:** the limit is stated wherever more was claimed: the guard's comment, the checker module, the runner, and this plan. The guard reads one line at a time, word by word; a deliberate shape is for review. Commit `16d6927`'s message said "only PACKAGER_BIN's own value passes", which is true only in the ordinary shapes.
+    **Now:** the limit is stated wherever more was claimed: the guard's comment, the checker module, the runner, and this plan. The guard reads one line at a time, word by word; a deliberate shape is for review. Commit `16d6927`'s message said "only PACKAGER_BIN's own value passes", which is true only in the ordinary shapes. *(Corrected by the fifteenth review: five places still claimed more; corrected in the fifteenth round.)*
   - **Minor 3: the plan said every command was run with no break before the break run.** Only the combined view's were. Corrected in place above. From this round, every group's command runs first.
   - **Minor 4: removing the test steps' check lines also removed what held any future test file reading PACKAGER_BIN.**
-    - **Now:** a test lists every test file that reads it. Each one checks it, or hands it to the service, which checks it itself.
+    - **Now:** a test lists every test file that reads it. Each one checks it, or hands it to the service, which checks it itself. *(Corrected by the fifteenth review: it looked for one spelling of reading it; fixed in the fifteenth round.)*
   - **Measured here:** site 48 of 48 with the real packager, none skipped; service 16 of 16; the drive 93 checks, none failed; the guard (9 pinned downloads, 12 runs, all through the runner) and the generated-page check pass. All on `4936f5a`, 02:38Z to 02:42Z.
   - **Watched failing:** 7 deliberate breaks, each in a scratch copy of `4936f5a`, 02:38Z to 02:42Z: all caught, each by the test meant for it. First, each group's command ran on that commit with no break: all four green (the CONTROL lines in `mutate17-*.log`, the session's scratch folder). The breaks:
     - the rebuild, and the renewal of the form, running the path given instead of the one the check returned (the review's BD1 and BD2);
@@ -497,6 +497,34 @@ device for it; no outside service is in the chain.
     - a download saved under another name accepted (the review's N1);
     - a new test file reading PACKAGER_BIN unchecked.
   - **Next:** the fifteenth review of these local commits. Then push, CI and the merge.
+- 2026-10-12T03:21Z: **merged to `main` at 02:55Z (`eba6ace`), on the owner's instruction ("Get this merged, now"), while the fifteenth review was still running. That review found no blocker, two should-fix and four minor; they are fixed here as follow-ups, to be reviewed again before they are pushed.**
+  - **On `main` after the merge:**
+    - CI was green on `eba6ace`: site test, service test, the drive, the cross-check and the Pages build.
+    - The card job's first run stopped on "AXINOM_COM_KEY_ID is not a GUID": the secret did not hold the Key ID. The owner re-entered it at 03:09Z. The re-run passed: Axinom accepts the account's key pair (that proves the pair only; a device proves the rest), and both cards were committed.
+    - The backfill, started by hand at 03:12Z, gave all 8 pictures their Apple form, with none failed, and made the combined view's form.
+    - The live checks (Safari on a GitHub Mac, the signed-in walk in Chrome and Edge, the pages' statuses) were started at 03:15Z.
+  - **Should-fix 1: the rebuild's Apple form was not held to the checked path.** The test asserted only "ready". A form run by the path given failed, its failure only logged, and the view still answered "ready".
+    - **Now:** the test asserts the form too. The code ran the checked path; the test now holds it.
+  - **Should-fix 2: ordinary shapes still passed the guard's rule (E).** These passed because a bracket or a backslash kept the name from being read as a word:
+    - a flow sequence in a job's matrix (`tool: [ffmpeg, packager]`, run as `${{ matrix.tool }}`);
+    - `\packager`;
+    - a path with no space before its line's continuation.
+
+    **Now:** words are split at those too. Tested with the four shapes.
+  - **Minor 1: five places still claimed more than the guard sees:** the guard's header, two test comments, a commit message, and this plan. The ones that can be edited are corrected; the commit message stays as written, and this entry says so.
+  - **Minor 2: the list of test files that read PACKAGER_BIN looked for one spelling of reading it.**
+    - **Now:** every test file that names it at all, six of them, is listed with what it does with it.
+  - **Minor 3: the in-place correction of the thirteenth round's break-run statement was itself partly untrue.** Only the guard's command had no green run before its breaks. Corrected in place.
+  - **Minor 4: after a failed mask, a view that still draws a deleted picture stays until the next combined-view job.** It is a rare failure, and the key's safety comes first. The step's comment and this plan now say so; no code change.
+  - **The review's answer to whether the file can be had under another name without a line the guard reads:**
+    - in a workflow, only by a deliberate shape;
+    - in a Dockerfile, by a copy from its own stage, which is the file already checked, and the service checks it again.
+  - **Measured here:** site 48 of 48 with the real packager, none skipped; service 16 of 16; the drive 93 checks, none failed; the guard (9 pinned downloads, 12 runs) and the generated-page check pass. All on `ec6300d`, 03:16Z to 03:20Z.
+  - **Watched failing:** 4 deliberate breaks on `ec6300d`, 03:16Z to 03:20Z, all caught. Each group's command first ran on that commit with no break: all three green. The breaks:
+    - the rebuild's form run by the path given (the review's);
+    - the guard not splitting at brackets and backslashes;
+    - a test file reading PACKAGER_BIN in two other spellings (the review's).
+  - **Next:** the sixteenth review of these follow-ups, then push to `main`. The live walk is read before the Apple check link goes to the owner.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
