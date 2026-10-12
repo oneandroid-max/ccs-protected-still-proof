@@ -393,9 +393,9 @@ device for it; no outside service is in the chain.
   - **Should-fix 1: the file checked was not always the file run.** The programs ran the path they were given, so a relative path, or an empty or relative PATH entry, could make the run use another file than the one hashed. **Now:** every program (the site's job command, the backfill, the card job, the service for each photo) runs exactly the absolute path the check returns. The PATH lookup is the shell's own: in order, an empty entry meaning the current folder, the first file that can run. Tested:
     - the PATH cases;
     - the service, the card job and the site's job command each given a RELATIVE path while they package in another folder. They work only if they run the very file they checked.
-    - The backfill's runs in the tests never package, so for it the line itself is checked in its source.
-  - **Should-fix 2: the CI test steps ran the packager with no check, and the set-up steps ran it by its bare name.** **Now:** both test steps check the file first, and the six set-up steps run it by its path. A new rule in the guard, (E), refuses any workflow step that runs the packager before checking that same file in that step, or that runs it by a bare name. A run counts whether it is by its path, by `$PACKAGER_BIN`, or through the tests. Today 11 steps run it, and each checks it first.
-  - **Should-fix 3: a deleted picture stayed on the site when the rebuild of the view then failed.** The old view was removed first, but the job then failed before its commit. **Now:** the job commits what a failed rebuild left (a view of other pictures removed) and still ends red. Tested on a scratch copy of the repository.
+    - The backfill's runs in the tests never package, so for it the line itself is checked in its source. *(Corrected by the thirteenth review: a match on its source, which still passed with the line kept and undone right after it. Replaced in the thirteenth round by a real backfill run that makes a form.)*
+  - **Should-fix 2: the CI test steps ran the packager with no check, and the set-up steps ran it by its bare name.** **Now:** both test steps check the file first, and the six set-up steps run it by its path. A new rule in the guard, (E), refuses any workflow step that runs the packager before checking that same file in that step, or that runs it by a bare name. A run counts whether it is by its path, by `$PACKAGER_BIN`, or through the tests. Today 11 steps run it, and each checks it first. *(Corrected by the thirteenth review: rule (E) missed ordinary shapes (a comment after `steps:`, PACKAGER_BIN set for the whole job, a quoted path, `if`, `timeout`, a bare name in an `if`), counted check lines that checked nothing, and no test held that the file checked was the file run. Replaced in the thirteenth round: every run goes through `tools/run-packager.mjs`, and (E) refuses any other word naming the file.)*
+  - **Should-fix 3: a deleted picture stayed on the site when the rebuild of the view then failed.** The old view was removed first, but the job then failed before its commit. **Now:** the job commits what a failed rebuild left (a view of other pictures removed) and still ends red. Tested on a scratch copy of the repository. *(Corrected by the thirteenth review: with a stand-in worker, never the real one. And the old view still stayed when the job failed before the rebuild: at its set-up, or at the packager check. Both fixed in the thirteenth round, tested with the real worker.)*
   - **Should-fix 4: breaks that no test caught.** Each now has a test:
     - the drm-package check line moved after the run (U1);
     - the job's own runs adding an empty id (R1);
@@ -419,9 +419,53 @@ device for it; no outside service is in the chain.
   - **Watched failing:** 33 deliberate breaks, each in a scratch copy of `21c17ea`, 00:51Z to 00:57Z: 31 caught. Two were not caught:
     - the clean-up after a failed rebuild (R3, above);
     - the guard's exact check line loosened (`|| exit 1` and the end of the line no longer required). It then counted a check line made harmless by `|| true`. Its only test had that line on the same line as `run:`, where the guard refuses it for another reason.
-    - Each now has a test (`83f73f7`). Both breaks were re-run there, 00:58Z to 00:59Z: caught. Each failed on its new assertion, read in the test output.
+    - Each now has a test (`83f73f7`). Both breaks were re-run there, 00:58Z to 00:59Z: caught. Each failed on its new assertion, read in the test output. *(The thirteenth review: the kept log holds only the test names. The output read is kept in the session's scratch folder (`why-r3.log`, `why-e.log`); the reviewer re-ran both breaks and read the same assertions.)*
   - **Side item from QuicLINKs:** PR #954 came back clean from its independent review, and the owner merged it (github.com main `5d2faec8`). Like #953, it reaches CCS's own repository only by the owner's step, or a session on his PC (above).
   - **Next:** an independent review of these local commits (`d8230b7..` this entry). Then push, CI and the merge.
+- 2026-10-12T02:09Z: **the reviewer's thirteenth pass, on `d8230b7..f1e1cc5`: no blocker, three should-fix, two minor. Nothing of it was pushed; all fixed here, the fix to be reviewed again before any push.** The reviewer confirmed:
+  - the twelfth review's blocker and should-fixes fixed, for the cases it named;
+  - its eleven missed breaks now caught;
+  - the plan's numbers matching the saved logs.
+  - **Should-fix A: the guard's step rule (E) missed ordinary workflow shapes.** These passed it:
+    - a comment after `steps:` (the whole job disappeared from its view);
+    - PACKAGER_BIN set for the whole job;
+    - a quoted path;
+    - a run after `if` or `timeout`;
+    - a bare name in an `if`.
+
+    It also counted check lines that checked nothing (`true || \` before one, a relative path after a `cd`).
+    - **Now, a run-time check where it runs instead of a text rule about shell:**
+      - Every run of the packager in a workflow goes through `node tools/run-packager.mjs <path> …`: 12 runs, in 7 workflows. It checks the file by its SHA-256 at that moment and runs exactly that file, with the arguments as given.
+      - The tests check the packager themselves before any test runs it, so PACKAGER_BIN may be set anywhere.
+      - The three "checked again" lines are gone: the runner and the tests check at the moment they run it.
+    - **Rule (E) is now a word rule.** In a workflow, any word that names the packager file is refused, whatever the shell around it: its path, its bare name, or PACKAGER_BIN read in the shell. The exceptions: its pinned download, its check line, `chmod +x`, PACKAGER_BIN's own value, and the runner's argument.
+    - **The runs through the runner are counted per workflow,** so a guard that stops reading one fails.
+    - **Tested:**
+      - The reviewer's six shapes are refused. So are: a variable, `sh -c`, one-line steps, an expression, a second run beside the runner's, the runner named another way, and a run after a check line (made harmless or exact).
+      - The runner refuses another file without running it, and passes on the arguments and the packager's exit code.
+      - Each of the three test files that run the packager ends the run before any test when given another file, and never runs it.
+    - **Run here:** the converted `drm-card.yml` packaging step, with the pinned packager. The download was replaced by a copy, since this sandbox cannot reach GitHub's release files, and `xxd` by a stand-in, since it is not installed here.
+      - Both packaged files and their manifests were made, the Widevine one through Google's test key server.
+      - `drm-package.yml`'s two steps use the same constructs and were not run here (they package the owner's photo).
+  - **Should-fix B: two breaks that no test caught.**
+    - The guard's "same file" rule had no test. It is gone with the step rule: the runner checks the very path it runs.
+    - The backfill was held only by a match on its source. It is now held by a real run: a relative packager path from another folder, Axinom stood in for and accepting. The run makes the picture's Apple form.
+  - **Should-fix C: a deleted picture could still stay in the combined view when the job failed before the rebuild started.** That happened after a failed set-up, or when the packager was refused.
+    - **Now:** the combined view's job checks the packager only just before it first runs it, after a view of other pictures is removed, and the renewal of the view's form is included. The step also runs after a failed set-up (`if: ${{ !cancelled() }}`; GitHub's own skipping cannot be run here, so the test reads that line).
+    - **Tested** with the real worker and the step script on a scratch repository: the view that drew the deleted picture is gone from the remote, and the job ends red. The job command, given another packager file for a view that needs a form, refuses it before it ever runs, and the view stays.
+  - **Minor 1: a failed rebuild published an answer to the page's request.** The record's clean-up of deleted left-out pictures carried the request's id, so the page stopped waiting and showed an older note.
+    - **Now:** the clean-up is written without the id, and only a run that finishes answers.
+    - **Tested** directly, and with the real worker in the step script.
+  - **Minor 2: rule (E) counted check lines that checked nothing.** Gone with the step rule: no check line makes a run acceptable. Only the runner's check, at the moment it runs, does.
+  - **Measured here:** site 48 of 48 with the real packager, none skipped; service 16 of 16; the drive 93 checks, none failed; the guard (9 pinned downloads, 12 runs, all through the runner) and the generated-page check pass. All on `16d6927`, 02:05Z to 02:09Z.
+  - **Watched failing:** 24 deliberate breaks, each in a scratch copy of `16d6927`, 01:56Z to 02:05Z: all 24 caught, each by the test meant for it (the failing test is named in each break's log line, `mutate16-*.log` in the session's scratch folder). First, the same commands were run on that commit with no break: green. The breaks:
+    - the combined view: the packager checked before a view of other pictures is removed; checked up front by the job command; no check passed to it; the renewal of its form unchecked; a refusal not named as the packager's; the clean-up writing the request's id; no id written after a clean-up;
+    - the runner: running what it is given, unchecked; ending green whatever the packager's exit; dropping the arguments;
+    - each of the three test files running PACKAGER_BIN unchecked;
+    - the backfill keeping its checked line, then running the path given (the reviewer's M2);
+    - the guard: any word on a runner line passing; PACKAGER_BIN read in the shell, a bare name, or a quoted path not seen; any word on a `chmod` line passing; the runs not counted; any line with a `name:` key skipped; an unlisted workflow's runs accepted; any line naming `PACKAGER_BIN:` passing;
+    - the combined-view step skipped after a failed set-up.
+  - **Next:** an independent review of these local commits. Then push, CI and the merge.
 
 ## THE PATH TO ALL (the owner, 2026-10-11 04:32 UTC: "Needs to work on all. How do we get it there?")
 
