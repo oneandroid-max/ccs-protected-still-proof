@@ -42,7 +42,7 @@
 <body>
 <h1 id="title">Protected view</h1>
 <p class="detected" id="detected" hidden></p>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device, and software protection in Chrome and Edge on Windows and Android (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11). This page also accepts software protection, not yet measured, in Edge on Android and in other browsers on Windows and Android that report themselves as Chrome, apps' built-in browsers among them. Software protection anywhere else (Firefox, Samsung Internet and Opera; Macs, Linux and Chromebooks) is not accepted until measured the same way, and on Apple devices (FairPlay) the photo is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
+<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in other browsers on Windows and Android that report themselves as Chrome, apps' built-in browsers among them. Software protection anywhere else is not accepted: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On Apple devices (FairPlay) the photo is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
 
 <div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
@@ -128,7 +128,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 09:38 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 11:04 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -140,11 +140,12 @@
   // below, after software protection was measured black). As built, the photo is shown only with:
   //   - hardware protection, anywhere: Widevine HW_SECURE_ALL / HW_SECURE_DECODE, PlayReady SL3000
   //     (HW_SECURE_CRYPTO is excluded: it decodes into ordinary memory);
-  //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) only in Chrome and Edge on
-  //     Windows and Android. Screenshots under it were measured black in Chrome and Edge on the owner's Windows
-  //     PC and in Chrome on his Android phone; Edge on Android, and apps' built-in browsers there (they report
-  //     themselves as Chrome), follow the same rule unmeasured (a side finding in PLAN.md, the owner's to decide).
-  // Everywhere else the photo is held back until that browser and platform are measured the same way.
+  //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) in any browser on Windows or Android
+  //     that reports itself as Chrome or Edge (BROWSER below). Screenshots under it were measured black in Chrome and
+  //     Edge on the owner's Windows PC and in Chrome on his Android phone; Edge on Android, apps' built-in browsers and
+  //     other browsers reporting Chrome (DuckDuckGo, Yandex, Vivaldi and more) follow the same rule unmeasured (a side
+  //     finding in PLAN.md, the owner's to decide).
+  // Software protection anywhere else is not accepted; on Apple's engine the photo waits for FairPlay's measurement.
   // How a level is known: each request names levels of ONE kind, and a browser can only grant a level
   // it was asked for — so a grant tells which kind was granted. (The player library's
   // drmInfo().videoRobustness is not the grant: it echoes the first level requested.)
@@ -387,7 +388,7 @@
   if (!shaka.Player.isBrowserSupported()) {
     set("r-ks", "held back — this browser cannot play protected video", "bad");
     set("r-expect", `${held} is not shown on this browser`, "bad");
-    showMsg(`This browser cannot play protected video, so ${held} isn't shown here.` + (TEST ? "" : CHROME_ITSELF ? " An up-to-date Chrome or Edge can play it." : " " + ELSEWHERE));
+    showMsg(`This browser cannot play protected video, so ${held} isn't shown here.` + (CHROME_ITSELF && !TEST_FAIRPLAY ? " An up-to-date Chrome or Edge can play it." : TEST ? "" : " " + ELSEWHERE));
     return;
   }
 

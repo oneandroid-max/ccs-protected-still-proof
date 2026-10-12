@@ -1080,7 +1080,13 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   const AXINOM_LICENCE = 2; // the first two addresses below
   const URIS = ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense",
     "https://tools.axinom.com/FPScert/fairplay.cer", "https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8", "card-fairplay/video.mp4", "skd://4060a865-8878-4267-9cbf-91ae5bae1e72"];
-  const ask = (f, type, uri) => { const r = { headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" }; f(type, r); return r.headers; };
+  // the whole request is compared, not only its headers (the twenty-first review: a filter that put the token into the
+  // address of every other request passed): a request the token may not go with comes back exactly as it went in, and a
+  // licence request to Axinom gains the token as one header and nothing else
+  const fresh = (type, uri) => ({ headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" });
+  const ask = (f, type, uri) => { const r = fresh(type, uri); f(type, r); return r; };
+  const same = (r, type, uri) => JSON.stringify(r) === JSON.stringify(fresh(type, uri));
+  const withToken = (r, type, uri, token) => JSON.stringify(r) === JSON.stringify({ ...fresh(type, uri), headers: { "X-AxDRM-Message": token } });
   const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
   const helpers = page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
   // the page's own pattern of Axinom's licence addresses, given to the code under test (a stricter filter may use it)
@@ -1097,10 +1103,10 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   await protectedPlay("vp", "p", "u", "y");
   assert.equal(filters.length, 2, "one request filter per player");
   for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) for (const uri of URIS) {
-    for (const type of OTHERS) assert.deepEqual(ask(f, type, uri), {}, `Apple's test, request type ${type} to ${uri}: no token`);
+    for (const type of OTHERS) { const r = ask(f, type, uri); assert.ok(same(r, type, uri), `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
     const h = ask(f, LICENSE, uri);
-    if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.deepEqual(h, { "X-AxDRM-Message": token }, `Apple's test, a licence request to ${uri}: the token given`);
-    else assert.ok(!Object.keys(h).length || JSON.stringify(h) === JSON.stringify({ "X-AxDRM-Message": token }), `Apple's test, a licence-type request to ${uri}: this player's token or nothing: ${JSON.stringify(h)}`);
+    if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, token), `Apple's test, a licence request to ${uri}: the token as one header, nothing else changed: ${JSON.stringify(h)}`);
+    else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, token), `Apple's test, a licence-type request to ${uri}: this player's token as one header, or nothing: ${JSON.stringify(h)}`);
   }
   // the page's own player (tryOne), on the route-1 page and on the two pages built from it
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
@@ -1110,10 +1116,10 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     new Function("fp", "player", "shaka", "log", "tierName", "AXINOM_LICENSE_ADDRESS", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t", addressOf(pg));
     assert.equal(got.length, 1, f);
     for (const uri of URIS) {
-      for (const type of OTHERS) assert.deepEqual(ask(got[0], type, uri), {}, `${f}, request type ${type} to ${uri}: no token`);
+      for (const type of OTHERS) { const r = ask(got[0], type, uri); assert.ok(same(r, type, uri), `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
       const h = ask(got[0], LICENSE, uri);
-      if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.deepEqual(h, { "X-AxDRM-Message": "THE.CLIPS.TOKEN" }, `${f}, a licence request to ${uri}: the clip's token`);
-      else assert.ok(!Object.keys(h).length || JSON.stringify(h) === JSON.stringify({ "X-AxDRM-Message": "THE.CLIPS.TOKEN" }), `${f}, a licence-type request to ${uri}: the clip's token or nothing: ${JSON.stringify(h)}`);
+      if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence request to ${uri}: the clip's token as one header, nothing else changed: ${JSON.stringify(h)}`);
+      else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence-type request to ${uri}: the clip's token as one header, or nothing: ${JSON.stringify(h)}`);
     }
   }
 });
@@ -1570,7 +1576,7 @@ test("the workflows' runner and the tests check the packager before they run it,
     assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
   }
   await assert.rejects(fs.access(marker), "the other file was never run");
-  // ... and every file under site/test and service/test, of any kind, subfolders included, whose text holds the name
+  // ... and every file under site/ and service/ (tests and code alike), of any kind, subfolders included, whose text holds the name
   // PACKAGER_BIN is listed, with what it does with it and a fingerprint of EVERY LINE that holds the name: a new file
   // that names it, or any line naming it added, removed or changed in a listed file, fails here until the list is
   // brought up to date, and so is read again (the fourteenth review: the CI steps' own check lines, which held any such
@@ -1579,26 +1585,31 @@ test("the workflows' runner and the tests check the packager before they run it,
   // .mts helper or a shell script was not read; the nineteenth: a package in a node_modules folder inside them was
   // skipped, and a test calling configFromEnv(), the server's reader of the environment, got PACKAGER_BIN as given
   // without naming it, so configFromEnv counts as naming it; the twentieth: renamed, it passed, so any line naming the
-  // server's file, server.mjs, counts too). It reads the names as written: one built from parts
-  // (process.env["PACKAGER" + "_BIN"]) is not seen, and is for review; so is a file outside these two folders,
-  // node_modules folders above them included.
+  // server's file, server.mjs, counts too; the twenty-first: a reader moved out of server.mjs into another service
+  // file passed, so the code in the two folders is read too, not only their tests). It reads the names as written: one
+  // built from parts (process.env["PACKAGER" + "_BIN"]) or escaped is not seen, and is for review; so is a file outside
+  // these two folders, node_modules folders above them included.
   const NAMES = {
     "site/test/site.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
-    "site/test/fairplay.test.mjs": ["49d653d0d36e1792", "checks it as it loads (above); sets it for the programs it runs, which check it"],
+    "site/test/fairplay.test.mjs": ["f7d456517f9a9257", "checks it as it loads (above); sets it for the programs it runs, which check it"],
     "service/test/pipeline.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
     "service/test/helpers.mjs": ["5b6ebca3c151f743", "checks it, and hands the app only the checked path (or a name that runs nothing); imports the app (createApp), which checks it again before running it"],
     "site/test/jobs.test.mjs": ["1aff2a2b273ca84c", "sets it for the real worker, which checks it"],
     "site/test/pages.test.mjs": ["7d87c1b3516e031e", "workflow text for the guard; runs nothing"],
+    "service/server.mjs": ["02a006fe61824bb8", "configFromEnv reads it as given; createApp checks it before running it, and the pipeline again for each photo"],
+    "service/Dockerfile": ["9935aa00c6beefe9", "starts the server, which checks it"],
+    "site/worker.mjs": ["9a22de29bc8f6aaf", "reads it, then checks it before the job runs it (checkPackager); only the checked path runs"],
+    "site/backfill.mjs": ["9a22de29bc8f6aaf", "reads it, and checks it at once (checkPackager); only the checked path runs"],
   };
   const named = {};
-  for (const dir of ["site/test", "service/test"])
+  for (const dir of ["site", "service"])
     for (const f of await fs.readdir(join(REPO, dir), { recursive: true })) {
       if (!(await fs.stat(join(REPO, dir, f))).isFile()) continue;
       const lines = (await fs.readFile(join(REPO, dir, f), "utf8")).split("\n").filter((l) => /PACKAGER_BIN|configFromEnv|server\.mjs/.test(l)).map((l) => l.trim());
       if (lines.length) named[`${dir}/${f.split("\\").join("/")}`] = { print: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16), lines };
     }
   assert.deepEqual(Object.fromEntries(Object.entries(named).map(([f, v]) => [f, v.print])), Object.fromEntries(Object.entries(NAMES).map(([f, [print]]) => [f, print])),
-    "every test file that names PACKAGER_BIN (or configFromEnv, or server.mjs) is listed with the fingerprint of the lines that name it; read them, then update the list:\n" + Object.entries(named).map(([f, v]) => `${f} ${v.print}:\n  ${v.lines.join("\n  ")}`).join("\n"));
+    "every file under site/ and service/ that names PACKAGER_BIN (or configFromEnv, or server.mjs) is listed with the fingerprint of the lines that name it; read them, then update the list:\n" + Object.entries(named).map(([f, v]) => `${f} ${v.print}:\n  ${v.lines.join("\n  ")}`).join("\n"));
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

@@ -111,6 +111,7 @@ const DRIVE_ID = randomBytes(16).toString("hex");
 await fs.writeFile(join(www, "drive-id.txt"), DRIVE_ID);
 const server = spawn("python3", ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", www], { stdio: "ignore" });
 process.on("exit", () => { try { server.kill(); } catch {} }); // also when the drive dies (an error in a route, a failed browser launch)
+for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n)); // and when it is stopped
 let ours = false;
 for (let i = 0; i < 60 && !ours; i++) {
   try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
@@ -159,7 +160,8 @@ async function mockedContext(opts = {}) {
   // do not see, are written down and closed. The drive ends by checking that nothing else was asked for. Outside this
   // record: WebRTC (its UDP is turned off at launch, checked in (6d); its TCP, a TURN server over TCP, was measured
   // still connecting), WebTransport (its QUIC datagrams were measured reaching a listener, and no launch setting tried
-  // stopped them), and the browser's own background connections, which are not page requests. The player library is
+  // stopped them), a shared worker's requests (measured reaching a listener unrecorded; a dedicated worker's are recorded),
+  // and the browser's own background connections, which are not page requests. The player library is
   // answered by its file name at any host, so a page asking for it elsewhere reaches nothing and is not written down.
   const OWN_HOST = `127.0.0.1:${PORT}`;
   await ctx.route("**/*", (r) => { const u = new URL(r.request().url()); if (u.host === OWN_HOST) return r.continue(); outside.push(u.host + u.pathname); return r.fulfill({ status: 404, body: "" }); });
@@ -571,7 +573,7 @@ try {
     check(await shown(rp, "apple") && !(await shown(rp, "stage")) && !(await shown(rp, "buttons")) && !(await shown(rp, "buttons-note")) && !(await shown(rp, "attempts")), `${device}: Apple's test is shown in the photo's place (the photo's box, its buttons, the sentence about them and its attempts hidden)`);
     check((await rp.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", `${device}: Apple's test comes first, right under the top line`);
     check((await rp.evaluate((types) => (window.__players || []).every((p) => types.every((type) => ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4"].every((uri) => {
-      const r = { headers: {}, uris: [uri], method: "GET" }; for (const f of p.reqFilters || []) f(type, r); return !Object.keys(r.headers).length; }))), NOT_LICENCE)), `${device}: no player adds a token to any request but a licence request, of any type, whatever its address`);
+      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) f(type, r); return JSON.stringify(r) === before; }))), NOT_LICENCE)), `${device}: no player changes any request but a licence request (no token in its headers or its address), of any type, whatever its address`);
     check(await shown(rp, "apple-do") && (await rp.evaluate(() => document.getElementById("apple-do").nextElementSibling.id)) === "videos", `${device}: one line, right above the videos, says what to do`);
     check((await rp.textContent("#r-fps")) === "available in this browser", `${device}: FairPlay found: ` + (await rp.textContent("#r-fps")));
     const ps = await players(rp);
@@ -714,6 +716,10 @@ try {
   ({ c: ac, pg: ap } = await oneLink(WIN_CHROME, "?levels=fairplay", "window.__unsupported = true;"));
   await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "This browser cannot play protected video, so the test card isn't shown here.", "the player library unsupported, on a test link: no advice that cannot help: " + (await ap.textContent("#msg")));
+  await ac.close();
+  ({ c: ac, pg: ap } = await oneLink(WIN_CHROME, "?levels=software", "window.__unsupported = true;"));
+  await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "This browser cannot play protected video, so the test card isn't shown here. An up-to-date Chrome or Edge can play it.", "the player library unsupported, on the software test link in Chrome: an up-to-date one plays the card: " + (await ap.textContent("#msg")));
   await ac.close();
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true) + "; window.__unsupported = true;"));
   await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
