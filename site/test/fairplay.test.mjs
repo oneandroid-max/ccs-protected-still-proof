@@ -1088,10 +1088,13 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   // licence request to Axinom gains the token as one header and nothing else
   const fresh = (type, uri) => ({ headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" });
   // a filter may answer later (a promise: the player sends the request once it settles), so it is waited for (the
-  // twenty-second review: a filter changing the address a moment later passed); and it is called as the player calls it,
-  // with the request's context too (shaka 5.2.10 passes one, such as {isPreload}; the twenty-fourth review: a filter that
-  // added the token only when given a context passed), and without one
-  const CONTEXTS = [undefined, { isPreload: false }, { isPreload: true }];
+  // twenty-second review: a filter changing the address a moment later passed); and it is called with each context the
+  // pinned player library passes (shaka 5.2.10: none; {isPreload}; {type} with a playlist request; {type, stream, segment,
+  // isPreload} with a segment request; type one of its AdvancedRequestType values, 0 to 13) and an empty one (the
+  // twenty-fourth review: a filter keyed on a context passed; the twenty-fifth: one keyed on {type} passed). A filter
+  // keyed on any other value of a context is outside this test
+  const CONTEXTS = [undefined, {}, { isPreload: false }, { isPreload: true }, ...Array.from({ length: 14 }, (_, t) => ({ type: t })),
+    ...[0, 1].flatMap((t) => [false, true].map((p) => ({ type: t, stream: {}, segment: {}, isPreload: p })))];
   const on = (ctx) => (ctx ? ` (context ${JSON.stringify(ctx)})` : " (no context)");
   const ask = async (f, type, uri, ctx) => { const r = fresh(type, uri); await f(type, r, ctx); return r; };
   // and each request is held to its rule now and again a quarter of a second after the last filter answered (the

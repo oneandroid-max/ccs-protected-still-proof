@@ -15,7 +15,7 @@
 // The sandbox's Chromium has no DRM module, so real playback is not exercised here.
 //   node tools/drive-site.mjs   (Playwright from PLAYWRIGHT_PKG's package, Chromium at CHROME)
 import { promises as fs, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -32,7 +32,10 @@ const REPO = "oneandroid-max/ccs-protected-still-proof";
 const PASSWORD = "a test password, twelve+", TOKEN = "ghp_TESTTOKEN0123456789";
 const ID = "0123456789abcdef01234567";
 let failed = 0;
-const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"}  ${what}`); if (!ok) failed++; };
+// a check of a page the drive served with the Apple switch off says so (the twenty-fourth and twenty-fifth reviews: such
+// lines read as if they were the page as built): OFF is set around each stretch of checks of such pages below
+let OFF = false;
+const check = (ok, what) => { console.log(`${ok ? "ok  " : "FAIL"}  ${what}${OFF ? " [page served with the Apple switch off, as before the measurement]" : ""}`); if (!ok) failed++; };
 
 // a served copy of site/ with a sealed access key and one prepared picture
 const www = await fs.mkdtemp(join(tmpdir(), "site-www-"));
@@ -127,10 +130,14 @@ const SERVE = [
 // before its watch has deleted the copy (the twenty-fourth review: a group SIGQUIT or SIGKILL left the copy)
 const server = spawn("python3", ["-I", "-c", SERVE, String(PORT), www, String(process.pid)], { stdio: "ignore", detached: true });
 process.on("exit", () => { try { server.kill(); } catch {} try { rmSync(www, { recursive: true, force: true }); } catch {} }); // also when the drive dies (an error in a route, a failed browser launch)
-// and when it is stopped by any signal it can catch: SIGQUIT (Ctrl-\ in a terminal), SIGUSR2 and SIGALRM too, so the
-// browser's profile folder is removed as well (Playwright removes it only on the drive's own way out; measured left by
-// them before); SIGKILL cannot be caught: then the server's own watch removes the copy, and the profile folder is left
-for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGQUIT", 3], ["SIGUSR2", 12], ["SIGALRM", 14], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n));
+// and on each of these 16 signals, every signal that ends a process that Node lets a program catch by name (each measured
+// caught with Node 22.22.0), but SIGUSR1 (Node's own, for its inspector), SIGPIPE (which Node ignores) and the four a real
+// fault raises (SIGILL, SIGBUS, SIGFPE, SIGSEGV): the drive leaves through its exit handler, and Playwright removes the
+// browser's profile folder too (removed only on the drive's own way out: the twenty-fifth review measured SIGABRT,
+// SIGVTALRM and SIGXCPU leaving it). SIGKILL cannot be caught, and the signals left out are not handled: the server's own
+// watch still removes the copy, and the profile folder is left
+for (const sig of ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTRAP", "SIGABRT", "SIGUSR2", "SIGALRM", "SIGTERM", "SIGSTKFLT", "SIGXCPU", "SIGXFSZ", "SIGVTALRM", "SIGPROF", "SIGIO", "SIGPWR", "SIGSYS"])
+  process.on(sig, () => process.exit(128 + osConstants.signals[sig]));
 let ours = false;
 for (let i = 0; i < 60 && !ours; i++) {
   try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
@@ -149,6 +156,7 @@ window.shaka = { polyfill: { installAll(){} },
     configure(c){ this.cfg = c; } getNetworkingEngine(){ const self = this; return { registerResponseFilter(){}, registerRequestFilter(f){ (self.reqFilters = self.reqFilters || []).push(f); (window.__reqFilters = window.__reqFilters || []).push(f); } }; }
     async load(m){ window.__manifests.push(m); (window.__cfgs = window.__cfgs || []).push(JSON.parse(JSON.stringify(this.cfg || {}))); this.m = m; (window.__players = window.__players || []).push(this);
       if (window.__refuseAll) throw Object.assign(new Error("no such protection here (the drive)"), { code: 6001 });
+      if (window.__loadError) throw Object.assign(new Error("the load failed (the drive)"), { code: window.__loadError });
       if (window.__refuseHardware && /HW_SECURE|"3000"/.test(JSON.stringify((this.cfg && this.cfg.drm && this.cfg.drm.advanced) || {}))) throw Object.assign(new Error("no hardware protection here (the drive)"), { code: 6001 });
       if (m.startsWith("mem://")) { const r = await window.__scheme.fn(m, { headers: {} }).promise; window.__got.push([m, r.data.byteLength]);
         const seg = await window.__scheme.fn("mem://photo/video-widevine.mp4", { headers: { Range: "bytes=100-199" } }).promise; window.__got.push(["range", seg.data.byteLength, new Uint8Array(seg.data)[0]]);
@@ -497,12 +505,13 @@ try {
   }
   const licenceHeaders = (pg) => pg.evaluate(() => { const r = { headers: {} }; for (const f of window.__reqFilters || []) f(2, r); return r.headers; });
   const jwtKid = (t) => { try { return JSON.parse(Buffer.from(t.split(".")[1], "base64url").toString()).message.content_keys_source.inline[0].id; } catch { return null; } };
+  OFF = true;
   // (1) unmeasured: the picture is held back, and never reaches the player
   let { c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID);
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/held back — Apple FairPlay is not yet measured on iPhone\/iPad/.test(await ap.textContent("#r-ks")) && /Apple FairPlay is not yet measured here/.test(await ap.textContent("#r-rule")), "an iPhone, Apple unmeasured: the picture is held back, and the readout says why: " + (await ap.textContent("#r-ks")));
   check((await ap.evaluate(() => window.__manifests.length)) === 0 && !(await ap.evaluate(() => window.__photoShown)), "and nothing was given to the player");
-  check(/^iPhones and iPads aren't confirmed yet to keep the photo out of screenshots/.test(await ap.textContent("#msg")), "the picture's box says so, naming iPhones and iPads (the switch off): " + (await ap.textContent("#msg")));
+  check(/^iPhones and iPads aren't confirmed yet to keep the photo out of screenshots/.test(await ap.textContent("#msg")), "the picture's box says so, naming iPhones and iPads: " + (await ap.textContent("#msg")));
   await ac.close();
   // (2) the Apple test: only the test card, through FairPlay, with Axinom's licence service, certificate and PUBLIC token
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay"));
@@ -513,6 +522,7 @@ try {
   check(jwtKid((await licenceHeaders(ap))["X-AxDRM-Message"]) === "4060a865-8878-4267-9cbf-91ae5bae1e72", "and Axinom's public token for its public test key (the card's), never the picture's");
   check((await ap.textContent("#r-content")) === "the test card (not the photo)" && /APPLE TEST MODE/.test(await ap.textContent("body")), "the readout and the banner say it is the test card");
   await ac.close();
+  OFF = false;
   // (3) the switch as built (iPhones on, after the measurement on the owner's iPhone): the picture's own Apple form, by its address, with its own token
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
@@ -523,7 +533,7 @@ try {
   check(pcfg.drm.servers["com.apple.fps"] === OWN_LICENSE, "sent to the licence address its form records (the account's own): " + pcfg.drm.servers["com.apple.fps"]);
   check((await ap.textContent("#r-expect")) === "Apple FairPlay: screenshots measured black on an iPhone (2026-10-12). Take one." && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay (screenshots measured black on an iPhone, 2026-10-12)")
     && (await ap.textContent("#detected")).endsWith(" is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on an iPhone (2026-10-12)."),
-    "and the readout and the top line name the measurement, on an iPhone (an iPad is told the same, and that it was an iPhone): " + (await ap.textContent("#r-expect")) + " | " + (await ap.textContent("#detected")));
+    "and the readout and the top line name the measurement, on an iPhone (an iPad is told it was an iPhone, and not yet on an iPad: (6f) below): " + (await ap.textContent("#r-expect")) + " | " + (await ap.textContent("#detected")));
   await ac.close();
   // (4) the combined view, measured: its own Apple form and token
   await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
@@ -566,6 +576,7 @@ try {
   check((await ap.textContent("#r-ks")) === "held back — the combined view has no Apple (FairPlay) form yet" && (await ap.textContent("#msg")) === "The combined view hasn't been prepared for Apple devices yet, so it isn't shown here." && !(await ap.evaluate(() => window.__manifests)).length,
     "as built, a combined view with no Apple form: named as the combined view, not a picture (the twenty-fourth review): " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#msg")));
   await ac.close(); api.appleMeasured = false;
+  OFF = true;
   // (6) an iPad asks for desktop sites (it reports itself as a Mac); its touch screen gives it away
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID, () => Object.defineProperty(Navigator.prototype, "maxTouchPoints", { get: () => 5 })));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
@@ -576,14 +587,15 @@ try {
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }); // either way, the checks below name what happened
   check(/held back — Apple FairPlay is not yet measured on Mac/.test(await ap.textContent("#r-ks")), "a Mac in Safari: held back until Apple is measured on a Mac: " + (await ap.textContent("#r-ks")));
   await ac.close();
+  OFF = false;
   // (7b) the same as built (the twenty-fourth review: a Mac read "Apple devices aren't confirmed yet", and the line naming
   // where the picture shows left out iPhones and iPads, where it now shows): the box names Macs, and iPhones and iPads
   api.appleMeasured = true;
   ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
-  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, on an iPhone or iPad, or on a Windows PC in Chrome or Edge."
+  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge. On an iPhone or iPad it is offered through Apple's protected path (FairPlay), not yet seen playing there."
     && (await ap.textContent("#detected")).endsWith(". On a Mac the photo is held back until a screenshot there is measured black.") && !(await ap.evaluate(() => (window.__players || []).length)),
-    "as built, a Mac in Safari on a site page: its box names Macs, and where the picture shows, iPhones and iPads included: " + (await ap.textContent("#msg")));
+    "as built, a Mac in Safari on a site page: its box names Macs, and says a picture is offered on an iPhone or iPad but not yet seen playing there (the twenty-fifth review): " + (await ap.textContent("#msg")));
   await ac.close(); api.appleMeasured = false;
 
   // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing)
@@ -613,23 +625,30 @@ try {
   const shown = (pg, id) => pg.evaluate((i) => { const e = document.getElementById(i); return !!e && !e.closest("[hidden]"); }, id);
   // every request type the pinned player library has (shaka 5.2.10: 0 to 13) and one more, all but the licence's (2)
   const NOT_LICENCE = Array.from({ length: 15 }, (_, i) => i).filter((t) => t !== 2);
+  // and the contexts it passes with a request (shaka 5.2.10: none; {isPreload}; {type} with a playlist request;
+  // {type, stream, segment, isPreload} with a segment request; type one of its AdvancedRequestType values, 0 to 13), and an
+  // empty one; null stands for none (the twenty-fifth review: a filter keyed on {type} passed). A filter keyed on any
+  // other value of a context is outside this check
+  const FILTER_CONTEXTS = [null, {}, { isPreload: false }, { isPreload: true }, ...Array.from({ length: 14 }, (_, t) => ({ type: t })),
+    ...[0, 1].flatMap((t) => [false, true].map((p) => ({ type: t, stream: {}, segment: {}, isPreload: p })))];
   const players = (pg) => pg.evaluate(() => (window.__players || []).map((p) => { const r = { headers: {}, uris: ["https://drm-fairplay-licensing.axprod.net/AcquireLicense"], method: "POST" }; for (const f of p.reqFilters || []) f(2, r);
     const d = (p.cfg && p.cfg.drm) || {}; return { m: p.m, server: (d.servers || {})["com.apple.fps"] || null, cert: ((d.advanced || {})["com.apple.fps"] || {}).serverCertificateUri || null, token: r.headers["X-AxDRM-Message"] || null }; }));
+  OFF = true;
   // (1) an iPhone and a Mac in Safari: Apple's test, and nothing of the photo's
   for (const [ua, device, platform] of [[IPHONE, "an iPhone or iPad", "iPhone\\/iPad"], [MAC_SAFARI, "a Mac", "Mac"]]) {
     let { c: rc, pg: rp } = await oneLink(ua, "", SAFARI_PARTS(true));
     await rp.waitForFunction(() => document.getElementById("o-play").textContent !== "—", null, { timeout: 30000 }).catch(() => {}); // either way, the checks below name what happened
     const det = await rp.textContent("#detected");
-    check(new RegExp(`^Detected: Safari on ${device} \\(as the browser reports itself\\)\\. On ${device} the photo is held back until a screenshot there is measured black, so Apple's test plays below instead\\.$`).test(det), `${device}, the switch off (as before the measurement): the top line names Safari on ${device} and what the page does: ` + det);
+    check(new RegExp(`^Detected: Safari on ${device} \\(as the browser reports itself\\)\\. On ${device} the photo is held back until a screenshot there is measured black, so Apple's test plays below instead\\.$`).test(det), `${device}: the top line names Safari on ${device} and what the page does: ` + det);
     check(await shown(rp, "apple") && !(await shown(rp, "stage")) && !(await shown(rp, "buttons")) && !(await shown(rp, "buttons-note")) && !(await shown(rp, "attempts")), `${device}: Apple's test is shown in the photo's place (the photo's box, its buttons, the sentence about them and its attempts hidden)`);
     check((await rp.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", `${device}: Apple's test comes first, right under the top line`);
-    check((await rp.evaluate(async (types) => { const asked = []; for (const p of window.__players || []) for (const type of types) for (const uri of ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4",
-      "card-fairplay/master.m3u8", "card-fairplay/video.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8", "card-fairplay-own/1a2b3c4d/video.m3u8", "card-fairplay-own/1a2b3c4d/video.mp4"]) for (const ctx of [undefined, { isPreload: false }, { isPreload: true }]) {
-      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) await f(type, r, ctx); if (JSON.stringify(r) !== before) return false; asked.push([r, before]); }
+    check((await rp.evaluate(async ([types, ctxs]) => { const asked = []; for (const p of window.__players || []) for (const type of types) for (const uri of ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4",
+      "card-fairplay/master.m3u8", "card-fairplay/video.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8", "card-fairplay-own/1a2b3c4d/video.m3u8", "card-fairplay-own/1a2b3c4d/video.mp4"]) for (const c of ctxs) {
+      const ctx = c === null ? undefined : c, r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) await f(type, r, ctx); if (JSON.stringify(r) !== before) return false; asked.push([r, before]); }
       // and again a quarter of a second after the last filter answered (the twenty-third review: a filter changing the
       // request on a timer, after it had returned, passed); a change made later still is outside this check
-      await new Promise((res) => setTimeout(res, 250)); return asked.length > 0 && asked.every(([r, before]) => JSON.stringify(r) === before); }, NOT_LICENCE)),
-      `${device}: no player changes any request but a licence request (no token in its headers or its address, with or without the request's context, then or a quarter of a second after the last filter answered), of any type, whatever its address`);
+      await new Promise((res) => setTimeout(res, 250)); return asked.length > 0 && asked.every(([r, before]) => JSON.stringify(r) === before); }, [NOT_LICENCE, FILTER_CONTEXTS])),
+      `${device}: no player changes any request but a licence request (no token in its headers or its address, with every shape of context the player library passes, or none, then or a quarter of a second after the last filter answered), of any type, whatever its address`);
     check(await shown(rp, "apple-do") && (await rp.evaluate(() => document.getElementById("apple-do").nextElementSibling.id)) === "videos", `${device}: one line, right above the videos, says what to do`);
     check((await rp.textContent("#r-fps")) === "available in this browser", `${device}: FairPlay found: ` + (await rp.textContent("#r-fps")));
     const ps = await players(rp);
@@ -841,7 +860,7 @@ try {
   await ap.waitForURL(/\/web\/research\/drm\/\?clip=card$/, { timeout: 20000 }).catch(() => {});
   await ap.waitForFunction(() => document.getElementById("o-play") && document.getElementById("o-play").textContent !== "—", null, { timeout: 30000 }).catch(() => {});
   check(ap.url() === R1 + "?clip=card" && JSON.stringify((await players(ap)).map((p) => p.m)) === JSON.stringify([FILM, "card-fairplay/master.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8"]) && (await ap.textContent("#r-content")) === "the test card (not the photo)",
-    "the old Apple address on an iPhone, the switch off (as before the measurement): lands on the one link's test card, where Apple's test runs: " + ap.url());
+    "the old Apple address on an iPhone: lands on the one link's test card, where Apple's test runs: " + ap.url());
   check((await ap.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", "and there too Apple's test comes first, right under the top line");
   check((await ap.textContent("#detected")).startsWith("Detected: Safari on an iPhone or iPad (as the browser reports itself). On an iPhone or iPad the photo is held back")
     && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay is not yet measured here, so the photo is held back until a screenshot on iPhone/iPad is measured black (Apple's test on this page measures that)")
@@ -849,16 +868,18 @@ try {
     && (await ap.textContent("#r-expect")) === "the photo is not shown on this device yet: take the screenshot of Apple's test above instead",
     "and the readout names the photo as what is held back, not the card that Apple's test is playing: " + (await ap.textContent("#r-rule")) + " | " + (await ap.textContent("#r-expect")));
   await ac.close();
+  OFF = false;
   // (6e) the route-1 page AS BUILT on an iPhone (switched on after the measurement on the owner's iPhone, 2026-10-12): no
   // Apple's test there any more; the test photo, which has no Apple form, is held back and says why; the test card's
   // link plays the card through FairPlay, with Axinom's public token for its public key and nothing of a picture's
   api.r1AsBuilt = true;
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "", SAFARI_PARTS(true)));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
-  check(!(await shown(ap, "apple")) && (await players(ap)).length === 0 && (await ap.textContent("#r-ks")) === "held back — the test photo has no Apple (FairPlay) form"
-    && (await ap.textContent("#msg")) === "The test photo has no Apple (FairPlay) form, so it isn't shown on Apple devices. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge."
-    && (await ap.textContent("#detected")) === "Detected: Safari on an iPhone or iPad (as the browser reports itself). The photo is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on an iPhone (2026-10-12).",
-    "as built, an iPhone on the one link: no Apple's test; the test photo, which has no Apple form, is held back, and the top line names the measurement: " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#detected")));
+  check(!(await shown(ap, "apple")) && (await players(ap)).length === 0 && (await ap.textContent("#r-ks")) === "held back — the photo has no Apple (FairPlay) form"
+    && (await ap.textContent("#msg")) === "The photo has no Apple (FairPlay) form, so it isn't shown on Apple devices. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge."
+    && (await ap.textContent("#detected")) === "Detected: Safari on an iPhone or iPad (as the browser reports itself). On an iPhone or iPad the photo would be shown only through Apple's protected path (FairPlay), and it has no Apple form, so it is held back here."
+    && (await ap.textContent("#r-expect")) === "the photo is not shown on this device, so there is nothing to capture",
+    "as built, an iPhone on the one link: no Apple's test; the photo, which has no Apple form, is held back, and the top line, the box and the readout say so under one name (the twenty-fifth review): " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#detected")));
   await ac.close();
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true)));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
@@ -895,11 +916,18 @@ try {
     && (await ap.textContent("#r-rule")).endsWith(": Apple FairPlay (screenshots measured black on an iPhone, 2026-10-12)"),
     "as built, an iPhone: only the FairPlay button, and the lines name the measurement: " + (await ap.textContent("#r-rule")));
   await ac.close();
-  for (const [ua, tail] of [[IPHONE, " Try again in a moment."], [IPHONE_APP, " Open this link in Safari."]]) {
-    ({ c: ac, pg: ap } = await oneLink(ua, "?clip=card", SAFARI_PARTS(false) + "; window.__refuseAll = true;"));
+  // ... and where its FairPlay load fails, the box says what happened by the load's error (the twenty-fifth review: one
+  // box for every error blamed the browser): 6001 is a browser with no FairPlay; any other is a load that failed
+  const NO_FPS = "This browser doesn't offer Apple's protected path (FairPlay), so the test card isn't shown here.", LOAD_FAILED = "The test card couldn't load through Apple's protected path (FairPlay) right now, so it isn't shown. Try again in a moment.";
+  for (const [ua, init, msg, ks, what] of [
+    [IPHONE, SAFARI_PARTS(false) + "; window.__refuseAll = true;", NO_FPS, "held back — this browser offers no Apple FairPlay", "Safari with no FairPlay (6001): not told to open Safari"],
+    [IPHONE_APP, SAFARI_PARTS(false) + "; window.__refuseAll = true;", NO_FPS + " Open this link in Safari.", "held back — this browser offers no Apple FairPlay", "an app's built-in browser with no FairPlay (6001)"],
+    [IPHONE, SAFARI_PARTS(true) + "; window.__loadError = 1001;", LOAD_FAILED, "held back — it did not load through Apple FairPlay (see Attempts)", "Safari whose load fails (1001, a file not found)"],
+    [IPHONE_APP, SAFARI_PARTS(true) + "; window.__loadError = 3016;", LOAD_FAILED, "held back — it did not load through Apple FairPlay (see Attempts)", "an app's built-in browser whose load fails (3016, a media error): not sent to Safari"]]) {
+    ({ c: ac, pg: ap } = await oneLink(ua, "?clip=card", init));
     await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
-    check((await ap.textContent("#msg")) === "Apple's protected path (FairPlay) couldn't be used in this browser, so the test card isn't shown here." + tail && (await ap.textContent("#r-ks")) === "held back — Apple FairPlay could not be used in this browser (see Attempts)",
-      "as built, an iPhone browser where FairPlay cannot be used is told so, and what to do (the twenty-fourth review: the box contradicted the top line): " + (await ap.textContent("#msg")));
+    check((await ap.textContent("#msg")) === msg && (await ap.textContent("#r-ks")) === ks,
+      `as built, on an iPhone, ${what}: the box and the readout say what happened: ` + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
     await ac.close();
   }
   api.r1AsBuilt = false;
@@ -920,12 +948,14 @@ try {
   check(missing.length === 0, "the catch-all answers and records another host, the drive's own address on another port, a page route's pattern on another host, and a WebSocket" + (missing.length ? "; not recorded: " + missing.join(", ") : ""));
   check(stunPackets === 0, `a page's WebRTC request sends nothing over UDP: ${stunPackets} packets reached the listener`);
   await ac.close();
+  OFF = true;
   // (7) the site's own pages keep the picture held back on an iPhone, with no Apple's test of their own
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
   check(!(await shown(ap, "apple")) && (await ap.evaluate(() => (window.__players || []).length)) === 0 && /^Detected: Safari on an iPhone or iPad \(as the browser reports itself\)\. On an iPhone or iPad the photo is held back until a screenshot there is measured black\.$/.test(await ap.textContent("#detected")),
-    "a site page on an iPhone, the switch off (as before the measurement): the picture held back, no Apple's test there, and the top line says so: " + (await ap.textContent("#detected")));
+    "a site page on an iPhone: the picture held back, no Apple's test there, and the top line says so: " + (await ap.textContent("#detected")));
   await ac.close();
+  OFF = false;
   ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "view.html?id=0f0f0f0f0f0f0f0f0f0f0f0f"));
   await ap.waitForFunction(() => /could not be opened/.test(document.getElementById("msg").textContent), null, { timeout: 20000 }).catch(() => {});
   check(/could not be opened/.test(await ap.textContent("#msg")) && !(await shown(ap, "detected")) && !(await ap.textContent("#detected")), "a site page whose picture cannot be opened: no top line left half-made: " + (await ap.textContent("#msg")));

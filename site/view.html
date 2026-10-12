@@ -128,7 +128,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 15:27 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 16:46 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -145,7 +145,7 @@
   //     or Opera, which name Chrome too, or Firefox). Screenshots under it were measured black in Chrome and Edge on the
   //     owner's Windows PC and in Chrome on his Android phone; Edge on Android, apps' built-in browsers and the other
   //     browsers it reads as Chrome (DuckDuckGo, Yandex, Vivaldi and more) follow the same rule unmeasured (a side
-  //     finding in PLAN.md, the owner's to decide).
+  //     finding in PLAN.md; the owner decided on 2026-10-12 to keep it so).
   // Software protection anywhere else is not accepted; on Apple's engine the photo waits for FairPlay's measurement.
   // How a level is known: each request names levels of ONE kind, and a browser can only grant a level
   // it was asked for — so a grant tells which kind was granted. (The player library's
@@ -212,6 +212,8 @@
     ? { name: "the test card (not the photo)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: CARD_FAIRPLAY }
     : { name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid, fairplay: CTX.fairplay };
   set("r-content", CLIP.name);
+  // the route-1 page's test photo never gets an Apple form (only the test card and the site's pictures do)
+  const NO_FORM_EVER = !CARD && CLIP.name === "the photo";
   const TIERS = {
     "widevine-hardware":  { system: "widevine",  word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
     "widevine-software":  { system: "widevine",  word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
@@ -268,15 +270,21 @@
   set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${DESKTOP_PHONE ? "it reports itself as Linux" : REPORTS}). `
     + (TEST ? "This link runs a test, on the test card: the box above says which."
       : APPLE_TEST ? `On ${APPLE_KIND} the photo is held back until a screenshot there is measured black, so Apple's test plays below instead.`
-      : FAIRPLAY_OK ? `${SHOWN} is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on ${FAIRPLAY_MEASURED_ON[PLATFORM]} (${FAIRPLAY_MEASURED[PLATFORM]}${NOT_ON_IPAD}).`
+      : FAIRPLAY_OK ? (CLIP.fairplay ? `${SHOWN} is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on ${FAIRPLAY_MEASURED_ON[PLATFORM]} (${FAIRPLAY_MEASURED[PLATFORM]}${NOT_ON_IPAD}).`
+        // a clip with no Apple form says so here too (the twenty-fifth review: the top line said it was shown, the box that it was not)
+        : `On ${APPLE_KIND} ${shown} would be shown only through Apple's protected path (FairPlay), and it has no Apple form${NO_FORM_EVER ? "" : " yet"}, so it is held back here.`)
       : APPLE ? `On ${APPLE_KIND} ${shown} is held back until a screenshot there is measured black.`
       : SOFTWARE_MEASURED ? `${SHOWN} is shown here through the browser's protected path when it offers one this page accepts (the readout below says which kind was granted).`
       : `${SHOWN} is shown here only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead.`)
     + (APPLE_TEST_HERE && !APPLE && !TEST && APPLE_TEST_WHERE ? (PLATFORM === "Mac" ? (FAIRPLAY_MEASURED.Mac ? "" : " In Safari on this Mac, this same link runs Apple's own test.") : ` On ${APPLE_TEST_WHERE}, this same link runs Apple's own test in Safari.`) : ""));
   $("detected").hidden = false;
-  // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured)
-  // ... and on an iPhone or iPad where they are switched on and this clip has an Apple form (the route-1 page's test photo has none)
-  const WHERE = `${SHOWN} shows on an Android phone${FAIRPLAY_MEASURED["iPhone/iPad"] && (CARD || (CLIP.fairplay && !CLIP.fairplay.error)) ? ", on an iPhone or iPad" : ""}, or on a Windows PC in Chrome or Edge.`;
+  // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured), as
+  // seen: the test card was seen playing through FairPlay on an iPhone (under Axinom's public licence); a site picture,
+  // licensed by our own Axinom account, has an Apple form but has not yet been seen playing on an Apple device, so it is
+  // said apart (the twenty-fifth review); the route-1 page's test photo has no Apple form
+  const APPLE_FORM = !!FAIRPLAY_MEASURED["iPhone/iPad"] && (CARD || !!(CLIP.fairplay && !CLIP.fairplay.error));
+  const WHERE = `${SHOWN} shows on an Android phone${APPLE_FORM && CARD ? ", on an iPhone" : ""}, or on a Windows PC in Chrome or Edge.`
+    + (APPLE_FORM && !CARD ? " On an iPhone or iPad it is offered through Apple's protected path (FairPlay), not yet seen playing there." : "");
   const ELSEWHERE = PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
     : PLATFORM === "Android" || DESKTOP_PHONE ? "On this phone or tablet, open this link in Chrome (screenshots measured black there)."
     : PLATFORM === "Mac" && APPLE_TEST_HERE ? `On this Mac, open this link in Safari: Apple's test runs there. ${WHERE}`
@@ -410,7 +418,7 @@
     return;
   }
 
-  let current = null, noAppleForm = false;
+  let current = null, noAppleForm = false, fpLoadCode = null; // fpLoadCode: the error code of a FairPlay load that failed
   // Try one tier (one key system, one kind of level). Returns "ok" when the photo plays, "unavailable"
   // when the browser offers no such level, "failed-after-grant" when it did but no licence/frame came, and
   // "form-unusable" when the clip's Apple form cannot be used (no player is made, nothing is asked of the browser).
@@ -470,6 +478,7 @@
       refused(e);
       log(`${tierName}: not available here (error ${errText(e)})`);
       try { await player.destroy(); } catch (x) {} current = null;
+      if (fp) fpLoadCode = ((e && e.detail) || e || {}).code;
       return "unavailable";
     }
     const info = player.drmInfo();
@@ -515,7 +524,7 @@
   }
 
   async function play(order) {
-    $("log").textContent = ""; noAppleForm = false; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
+    $("log").textContent = ""; noAppleForm = false; fpLoadCode = null; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
     let grantedButNoLicence = false, grantedSystem = null, formUnusable = false;
     for (let i = 0; i < order.length; i++) {
@@ -545,21 +554,25 @@
     if (noAppleForm) {
       // the route-1 page's test photo never gets an Apple form (only the test card and the site's pictures do), so no "yet"
       // there; a site picture or the combined view gets one from its job (the twenty-fourth review)
-      const never = !CARD && CLIP.name === "the photo";
-      set("r-ks", never ? "held back — the test photo has no Apple (FairPlay) form" : `held back — ${shown} has no Apple (FairPlay) form yet`, "bad");
-      set("r-granted", never ? "nothing: the test photo is not made for Apple devices" : `nothing yet: ${shown} has not been prepared for Apple devices`, "bad");
-      set("r-expect", `${shown} is not shown on this device${never ? "" : " yet"}, so there is nothing to capture`, "bad");
-      showMsg(never ? `The test photo has no Apple (FairPlay) form, so it isn't shown on Apple devices. ${WHERE}` : `${SHOWN} hasn't been prepared for Apple devices yet, so it isn't shown here.`);
+      // (one name for it on every line: the twenty-fifth review)
+      set("r-ks", `held back — ${shown} has no Apple (FairPlay) form${NO_FORM_EVER ? "" : " yet"}`, "bad");
+      set("r-granted", NO_FORM_EVER ? `nothing: ${shown} is not made for Apple devices` : `nothing yet: ${shown} has not been prepared for Apple devices`, "bad");
+      set("r-expect", `${shown} is not shown on this device${NO_FORM_EVER ? "" : " yet"}, so there is nothing to capture`, "bad");
+      showMsg(NO_FORM_EVER ? `${SHOWN} has no Apple (FairPlay) form, so it isn't shown on Apple devices. ${WHERE}` : `${SHOWN} hasn't been prepared for Apple devices yet, so it isn't shown here.`);
       return;
     }
     if (FAIRPLAY_OK && !TEST) {
-      // an iPhone or iPad, switched on: FairPlay is the only protection used there, and it could not be used, because this
-      // browser offers none or because its load failed (the Attempts say which); the twenty-fourth review: this fell
-      // through to a box that contradicted the top line
-      set("r-ks", "held back — Apple FairPlay could not be used in this browser (see Attempts)", "bad");
-      set("r-granted", "nothing: Apple FairPlay is the only protection used here, and it could not be used in this browser", "bad");
+      // an iPhone or iPad, switched on: FairPlay is the only protection used there, and its load failed (the twenty-fourth
+      // review: this fell through to a box that contradicted the top line). Said by the load's error (the twenty-fifth
+      // review: one box for every error blamed the browser): 6001, the player library's REQUESTED_KEY_SYSTEM_CONFIG_UNAVAILABLE,
+      // is a browser without FairPlay; any other is a load that failed (a file not found, a media error, a licence
+      // refused while loading), named in the Attempts
+      const none = fpLoadCode === 6001;
+      set("r-ks", none ? "held back — this browser offers no Apple FairPlay" : "held back — it did not load through Apple FairPlay (see Attempts)", "bad");
+      set("r-granted", none ? "nothing: Apple FairPlay is the only protection used here, and this browser has none" : "nothing: the load through Apple FairPlay failed (see Attempts)", "bad");
       set("r-expect", `${shown} is not shown on this browser, so there is nothing to capture`, "bad");
-      showMsg(`Apple's protected path (FairPlay) couldn't be used in this browser, so ${shown} isn't shown here.` + (BROWSER_NAME === "Safari" ? " Try again in a moment." : " Open this link in Safari."));
+      showMsg(none ? `This browser doesn't offer Apple's protected path (FairPlay), so ${shown} isn't shown here.` + (BROWSER_NAME === "Safari" ? "" : " Open this link in Safari.")
+        : `${SHOWN} couldn't load through Apple's protected path (FairPlay) right now, so it isn't shown. Try again in a moment.`);
       return;
     }
     if (APPLE && !FAIRPLAY_OK && !TEST) {
