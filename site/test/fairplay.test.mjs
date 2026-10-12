@@ -1067,6 +1067,39 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
   }
 });
 
+// A licence token goes only with a licence request (the seventeenth review: nothing held that, for Apple's test or for
+// the page's own player): every other request a player makes (a playlist, a segment, the certificate) carries none
+test("a licence token is added to licence requests only, by Apple's test and by the page's own player", async () => {
+  const LICENSE = 2, OTHERS = [0, 1, 3, 4, 5, 6, 7];
+  const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
+  const helpers = page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
+  // Apple's test (the route-1 page): its own protectedPlay, with a stand-in player that keeps the filter it is given
+  const from = page.indexOf("    async function protectedPlay("), to = page.indexOf("\n    await protectedPlay(", from);
+  assert.ok(from > 0 && to > from, "protectedPlay is where this test reads it");
+  const filters = [];
+  const shaka = { net: { NetworkingEngine: { RequestType: { LICENSE } } }, Player: class { async attach() {} configure() {} addEventListener() {} async load() {} drmInfo() { return null; }
+    getNetworkingEngine() { return { registerRequestFilter(f) { filters.push(f); }, registerResponseFilter() {} }; } } };
+  const protectedPlay = new Function("shaka", "$", "AXINOM_CERT", "alog", "set", "watch", "AXINOM_PUBLIC_TOKEN", "AXINOM_LICENSE", `${helpers}\n${page.slice(from, to)}\nreturn protectedPlay;`)(
+    shaka, () => ({ play: () => Promise.resolve() }), "cert", () => {}, () => {}, () => {}, "PUBLIC.TOKEN", "https://drm-fairplay-licensing.axprod.net/AcquireLicense");
+  await protectedPlay("vo", "o", "u", "x", "OWN.TOKEN");
+  await protectedPlay("vp", "p", "u", "y");
+  assert.equal(filters.length, 2, "one request filter per player");
+  for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) {
+    for (const type of OTHERS) { const r = { headers: {} }; f(type, r); assert.deepEqual(r.headers, {}, `Apple's test, request type ${type}: no token`); }
+    const r = { headers: {} }; f(LICENSE, r); assert.deepEqual(r.headers, { "X-AxDRM-Message": token }, "Apple's test, a licence request: the token given");
+  }
+  // the page's own player (tryOne), on the route-1 page and on the two pages built from it
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const pg = await fs.readFile(join(REPO, f), "utf8"), head = "    if (fp) player.getNetworkingEngine().registerRequestFilter(", at = pg.indexOf(head), end = pg.indexOf("\n    });", at);
+    assert.ok(at > 0 && end > at && pg.indexOf(head, at + 1) < 0, `${f}: its request filter is where this test reads it, once`);
+    const got = [];
+    new Function("fp", "player", "shaka", "log", "tierName", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t");
+    assert.equal(got.length, 1, f);
+    for (const type of OTHERS) { const r = { headers: {} }; got[0](type, r); assert.deepEqual(r.headers, {}, `${f}, request type ${type}: no token`); }
+    const r = { headers: {} }; got[0](LICENSE, r); assert.deepEqual(r.headers, { "X-AxDRM-Message": "THE.CLIPS.TOKEN" }, `${f}, a licence request: the clip's token`);
+  }
+});
+
 test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key, our IV, decrypted back two ways to exactly the card (needs shaka-packager)", async (t) => {
   if (!(await havePackager(t))) return;
   const { buildFairPlayCard, cardFairPlayIds } = await import("../../tools/fairplay-card.mjs");
@@ -1519,28 +1552,30 @@ test("the workflows' runner and the tests check the packager before they run it,
     assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
   }
   await assert.rejects(fs.access(marker), "the other file was never run");
-  // ... and every .js or .mjs file under site/test and service/test, subfolders included, whose text holds the name
-  // PACKAGER_BIN is listed with HOW MANY TIMES it holds it, and what it does with it: a new file that names it, or one
-  // more use in a listed file, fails here until the list is brought up to date, and so is read again (the fourteenth
-  // review: the CI steps' own check lines, which held any such file, are gone; the fifteenth: only one way of reading it
-  // was looked for; the sixteenth: a list of names alone let a listed file gain an unchecked reader). It reads the name
+  // ... and every .js, .mjs or .cjs file under site/test and service/test, subfolders included, whose text holds the name
+  // PACKAGER_BIN is listed, with what it does with it and a fingerprint of EVERY LINE that holds the name: a new file
+  // that names it, or any line naming it added, removed or changed in a listed file, fails here until the list is
+  // brought up to date, and so is read again (the fourteenth review: the CI steps' own check lines, which held any such
+  // file, are gone; the fifteenth: only one way of reading it was looked for; the sixteenth: a list of names let a listed
+  // file gain an unchecked reader; the seventeenth: a count of uses let one be swapped for another). It reads the name
   // as written: one built from parts (process.env["PACKAGER" + "_BIN"]) is not seen, and is for review.
   const NAMES = {
-    "site/test/site.test.mjs": [2, "checks it as it loads (above)"],
-    "site/test/fairplay.test.mjs": [18, "checks it as it loads (above); sets it for the programs it runs, which check it"],
-    "service/test/pipeline.test.mjs": [2, "checks it as it loads (above)"],
-    "service/test/helpers.mjs": [1, "hands it to the service, which checks it itself (service/test/api.test.mjs)"],
-    "site/test/jobs.test.mjs": [1, "sets it for the real worker, which checks it"],
-    "site/test/pages.test.mjs": [14, "workflow text for the guard; runs nothing"],
+    "site/test/site.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
+    "site/test/fairplay.test.mjs": ["100261b61e7b4b0f", "checks it as it loads (above); sets it for the programs it runs, which check it"],
+    "service/test/pipeline.test.mjs": ["63f1cff7064ce706", "checks it as it loads (above)"],
+    "service/test/helpers.mjs": ["0e4e2e502c063911", "hands it to the service, which checks it itself (service/test/api.test.mjs)"],
+    "site/test/jobs.test.mjs": ["1aff2a2b273ca84c", "sets it for the real worker, which checks it"],
+    "site/test/pages.test.mjs": ["7d87c1b3516e031e", "workflow text for the guard; runs nothing"],
   };
-  const counted = {};
+  const named = {};
   for (const dir of ["site/test", "service/test"])
     for (const f of await fs.readdir(join(REPO, dir), { recursive: true })) {
-      if (!/\.m?js$/.test(f) || f.split(/[\\/]/).includes("node_modules")) continue;
-      const n = (await fs.readFile(join(REPO, dir, f), "utf8")).split("PACKAGER_BIN").length - 1;
-      if (n) counted[`${dir}/${f.split("\\").join("/")}`] = n;
+      if (!/\.[cm]?js$/.test(f) || f.split(/[\\/]/).includes("node_modules")) continue;
+      const lines = (await fs.readFile(join(REPO, dir, f), "utf8")).split("\n").filter((l) => l.includes("PACKAGER_BIN")).map((l) => l.trim());
+      if (lines.length) named[`${dir}/${f.split("\\").join("/")}`] = { print: createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16), lines };
     }
-  assert.deepEqual(counted, Object.fromEntries(Object.entries(NAMES).map(([f, [n]]) => [f, n])), "every test file that names PACKAGER_BIN is listed, with how many times, and what it does with it");
+  assert.deepEqual(Object.fromEntries(Object.entries(named).map(([f, v]) => [f, v.print])), Object.fromEntries(Object.entries(NAMES).map(([f, [print]]) => [f, print])),
+    "every test file that names PACKAGER_BIN is listed with the fingerprint of the lines that name it; read them, then update the list:\n" + Object.entries(named).map(([f, v]) => `${f} ${v.print}:\n  ${v.lines.join("\n  ")}`).join("\n"));
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

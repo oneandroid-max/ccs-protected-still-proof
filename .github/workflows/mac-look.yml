@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "03:47 UTC"
+  EXPECT_VERSION: "05:41 UTC"
   PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/"
 
 jobs:

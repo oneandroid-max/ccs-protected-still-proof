@@ -88,6 +88,7 @@ test("site/view.html and site/all.html are generated from the route-1 page and a
       "no route-1 Apple setting remains (the card's path, the photo's empty form, Apple's test switched on, the own card's path)");
   }
   assert.ok(all.includes('window.__ccsMode = "all";') && !out.includes("__ccsMode"), "only the combined view runs the prelude in its 'all' mode");
+  assert.ok(all.includes('const SHOWN = CARD ? "The test card" : "The combined view";') && out.includes('const SHOWN = CARD ? "The test card" : "The photo";'), "the top line calls the combined view by its name, and one picture the photo");
   assert.throws(() => buildView(index.replace("<h1>Route 1", "<h1>Changed")), /heading/);
   assert.throws(() => buildView(index, "some"), /unknown view mode/);
 });

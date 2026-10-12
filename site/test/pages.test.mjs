@@ -120,6 +120,10 @@ test("the Apple check's old address forwards to the one test page, on the test c
   const targets = [...old.matchAll(/(?:url=|href="|replace\(")([^"]+)/g)].map((m) => m[1]);
   assert.deepEqual([...new Set(targets)], ["../drm/?clip=card"], "every way out goes to the test card: " + targets.join(", "));
   assert.equal(targets.length, 3, "the refresh, the script and the link");
+  // and no other way out (the seventeenth review: a second script before this one sent the page to the photo): one
+  // script, one location, one link, one refresh, and nothing else that loads or navigates
+  for (const [re, n, what] of [[/<script/g, 1, "script"], [/location/g, 1, "location"], [/href=/g, 1, "link"], [/http-equiv/g, 1, "refresh"]]) assert.equal((old.match(re) || []).length, n, `exactly one ${what}`);
+  assert.ok(!/\bsrc=|action=|<iframe|<form|<link|<object|<embed|<base|window\.|document\.|open\(|assign\(|onload|onerror/i.test(old), "nothing else that loads or navigates");
   assert.ok(!/shaka|AxDRM|eyJhbGci|requestMediaKeySystemAccess|<video/.test(old), "no player, token, key system or video of its own");
 });
 
