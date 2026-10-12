@@ -123,7 +123,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 17:45 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 18:20 UTC — iPhones and iPads switched on: FairPlay measured black on the owner's iPhone; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -417,9 +417,11 @@
   }
 
   let current = null, noAppleForm = false, fpLoadFailed = false; // fpLoadFailed: a FairPlay load failed
-  // whether this browser offers Apple's FairPlay at all, asked of the browser itself as Apple's test does above (the
-  // twenty-sixth review: on Apple's engine the player library plays FairPlay through Safari's own player, where a missing
-  // FairPlay shows as a media error, 3016, never as a code of its own)
+  // whether this browser offers Apple's FairPlay at all, asked of the browser itself as Apple's test does above, after a
+  // FairPlay attempt that did not play: on Apple's engine the player library plays FairPlay through Safari's own player,
+  // where no code of its own says FairPlay is missing (the twenty-sixth review measured a 3016 media error in Chromium
+  // made to play HLS natively; a real WebKit may load and then not play, as GitHub's virtual Mac did: the
+  // twenty-seventh review)
   const fairplayOffered = () => !navigator.requestMediaKeySystemAccess ? Promise.resolve(false)
     : navigator.requestMediaKeySystemAccess("com.apple.fps", [{ initDataTypes: ["skd", "sinf"], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.640028"' }] }]).then(() => true, () => false);
   // Try one tier (one key system, one kind of level). Returns "ok" when the photo plays, "unavailable"
@@ -538,7 +540,8 @@
       if (i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
     hidePhoto();
-    const fpsHere = fpLoadFailed ? await fairplayOffered() : null; // where a FairPlay load failed: is FairPlay offered here at all?
+    // where a FairPlay attempt failed to load or to play: is FairPlay offered here at all?
+    const fpsHere = fpLoadFailed || grantedSystem === "fairplay" ? await fairplayOffered() : null;
     if (formUnusable && !grantedButNoLicence) {
       // the twenty-fourth review: this said FairPlay was accepted, though no player was made
       set("r-ks", "held back — this clip's Apple form could not be used (see Attempts)", "bad");
@@ -547,7 +550,8 @@
       showMsg(`${SHOWN} couldn't be opened for Apple's protected path right now, so it isn't shown.`);
       return;
     }
-    if (grantedButNoLicence) {
+    // (not where FairPlay was "granted" by a browser that offers none: the twenty-seventh review)
+    if (grantedButNoLicence && !(grantedSystem === "fairplay" && fpsHere === false)) {
       set("r-ks", "held back — protection was available, but no licence or frame arrived (see Attempts)", "bad");
       // Apple's FairPlay and ClearKey have no levels (the twenty-third review: this said "a level" after FairPlay too)
       set("r-granted", `${grantedSystem === "fairplay" ? "Apple FairPlay was" : grantedSystem === "clearkey" ? "ClearKey was" : "a level was"} accepted; playback did not start`, "bad");
@@ -566,11 +570,12 @@
       return;
     }
     if (FAIRPLAY_OK && !TEST) {
-      // an iPhone or iPad, switched on: FairPlay is the only protection used there, and its load failed (the twenty-fourth
-      // review: this fell through to a box that contradicted the top line). Said by asking the browser whether it offers
-      // FairPlay at all (the twenty-fifth review: one box for every error blamed the browser; the twenty-sixth: the load's
-      // error code cannot tell): if not, it offers none; if it does, the load failed (a file not found, a media error, a
-      // licence refused while loading), named in the Attempts
+      // an iPhone or iPad, switched on: FairPlay is the only protection used there, and its load failed, or it loaded and
+      // did not play in a browser that offers no FairPlay (the twenty-fourth review: this fell through to a box that
+      // contradicted the top line). Said by asking the browser whether it offers FairPlay at all (the twenty-fifth review:
+      // one box for every error blamed the browser; the twenty-sixth: the load's error code cannot tell; the twenty-seventh:
+      // a load may succeed and not play): if not, it offers none; if it does, the load failed (a file not found, a media
+      // error, a licence refused while loading), named in the Attempts
       const none = fpsHere === false;
       set("r-ks", none ? "held back — this browser offers no Apple FairPlay" : "held back — it did not load through Apple FairPlay (see Attempts)", "bad");
       set("r-granted", none ? "nothing: Apple FairPlay is the only protection used here, and this browser has none" : "nothing: the load through Apple FairPlay failed (see Attempts)", "bad");

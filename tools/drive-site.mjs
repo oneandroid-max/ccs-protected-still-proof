@@ -564,14 +564,26 @@ try {
   await ap.waitForFunction(() => /Apple form could not be opened/.test(document.getElementById("log").textContent) || window.__photoShown, null, { timeout: 30000 }); // either way, the checks below name what happened
   check(/this clip's Apple form could not be opened: its licence token expired on 2026-01-02/.test(await ap.textContent("#log")) && !(await ap.evaluate(() => window.__manifests)).length && !(await ap.evaluate(() => window.__photoShown)) && api.tokenReads === 0, `an expired form is not offered, and its token is never fetched (${api.tokenReads} reads): ` + (await ap.textContent("#log")).split("\n")[0]);
   check((await ap.textContent("#r-granted")) === "nothing: Apple FairPlay was not asked, the form could not be used", "an expired form: the readout does not say FairPlay was accepted: " + (await ap.textContent("#r-granted")));
-  await ac.close(); await writePhotoMeta();
+  await ac.close();
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
+    "an expired form: a Mac is not told it is offered on an iPhone or iPad (the twenty-seventh review): " + (await ap.textContent("#msg")));
+  await ac.close();
+  await writePhotoMeta();
   // (5) a picture whose token cannot be fetched: the Apple attempt says why, instead of failing silently
   api.noPictureToken = true;
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
   await ap.waitForFunction(() => /Apple form could not be opened/.test(document.getElementById("log").textContent), null, { timeout: 20000 });
   check(/this clip's Apple form could not be opened: its licence token is not on the site yet/.test(await ap.textContent("#log")), "a missing token is named in the attempts: " + (await ap.textContent("#log")).split("\n")[0]);
   check((await ap.textContent("#r-granted")) === "nothing: Apple FairPlay was not asked, the form could not be used", "a missing token: the readout does not say FairPlay was accepted: " + (await ap.textContent("#r-granted")));
-  await ac.close(); api.noPictureToken = false;
+  await ac.close();
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "view.html?id=" + ID));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "Macs aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge.",
+    "a missing token: a Mac is not told it is offered on an iPhone or iPad (the twenty-seventh review): " + (await ap.textContent("#msg")));
+  await ac.close();
+  api.noPictureToken = false;
   // (5b) as built, a picture and a combined view with no Apple form at all: each named, with "yet" (their jobs make one)
   await fs.writeFile(join(photoDir, "meta.json.enc"), await sealText(PHOTO, JSON.stringify({ id: ID, name: "Cotton <Bowl>.jpg", width: 720, height: 862, prKidGuid: "5CFCB567-F2F1-9D08-A30B-20483D92E930" })));
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
@@ -606,8 +618,11 @@ try {
     "as built, a Mac in Safari on a site page: its box names Macs, and says a picture is offered on an iPhone or iPad but not yet seen playing there (the twenty-fifth review): " + (await ap.textContent("#msg")));
   await ac.close(); api.appleMeasured = false;
 
-  // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing)
-  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay", () => { window.__noFrames = true; }));
+  // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing);
+  // in a browser that offers FairPlay, as Safari does (since the twenty-seventh review the page asks the browser after a
+  // FairPlay attempt that does not play, and a browser offering none is told so instead)
+  ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay", () => { window.__noFrames = true;
+    Object.defineProperty(Navigator.prototype, "requestMediaKeySystemAccess", { configurable: true, value: (ks) => ks === "com.apple.fps" ? Promise.resolve({ keySystem: ks }) : Promise.reject(new DOMException("not in this browser", "NotSupportedError")) }); }));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 30000 });
   check(!(await ap.evaluate(() => window.__photoShown)) && /no licence or no decoded frame \(size 0x0\)/.test(await ap.textContent("#log")), "\"playing\" with no frame is not counted as shown: " + (await ap.textContent("#r-ks")));
   check((await ap.textContent("#r-granted")) === "Apple FairPlay was accepted; playback did not start", "and the readout names FairPlay, which has no levels (the twenty-third review: it said \"a level was accepted\"): " + (await ap.textContent("#r-granted")));
@@ -941,7 +956,14 @@ try {
       `as built, on an iPhone, ${what}: the box and the readout say what happened: ` + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
     await ac.close();
   }
-  // the Apple test link where FairPlay is offered and the card does not load (as on GitHub's virtual Mac): not told the
+  // ... and an app's browser with no FairPlay whose load succeeds and never plays (a real WebKit may load and not play,
+  // as GitHub's virtual Mac did): told so, and sent to Safari, not told FairPlay was accepted (the twenty-seventh review)
+  ({ c: ac, pg: ap } = await oneLink(IPHONE_APP, "?clip=card", SAFARI_PARTS(false) + "; window.__noFrames = true;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === NO_FPS + " Open this link in Safari." && (await ap.textContent("#r-ks")) === "held back — this browser offers no Apple FairPlay",
+    "as built, on an iPhone, an app's built-in browser with no FairPlay whose load succeeds and never plays: told so, and sent to Safari: " + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
+  await ac.close();
+  // the Apple test link where FairPlay is offered and the card does not load (as in the iPhone simulator): not told the
   // browser lacks what the test asks for (the twenty-sixth review)
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "?levels=fairplay", SAFARI_PARTS(true) + "; window.__loadError = 3016;"));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
