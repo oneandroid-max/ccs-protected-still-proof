@@ -26,6 +26,7 @@
   .steps ol { margin: 6px 0; padding-left: 1.3em; } .steps p, .steps li { max-width: 65ch; }
   .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: stretch; }
   .nofps { max-width: 65ch; font-weight: 600; color: #a83a2b; }
+  .do { max-width: 65ch; font-weight: 600; margin: 6px 0 8px; }
   .cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .cap { font-size: 0.78rem; line-height: 1.3; min-height: 3.2em; } /* room for two lines, so the videos in a row line up */
   .mini { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72rem; line-height: 1.35; margin: 0; word-break: break-word; }
@@ -52,6 +53,7 @@
 <section id="apple" hidden>
   <p class="nofps" id="apple-nofps" hidden></p>
   <p class="mini">Apple FairPlay in this browser: <span id="r-fps">checking…</span></p>
+  <p class="do" id="apple-do">Wait until all four move, scroll so they and the line under each are on the screen, then take a screenshot. What it should show is below the videos.</p>
   <div class="grid" id="videos">
     <div class="cell">
       <div class="cap"><span class="tag protected">PROTECTED</span> Axinom's film</div>
@@ -89,7 +91,7 @@
   </dl>
   <h2>Apple's test, what happened, in order</h2>
   <pre id="apple-log"></pre>
-  <p class="credit">The film is <em>Tears of Steel</em> by the Blender Foundation (CC BY 3.0), from Axinom's public test streams. The protected videos are licensed by Axinom's FairPlay licence service with Axinom's evaluation FairPlay certificate, issued by Apple: the film under Axinom's own packaging, the card under ours (tools/fairplay-card.mjs). The card's first form uses Axinom's public test key, which Axinom's public licence token unlocks; its second uses a key of its own, whose token our account made.</p>
+  <p class="credit" id="apple-credit">The film is <em>Tears of Steel</em> by the Blender Foundation (CC BY 3.0), from Axinom's public test streams. The protected videos are licensed by Axinom's FairPlay licence service with Axinom's evaluation FairPlay certificate, issued by Apple: the film under Axinom's own packaging, the card under ours (tools/fairplay-card.mjs). The card's first form uses Axinom's public test key, which Axinom's public licence token unlocks; its second uses a key of its own, whose token our account made.</p>
 </section>
 
 <h2 id="readout">What this device is doing — read this first</h2>
@@ -129,8 +131,8 @@
   const showMsg = (t) => { msg.textContent = t; msg.hidden = false; };
   const hidePhoto = () => { video.style.visibility = "hidden"; try { video.pause(); } catch (e) {} };
 
-  // THE RULE (the owner's decision, 2026-10-11). The photo is shown only where screenshots are known
-  // to come out black:
+  // THE RULE (the owner's decision, 2026-10-11): the photo is shown only where screenshots are known to come out
+  // black. As built:
   //   - hardware protection, anywhere: Widevine HW_SECURE_ALL / HW_SECURE_DECODE, PlayReady SL3000
   //     (HW_SECURE_CRYPTO is excluded: it decodes into ordinary memory);
   //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) only in Chrome and Edge on
@@ -215,10 +217,11 @@
   // asking for desktop sites reports Linux) or changed by the person using it; the line says so.
   // The browser's own name, for what the page says only (the rule above reads BROWSER): an app's built-in browser first,
   // since it reports the engine it is built on
-  const BROWSER_NAME = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /FBAN|FBAV|FB_IAB|Instagram/.test(ua) ? "an app's built-in browser" : /SamsungBrowser\//.test(ua) ? "Samsung Internet"
+  const BROWSER_NAME = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /FBAN|FBAV|FB_IAB|Instagram|; wv\)/.test(ua) ? "an app's built-in browser" : /SamsungBrowser\//.test(ua) ? "Samsung Internet"
     : /OPR\/|OPT\//.test(ua) ? "Opera" : /Firefox\/|FxiOS/.test(ua) ? "Firefox" : /Chrome\/|CriOS/.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "this browser";
-  // Samsung Internet exists only on Android; asking for desktop sites, it reports Linux (measured on a phone, 2026-10-11)
-  const DESKTOP_PHONE = PLATFORM === "Linux" && /SamsungBrowser\//.test(ua);
+  // Samsung Internet on a phone or tablet exists only on Android (its TV browser names SMART-TV and Tizen); asking for
+  // desktop sites, it reports Linux (measured on a phone, 2026-10-11)
+  const DESKTOP_PHONE = PLATFORM === "Linux" && /SamsungBrowser\//.test(ua) && !/SMART-TV|Tizen/i.test(ua);
   const DEVICE_NAME = DESKTOP_PHONE ? "an Android phone or tablet asking for desktop sites"
     : { "iPhone/iPad": "an iPhone or iPad", "Mac": "a Mac", "Windows": "Windows", "Android": "Android", "ChromeOS": "a Chromebook", "Linux": "Linux" }[PLATFORM] || "this device";
   // (an app's built-in browser reports the engine it is built on, and the rule reads that: said, so no claim about Chrome is read as one about it)
@@ -228,20 +231,23 @@
   // WHAT THIS PAGE DETECTED, at the top in plain words (the owner, 2026-10-12: "the site needs to know automatically what
   // browser is being used to view"): the browser and the device, and what the page does for them
   const SHOWN = CARD ? "The test card" : "The photo"; // the combined view's page says "The combined view" (tools/build-site-view.mjs)
+  const shown = SHOWN.toLowerCase();
+  // Chrome or Edge by its own name (not an app's built-in browser reporting Chrome), where this page would accept even
+  // software protection: offering none, its protected-content setting is most likely off
+  const SETTING_OFF = SOFTWARE_MEASURED && BROWSER_NAME === BROWSER;
   set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${DESKTOP_PHONE ? "it reports itself as Linux" : "as the browser reports itself"}). `
-    + (TEST ? "This link runs a test, on the test card: the red box above says which."
+    + (TEST ? "This link runs a test, on the test card: the box above says which."
       : APPLE_TEST ? "On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead."
       : FAIRPLAY_OK ? `${SHOWN} is shown here only through Apple's protected path (FairPlay), measured black on this kind of device.`
       : APPLE ? `On Apple devices ${SHOWN.toLowerCase()} is held back until a screenshot there is measured black.`
       : SOFTWARE_MEASURED ? `${SHOWN} is shown here through the browser's protected path when it offers one this page accepts (the readout below says which kind was granted).`
       : `${SHOWN} is shown here only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead.`)
-    + (APPLE_TEST_HERE && !APPLE ? (PLATFORM === "Mac" ? " In Safari on this Mac, this same link runs Apple's own test." : " On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari.") : ""));
+    + (APPLE_TEST_HERE && !APPLE && !TEST ? (PLATFORM === "Mac" ? " In Safari on this Mac, this same link runs Apple's own test." : " On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari.") : ""));
   $("detected").hidden = false;
   // where to open the link instead, when nothing here is accepted (Apple devices hold it back too until measured)
   const WHERE = `${SHOWN} shows on an Android phone, or on a Windows PC in Chrome or Edge.`;
-  const OPEN_INSTEAD = SOFTWARE_MEASURED ? "If its protected-content setting is off, turning it on lets the photo show here."
-    : PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
-    : PLATFORM === "Android" || DESKTOP_PHONE ? "On this phone, open this link in Chrome (screenshots measured black there)."
+  const ELSEWHERE = PLATFORM === "Windows" ? "On this PC, open this link in Chrome or Edge (screenshots measured black there)."
+    : PLATFORM === "Android" || DESKTOP_PHONE ? "On this phone or tablet, open this link in Chrome (screenshots measured black there)."
     : PLATFORM === "Mac" && APPLE_TEST_HERE ? `On this Mac, open this link in Safari: Apple's test runs there. ${WHERE}`
     : PLATFORM === "Linux" ? `This browser reports itself as Linux. On Linux, Chrome showed protected video in a screenshot on a test machine, and no Linux browser is known to keep it out. If this is a phone or tablet asking for desktop sites, turn that off or open this link in Chrome. ${WHERE}`
     : WHERE;
@@ -250,8 +256,8 @@
     : TEST_FAIRPLAY ? "TEST: Apple FairPlay (measurement, test card) — a screenshot of the card should come out BLACK"
     : SOFTWARE_MEASURED ? `${SAYS}: hardware protection, or software protection (${SOFTWARE_SEEN})`
     : FAIRPLAY_OK ? `${SAYS}: Apple FairPlay (screenshots measured black on ${PLATFORM}, ${FAIRPLAY_MEASURED[PLATFORM]})`
-    : APPLE ? `${SAYS}: Apple FairPlay is not yet measured here, so the photo is held back until a screenshot on ${PLATFORM} is measured black (${APPLE_TEST ? "Apple's test on this page measures that" : "?levels=fairplay plays the test card for that"})`
-    : `${SAYS}: hardware protection only (software not yet measured there)`);
+    : APPLE ? `${SAYS}: Apple FairPlay is not yet measured here, so ${shown} is held back until a screenshot on ${PLATFORM} is measured black (${APPLE_TEST ? "Apple's test on this page measures that" : "?levels=fairplay plays the test card for that"})`
+    : `${SAYS}: hardware protection only (software protection is not accepted here)`);
   if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
   if (TEST_FAIRPLAY) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "APPLE TEST MODE: this link plays a TEST CARD through Apple's FairPlay, never the photo, to measure whether this iPhone, iPad or Mac keeps FairPlay video out of screenshots. Take a screenshot once the card plays: the card should come out black."; document.querySelector("h1").after(b); }
   if (TEST_CLEAR) { const b = document.createElement("p"); b.style.cssText = "background:#6b4e16;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "CONTROL MODE: this link plays the TEST CARD with NO protection (ClearKey), so a screenshot SHOULD show it. If the capture is black here too, a black capture on this machine proves nothing."; document.querySelector("h1").after(b); }
@@ -297,10 +303,14 @@
     if (fps !== "yes") {
       for (const p of ["p", "k", "o"]) { set(p + "-ks", "none", "bad"); set(p + "-play", "not attempted (no FairPlay in this browser)", "bad"); }
       set("c-play", "not started (no FairPlay to compare it with)", "bad");
-      $("apple-steps").hidden = true; $("videos").hidden = true; $("apple-details").hidden = true;
-      set("apple-nofps", "This browser offers no Apple FairPlay, so Apple's test cannot run in it. Open this link in Safari.");
+      for (const id of ["apple-do", "videos", "apple-steps", "apple-details", "apple-credit"]) $(id).hidden = true;
+      const why = `offers no Apple FairPlay, so ${shown} is held back and Apple's test cannot run in it`;
+      set("apple-nofps", BROWSER_NAME === "Safari" ? `This Safari ${why}.` : `This browser ${why}. Open this link in Safari.`);
       $("apple-nofps").hidden = false;
-      set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (as the browser reports itself). It offers no Apple FairPlay, so Apple's test cannot run in it: open this link in Safari.`);
+      set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (as the browser reports itself). It ${why}${BROWSER_NAME === "Safari" ? "" : ": open this link in Safari"}.`);
+      set("r-rule", `${SAYS}: Apple FairPlay is not available in this browser, so ${shown} is held back and Apple's test cannot run here`);
+      set("r-ks", "held back — this browser offers no Apple FairPlay", "bad");
+      set("r-expect", "nothing is shown here, so there is nothing to capture", "bad");
       return;
     }
     // the control: the same film with no protection at all
@@ -363,8 +373,8 @@
   if (APPLE_TEST) appleTest().catch((e) => set("r-fps", "Apple's test stopped: " + (e && e.message), "bad"));
   if (!shaka.Player.isBrowserSupported()) {
     set("r-ks", "held back — this browser cannot play protected video", "bad");
-    set("r-expect", "the photo is not shown on this browser", "bad");
-    showMsg("This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here. " + OPEN_INSTEAD);
+    set("r-expect", `${shown} is not shown on this browser`, "bad");
+    showMsg(`This browser cannot play protected video, so ${shown} isn't shown here. ` + (SETTING_OFF ? "An up-to-date Chrome or Edge can play it." : ELSEWHERE));
     return;
   }
 
@@ -485,28 +495,29 @@
     if (grantedButNoLicence) {
       set("r-ks", "held back — protection was available, but no licence or frame arrived (see Attempts)", "bad");
       set("r-granted", "a level was accepted; playback did not start", "bad");
-      set("r-expect", "the photo is not shown, so there is nothing to capture", "bad");
-      showMsg("The protected photo could not load right now, so it isn't shown.");
+      set("r-expect", `${shown} is not shown, so there is nothing to capture`, "bad");
+      showMsg(`${SHOWN} could not load through its protection right now, so it isn't shown.`);
       return;
     }
     if (noAppleForm) {
       set("r-ks", "held back — this picture has no Apple (FairPlay) form yet", "bad");
       set("r-granted", "nothing yet: the picture has not been prepared for Apple devices", "bad");
-      set("r-expect", "the photo is not shown on this device yet, so there is nothing to capture", "bad");
+      set("r-expect", `${shown} is not shown on this device yet, so there is nothing to capture`, "bad");
       showMsg("This picture hasn't been prepared for Apple devices yet, so it isn't shown here.");
       return;
     }
     if (APPLE && !FAIRPLAY_OK && !TEST) {
       set("r-ks", `held back — Apple FairPlay is not yet measured on ${PLATFORM}`, "bad");
-      set("r-granted", "nothing yet: the photo waits until a screenshot of FairPlay video here is measured black", "bad");
-      set("r-expect", APPLE_TEST ? "the photo is not shown on this device yet: take the screenshot of Apple's test above instead" : "the photo is not shown on this device yet, so there is nothing to capture", "bad");
-      showMsg("Apple devices aren't confirmed yet to keep the photo out of screenshots, so it isn't shown here yet. " + WHERE);
+      set("r-granted", `nothing yet: ${shown} waits until a screenshot of FairPlay video here is measured black`, "bad");
+      set("r-expect", APPLE_TEST ? `${shown} is not shown on this device yet: take the screenshot of Apple's test above instead` : `${shown} is not shown on this device yet, so there is nothing to capture`, "bad");
+      showMsg(`Apple devices aren't confirmed yet to keep ${shown} out of screenshots, so it isn't shown here yet. ` + WHERE);
       return;
     }
     set("r-ks", "held back — none of the protection this page accepts is available in this browser", "bad");
     set("r-granted", "nothing this page accepts", "bad");
-    set("r-expect", "the photo is not shown on this browser, so there is nothing to capture", "bad");
-    showMsg((SOFTWARE_MEASURED ? "This browser offered none of the protection this page accepts, so the photo isn't shown here. " : "This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here. ") + OPEN_INSTEAD);
+    set("r-expect", `${shown} is not shown on this browser, so there is nothing to capture`, "bad");
+    showMsg(SETTING_OFF ? `This browser offered none of the protection this page accepts, so ${shown} isn't shown here. If its protected-content setting is off, turning it on lets ${shown} show here.`
+      : `This browser hasn't been confirmed to keep ${shown} out of screenshots, so it isn't shown here. ${ELSEWHERE}`);
   }
 
   $("auto").addEventListener("click", () => play(ORDER));

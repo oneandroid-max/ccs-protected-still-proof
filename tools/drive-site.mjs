@@ -123,7 +123,7 @@ window.shaka = { polyfill: { installAll(){} },
   net: { NetworkingEngine: { RequestType: { LICENSE: 2 }, registerScheme(s, fn) { window.__scheme = { s, fn }; } } },
   util: { AbortableOperation: { completed: (v) => ({ promise: Promise.resolve(v) }), failed: (e) => ({ promise: Promise.reject(e) }) },
           Error: class { constructor(...a) { this.args = a; } static get Severity() { return { CRITICAL: 2 }; } static get Category() { return { NETWORK: 1 }; } static get Code() { return { BAD_HTTP_STATUS: 1001 }; } } },
-  Player: class extends EventTarget { static isBrowserSupported(){ return true; } async attach(v){ this.v = v; }
+  Player: class extends EventTarget { static isBrowserSupported(){ return !window.__unsupported; } async attach(v){ this.v = v; }
     configure(c){ this.cfg = c; } getNetworkingEngine(){ const self = this; return { registerResponseFilter(){}, registerRequestFilter(f){ (self.reqFilters = self.reqFilters || []).push(f); (window.__reqFilters = window.__reqFilters || []).push(f); } }; }
     async load(m){ window.__manifests.push(m); (window.__cfgs = window.__cfgs || []).push(JSON.parse(JSON.stringify(this.cfg || {}))); this.m = m; (window.__players = window.__players || []).push(this);
       if (window.__refuseAll) throw Object.assign(new Error("no such protection here (the drive)"), { code: 6001 });
@@ -149,10 +149,15 @@ const errors = [], outside = [];
 async function mockedContext(opts = {}) {
   const ctx = await b.newContext(opts);
   ctx.on("page", (p) => p.on("pageerror", (e) => errors.push(e.message)));
-  // Every host but the drive's own server is answered HERE and written down, never reached: this route is registered
-  // first, so it is asked last (Playwright asks the last registered route first), after the routes below that answer
-  // GitHub's API, the player library and Axinom's media host. The drive ends by checking that nothing else was asked for.
+  // Every page request to a host but the drive's own server is answered HERE and written down, never reached: this
+  // route is registered first, so it is asked last (Playwright asks the last registered route first), after the routes
+  // below that answer GitHub's API, the player library and Axinom's media host; the routes for the drive's own pages
+  // act only on its own server and pass anything else down to here. WebSockets, which routes do not see, are written
+  // down and closed. The drive ends by checking that nothing else was asked for. (The browser's own background
+  // connections are not page requests, and are not seen here.)
   await ctx.route("**/*", (r) => { const u = new URL(r.request().url()); if (u.hostname === "127.0.0.1") return r.continue(); outside.push(u.host + u.pathname); return r.fulfill({ status: 404, body: "" }); });
+  await ctx.routeWebSocket(/.*/, (ws) => { outside.push("websocket " + ws.url()); ws.close(); });
+  const own = (fn) => (r) => new URL(r.request().url()).hostname === "127.0.0.1" ? fn(r) : r.fallback();
   await ctx.route("https://api.github.com/**", async (route) => {
     const req = route.request(); const u = new URL(req.url()); const auth = req.headers()["authorization"];
     if (auth !== `Bearer ${TOKEN}`) return route.fulfill({ status: 401, body: "{}" });
@@ -164,17 +169,17 @@ async function mockedContext(opts = {}) {
     if (req.method() === "PUT" && u.pathname === `/repos/${REPO}/contents/site/config.json`) { api.puts.push(JSON.parse(req.postData())); return route.fulfill({ status: 200, contentType: "application/json", body: "{}" }); }
     return route.fulfill({ status: 404, body: "{}" });
   });
-  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, (r) => { api.metaReads = (api.metaReads || 0) + 1; return api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue(); });
+  await ctx.route(/\/site\/mosaic\/meta\.json\.enc/, own((r) => { api.metaReads = (api.metaReads || 0) + 1; return api.metaAbort ? r.abort() : api.noMosaic ? r.fulfill({ status: 404, body: "" }) : r.continue(); }));
   await ctx.route("**/shaka-player.compiled.min.js", (r) => r.fulfill({ body: STUB, contentType: "application/javascript" }));
   // the real page pins the player library by hash; the stand-in cannot match it, so the drive serves
   // the page without the attribute (the hash itself is read from the CDN by live-check.yml)
-  await ctx.route(/\/site\/(view|all)\.html/, async (r) => { const res = await r.fetch(); let body = (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "");
+  await ctx.route(/\/site\/(view|all)\.html/, own(async (r) => { const res = await r.fetch(); let body = (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "");
     // the Apple switch as it would be after a measurement on an iPhone (only when the drive asks for it)
     if (api.appleMeasured) { const before = body; body = body.replace('const FAIRPLAY_MEASURED = { "iPhone/iPad": "", "Mac": "" };', 'const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-11", "Mac": "" };'); if (body === before) throw new Error("the Apple switch was not found in the page"); }
-    r.fulfill({ response: res, body }); });
-  await ctx.route(/\/web\/research\/drm\/(index\.html)?(\?[^/]*)?$/, async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); });
+    r.fulfill({ response: res, body }); }));
+  await ctx.route(/\/web\/research\/drm\/(index\.html)?(\?[^/]*)?$/, own(async (r) => { const res = await r.fetch(); r.fulfill({ response: res, body: (await res.text()).replace(/ integrity="[^"]+" crossorigin="anonymous"/, "") }); }));
   await ctx.route("https://media.axprod.net/**", (r) => r.fulfill({ status: 404, body: "" }));
-  await ctx.route(/\/fp-[0-9a-f]{8}\/token\.enc/, (r) => { api.tokenReads = (api.tokenReads || 0) + 1; return api.noPictureToken ? r.fulfill({ status: 404, body: "" }) : r.continue(); });
+  await ctx.route(/\/fp-[0-9a-f]{8}\/token\.enc/, own((r) => { api.tokenReads = (api.tokenReads || 0) + 1; return api.noPictureToken ? r.fulfill({ status: 404, body: "" }) : r.continue(); }));
   return ctx;
 }
 
@@ -546,7 +551,7 @@ try {
     return { c, pg };
   }
   const shown = (pg, id) => pg.evaluate((i) => { const e = document.getElementById(i); return !!e && !e.closest("[hidden]"); }, id);
-  const players = (pg) => pg.evaluate(() => (window.__players || []).map((p) => { const r = { headers: {} }; for (const f of p.reqFilters || []) f(2, r);
+  const players = (pg) => pg.evaluate(() => (window.__players || []).map((p) => { const r = { headers: {}, uris: ["https://drm-fairplay-licensing.axprod.net/AcquireLicense"], method: "POST" }; for (const f of p.reqFilters || []) f(2, r);
     const d = (p.cfg && p.cfg.drm) || {}; return { m: p.m, server: (d.servers || {})["com.apple.fps"] || null, cert: ((d.advanced || {})["com.apple.fps"] || {}).serverCertificateUri || null, token: r.headers["X-AxDRM-Message"] || null }; }));
   // (1) an iPhone and a Mac in Safari: Apple's test, and nothing of the photo's
   for (const [ua, device, platform] of [[IPHONE, "an iPhone or iPad", "iPhone\\/iPad"], [MAC_SAFARI, "a Mac", "Mac"]]) {
@@ -556,7 +561,9 @@ try {
     check(new RegExp(`^Detected: Safari on ${device} \\(as the browser reports itself\\)\\. On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead\\.$`).test(det), `${device}: the top line names Safari on ${device} and what the page does: ` + det);
     check(await shown(rp, "apple") && !(await shown(rp, "stage")) && !(await shown(rp, "buttons")) && !(await shown(rp, "buttons-note")) && !(await shown(rp, "attempts")), `${device}: Apple's test is shown in the photo's place (the photo's box, its buttons, the sentence about them and its attempts hidden)`);
     check((await rp.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", `${device}: Apple's test comes first, right under the top line`);
-    check((await rp.evaluate(() => (window.__players || []).every((p) => [0, 1, 3, 4].every((type) => { const r = { headers: {} }; for (const f of p.reqFilters || []) f(type, r); return !Object.keys(r.headers).length; })))), `${device}: no player adds a token to any request but a licence request`);
+    check((await rp.evaluate(() => (window.__players || []).every((p) => [0, 1, 3, 4].every((type) => ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4"].every((uri) => {
+      const r = { headers: {}, uris: [uri], method: "GET" }; for (const f of p.reqFilters || []) f(type, r); return !Object.keys(r.headers).length; }))))), `${device}: no player adds a token to any request but a licence request, whatever its address`);
+    check(await shown(rp, "apple-do"), `${device}: one line above the videos says what to do`);
     check((await rp.textContent("#r-fps")) === "available in this browser", `${device}: FairPlay found: ` + (await rp.textContent("#r-fps")));
     const ps = await players(rp);
     check(JSON.stringify(ps.map((p) => p.m)) === JSON.stringify([FILM, "card-fairplay/master.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8"]), `${device}: the film, the card and our account's card are played, in that order, and nothing else: ` + ps.map((p) => p.m).join(", "));
@@ -580,18 +587,26 @@ try {
   // (3) an iPhone browser without FairPlay (an app's built-in browser): one plain message instead of empty tiles; nothing played
   ({ c: ac, pg: ap } = await oneLink(IPHONE.replace(" Version/17.5 Mobile/15E148 Safari/604.1", " Mobile/15E148 [FBAN/FBIOS;FBAV/470.0]"), "", SAFARI_PARTS(false)));
   await ap.waitForFunction(() => /not available/.test(document.getElementById("r-fps").textContent), null, { timeout: 20000 }).catch(() => {});
-  check(/^not available here/.test(await ap.textContent("#r-fps")) && !(await shown(ap, "videos")) && !(await shown(ap, "apple-steps")) && (await shown(ap, "apple-nofps")) && /Open this link in Safari\.$/.test(await ap.textContent("#apple-nofps"))
+  check(/^not available here/.test(await ap.textContent("#r-fps")) && !(await shown(ap, "videos")) && !(await shown(ap, "apple-steps")) && (await shown(ap, "apple-nofps")) && (await ap.textContent("#apple-nofps")) === "This browser offers no Apple FairPlay, so the photo is held back and Apple's test cannot run in it. Open this link in Safari." && !(await shown(ap, "apple-credit")) && !(await shown(ap, "apple-do"))
     && (await ap.evaluate(() => (window.__players || []).length)) === 0 && !(await ap.evaluate(() => document.getElementById("vc").src)),
     "an iPhone browser with no FairPlay: no empty tiles, one message to open it in Safari, nothing played (not even the control): " + (await ap.textContent("#apple-nofps")));
-  check(/^Detected: an app's built-in browser on an iPhone or iPad \(as the browser reports itself\)\. It offers no Apple FairPlay, so Apple's test cannot run in it: open this link in Safari\.$/.test(await ap.textContent("#detected")), "and the top line names it and says to open the link in Safari: " + (await ap.textContent("#detected")));
+  check((await ap.textContent("#detected")) === "Detected: an app's built-in browser on an iPhone or iPad (as the browser reports itself). It offers no Apple FairPlay, so the photo is held back and Apple's test cannot run in it: open this link in Safari."
+    && /: Apple FairPlay is not available in this browser, so the photo is held back and Apple's test cannot run here$/.test(await ap.textContent("#r-rule")) && (await ap.textContent("#r-expect")) === "nothing is shown here, so there is nothing to capture",
+    "and the top line, the rule line and the expected capture agree: " + (await ap.textContent("#detected")));
+  await ac.close();
+  // (3b) Safari itself without FairPlay (a simulator, say): the same account, and Safari is not told to open Safari
+  ({ c: ac, pg: ap } = await oneLink(IPHONE, "", SAFARI_PARTS(false)));
+  await ap.waitForFunction(() => /not available/.test(document.getElementById("r-fps").textContent), null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#detected")) === "Detected: Safari on an iPhone or iPad (as the browser reports itself). It offers no Apple FairPlay, so the photo is held back and Apple's test cannot run in it."
+    && (await ap.textContent("#apple-nofps")) === "This Safari offers no Apple FairPlay, so the photo is held back and Apple's test cannot run in it." && (await ap.textContent("#r-expect")) === "nothing is shown here, so there is nothing to capture",
+    "Safari without FairPlay: not told to open Safari, and the readout agrees: " + (await ap.textContent("#detected")));
   await ac.close();
   // (4) the Apple test mode on an iPhone: only its own test (the card in the photo's box), not Apple's test beside it
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "?levels=fairplay", SAFARI_PARTS(true)));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check(!(await shown(ap, "apple")) && (await ap.evaluate(() => window.__photoShown)) === "fairplay-apple" && (await ap.evaluate(() => window.__manifests)).join() === "card-fairplay/master.m3u8", "?levels=fairplay on an iPhone: the card in the photo's box, and Apple's test not run beside it: " + (await ap.evaluate(() => window.__manifests)).join());
-  check(/^Detected: Safari on an iPhone or iPad \(as the browser reports itself\)\. This link runs a test, on the test card: the red box above says which\.$/.test(await ap.textContent("#detected")) && (await ap.evaluate(() => document.getElementById("detected").previousElementSibling.textContent.startsWith("APPLE TEST MODE"))), "and the top line says it is a test, with the red box above it: " + (await ap.textContent("#detected")));
+  check(/^Detected: Safari on an iPhone or iPad \(as the browser reports itself\)\. This link runs a test, on the test card: the box above says which\.$/.test(await ap.textContent("#detected")) && (await ap.evaluate(() => document.getElementById("detected").previousElementSibling.textContent.startsWith("APPLE TEST MODE"))), "and the top line says it is a test, with the red box above it: " + (await ap.textContent("#detected")));
   await ac.close();
-  // (5) the other devices: the photo their own way, Apple's test never run, and the top line naming each
   const WIN_CHROME = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
   const ANDROID_CHROME = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36";
   const MAC_CHROME = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36";
@@ -600,6 +615,18 @@ try {
   const SAMSUNG_DESKTOP = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Safari/537.36";
   const ANDROID_EDGE = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Mobile Safari/537.36 EdgA/141.0.0.0";
   const ANDROID_APP = "Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.0.0 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/470.0.0.0;]";
+  const ANDROID_WEBVIEW = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.0.0 Mobile Safari/537.36 LinkedInApp/9.30";
+  const SAMSUNG_TV = "Mozilla/5.0 (SMART-TV; Linux; Tizen 7.0) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/6.0 Chrome/94.0.4606.31 TV Safari/537.36";
+  // (4b) a test link on Windows: the top line points to the box above it (brown for the control), and says nothing of
+  // Apple's test, which a test link never runs
+  for (const [q, banner] of [["?levels=clearkey", "CONTROL MODE"], ["?levels=software", "TEST MODE"], ["?levels=fairplay", "APPLE TEST MODE"]]) {
+    ({ c: ac, pg: ap } = await oneLink(WIN_CHROME, q));
+    await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+    check((await ap.textContent("#detected")) === "Detected: Chrome on Windows (as the browser reports itself). This link runs a test, on the test card: the box above says which." && (await ap.evaluate(() => document.getElementById("detected").previousElementSibling.textContent)).startsWith(banner),
+      `${q} on Windows: the top line points to the box above (${banner}) and names no Apple test: ` + (await ap.textContent("#detected")));
+    await ac.close();
+  }
+  // (5) the other devices: the photo their own way, Apple's test never run, and the top line naming each
   for (const [ua, name, says] of [[WIN_CHROME, "Chrome on Windows", /through the browser's protected path when it offers one this page accepts \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
     [ANDROID_CHROME, "Chrome on Android", /through the browser's protected path when it offers one this page accepts \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
     [MAC_CHROME, "Chrome on a Mac", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. In Safari on this Mac, this same link runs Apple's own test\.$/],
@@ -609,14 +636,19 @@ try {
     const det = await ap.textContent("#detected");
     check(det.startsWith(`Detected: ${name} (as the browser reports itself). The photo is shown here `) && says.test(det), `${name}: the top line: ` + det);
     check(!(await shown(ap, "apple")) && (await shown(ap, "stage")) && !(await ap.evaluate(() => window.__manifests)).some((m) => /axprod|card-fairplay/.test(m)), `${name}: Apple's test is not run; the photo's own box is there`);
+    const rule = await ap.textContent("#r-rule");
+    check(/Chrome on (Windows|Android)/.test(name) ? rule.endsWith(": hardware protection, or software protection (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11)")
+      : rule.endsWith(": hardware protection only (software protection is not accepted here)"), `${name}: the rule line claims no measurement it lacks: ` + rule);
     await ac.close();
   }
   // (6) where nothing this page accepts is offered, the box says where to open the link instead, by what was detected
   for (const [ua, where] of [[MAC_CHROME, /On this Mac, open this link in Safari: Apple's test runs there\. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge\.$/],
     [LINUX_FIREFOX, /This browser reports itself as Linux\. On Linux, Chrome showed protected video in a screenshot on a test machine, and no Linux browser is known to keep it out\. If this is a phone or tablet asking for desktop sites, turn that off or open this link in Chrome\. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge\.$/],
     ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0", /On this PC, open this link in Chrome or Edge \(screenshots measured black there\)\.$/],
-    [SAMSUNG, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone, open this link in Chrome \(screenshots measured black there\)\.$/],
-    [SAMSUNG_DESKTOP, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone, open this link in Chrome \(screenshots measured black there\)\.$/],
+    [SAMSUNG, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
+    [SAMSUNG_DESKTOP, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
+    [ANDROID_APP, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
+    [ANDROID_WEBVIEW, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [ANDROID_CHROME, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. If its protected-content setting is off, turning it on lets the photo show here\.$/],
     [WIN_CHROME, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. If its protected-content setting is off, turning it on lets the photo show here\.$/]]) {
     ({ c: ac, pg: ap } = await oneLink(ua, "", "window.__refuseAll = true;"));
@@ -624,13 +656,32 @@ try {
     check(where.test(await ap.textContent("#msg")), "nothing accepted, the box says where instead: " + (await ap.textContent("#msg")));
     await ac.close();
   }
+  // the test card's link (where the old Apple address lands), Chrome on a Mac, nothing offered: every line names the test card
+  ({ c: ac, pg: ap } = await oneLink(MAC_CHROME, "?clip=card", "window.__refuseAll = true;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "This browser hasn't been confirmed to keep the test card out of screenshots, so it isn't shown here. On this Mac, open this link in Safari: Apple's test runs there. The test card shows on an Android phone, or on a Windows PC in Chrome or Edge."
+    && (await ap.textContent("#r-expect")) === "the test card is not shown on this browser, so there is nothing to capture", "the test card's link: every line names the test card: " + (await ap.textContent("#msg")));
+  await ac.close();
+  // the player library unsupported: said so, with what helps (Chrome on Windows: an up-to-date one; Linux: where else)
+  for (const [ua, want] of [[WIN_CHROME, "This browser cannot play protected video, so the photo isn't shown here. An up-to-date Chrome or Edge can play it."],
+    [LINUX_FIREFOX, "This browser cannot play protected video, so the photo isn't shown here. This browser reports itself as Linux. On Linux, Chrome showed protected video in a screenshot on a test machine, and no Linux browser is known to keep it out. If this is a phone or tablet asking for desktop sites, turn that off or open this link in Chrome. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge."]]) {
+    ({ c: ac, pg: ap } = await oneLink(ua, "", "window.__unsupported = true;"));
+    await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
+    check((await ap.textContent("#msg")) === want, "the player library unsupported: " + (await ap.textContent("#msg")));
+    await ac.close();
+  }
+  // Samsung's TV browser is not taken for a phone
+  ({ c: ac, pg: ap } = await oneLink(SAMSUNG_TV));
+  await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#detected")).startsWith("Detected: Samsung Internet on Linux (as the browser reports itself). "), "Samsung's TV browser: " + (await ap.textContent("#detected")));
+  await ac.close();
   // a phone asking for desktop sites in Samsung Internet reports Linux: the top line says what it is, and that it reports Linux
   ({ c: ac, pg: ap } = await oneLink(SAMSUNG_DESKTOP));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#detected")).startsWith("Detected: Samsung Internet on an Android phone or tablet asking for desktop sites (it reports itself as Linux). "), "Samsung Internet asking for desktop sites: " + (await ap.textContent("#detected")));
   await ac.close();
   // (6b) software protection granted: the readout claims a measurement only where one was made, and says so where none was
-  for (const [ua, name, suffix] of [[ANDROID_CHROME, "Chrome on Android", ""], [ANDROID_EDGE, "Edge on Android", "; not yet in this browser"], [ANDROID_APP, "an app's built-in browser on Android", "; not yet in this browser"]]) {
+  for (const [ua, name, suffix] of [[ANDROID_CHROME, "Chrome on Android", ""], [ANDROID_EDGE, "Edge on Android", "; not yet in this browser"], [ANDROID_APP, "an app's built-in browser on Android", "; not yet in this browser"], [ANDROID_WEBVIEW, "an app's built-in browser on Android (a web view)", "; not yet in this browser"]]) {
     ({ c: ac, pg: ap } = await oneLink(ua, "", "window.__refuseHardware = true;"));
     await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
     const rule = await ap.textContent("#r-rule"), expect = await ap.textContent("#r-expect");
@@ -647,6 +698,17 @@ try {
   await ap.waitForFunction(() => document.getElementById("o-play") && document.getElementById("o-play").textContent !== "—", null, { timeout: 30000 }).catch(() => {});
   check(ap.url() === R1 + "?clip=card" && JSON.stringify((await players(ap)).map((p) => p.m)) === JSON.stringify([FILM, "card-fairplay/master.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8"]) && (await ap.textContent("#r-content")) === "the test card (not the photo)",
     "the old Apple address on an iPhone: lands on the one link's test card, where Apple's test runs: " + ap.url());
+  check((await ap.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", "and there too Apple's test comes first, right under the top line");
+  await ac.close();
+  // (6d) the catch-all itself: a page asking another host (here the drive's own server by another name), by an address
+  // one of the drive's own page routes would match, and by a WebSocket, is answered here and written down
+  ({ c: ac, pg: ap } = await oneLink(WIN_CHROME));
+  const outsideBefore = outside.length;
+  await ap.evaluate(async (port) => { for (const u of [`http://localhost:${port}/web/research/drm/?probe`, `http://localhost:${port}/site/view.html?probe`, `http://localhost:${port}/probe-plain`]) await fetch(u).catch(() => {});
+    await new Promise((done) => { const w = new WebSocket(`ws://localhost:${port}/probe`); w.onclose = w.onerror = () => done(); setTimeout(done, 3000); }); }, PORT);
+  const probes = outside.splice(outsideBefore);
+  check([`localhost:${PORT}/web/research/drm/`, `localhost:${PORT}/site/view.html`, `localhost:${PORT}/probe-plain`].every((u) => probes.includes(u)) && probes.some((u) => u.startsWith("websocket ws://localhost:")),
+    "the catch-all answers and records another host, also where a page route's pattern matches it, and a WebSocket: " + probes.join(", "));
   await ac.close();
   // (7) the site's own pages keep the picture held back on an iPhone, with no Apple's test of their own
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID));
@@ -661,6 +723,11 @@ try {
   ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "all.html"));
   await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
   check((await ap.textContent("#detected")).startsWith("Detected: Chrome on Windows (as the browser reports itself). The combined view is shown here through the browser's protected path"), "the combined view's top line names it: " + (await ap.textContent("#detected")));
+  await ac.close();
+  ({ c: ac, pg: ap } = await applePage(WIN_CHROME, "all.html", "window.__refuseAll = true;"));
+  await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "This browser offered none of the protection this page accepts, so the combined view isn't shown here. If its protected-content setting is off, turning it on lets the combined view show here.",
+    "the combined view, nothing offered: the box names it too: " + (await ap.textContent("#msg")));
   await ac.close();
 
   // 5. the view without a session goes to the password; an expired session too

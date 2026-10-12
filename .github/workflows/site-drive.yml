@@ -9,7 +9,7 @@ name: site drive
 on:
   push:   # on any branch (it is read-only and holds no secret), whenever the site's code changes; never for a picture's own files
     branches-ignore: [walk-evidence]
-    paths: ["site/*.html", "site/*.js", "site/*.mjs", "tools/drive-site.mjs", "tools/build-site-view.mjs", "web/research/drm/index.html", ".github/workflows/site-drive.yml"]
+    paths: ["site/*.html", "site/*.js", "site/*.mjs", "tools/drive-site.mjs", "tools/build-site-view.mjs", "web/research/drm/index.html", "web/research/apple/index.html", ".github/workflows/site-drive.yml"]
   workflow_dispatch:
 
 permissions:

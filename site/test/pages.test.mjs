@@ -111,6 +111,18 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
   assert.ok(runs > 1500, `${runs} combinations run`);
 });
 
+// The route-1 page's own words, as every visitor reads them before its script runs, held to what was measured (the
+// seventeenth and eighteenth reviews: the lede said screenshots were known to be black where software protection was
+// never measured): no such claim, and the places where it was measured named
+test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+    const html = await read(f);
+    const words = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    for (const re of [/known to come out black/i, /measured black there/i, /where screenshots were measured black/i, /screenshots are known/i]) assert.ok(!re.test(words), `${f}: no claim beyond the measurements (${re})`);
+    assert.match(words, /software protection in Chrome and Edge on Windows and Android \(screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)/, `${f}: the lede names where software protection was measured`);
+  }
+});
+
 // The Apple check's old address (sent before its test moved onto the route-1 page) forwards there, to the test card:
 // never a picture; and it holds no player, token or key system of its own that could drift from the page's
 test("the Apple check's old address forwards to the one test page, on the test card, and holds nothing of its own", async () => {
