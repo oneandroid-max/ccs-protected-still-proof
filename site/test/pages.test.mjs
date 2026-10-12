@@ -8,7 +8,8 @@
 //     with the picture's own form and token;
 //   - nowhere else is the Apple form tried outside its test, and the switch changes nothing there;
 //   - Apple's test (the one link for every device) runs on the route-1 page exactly where the picture is held back on
-//     Apple's engine, outside a test mode; never on the site's pages, never elsewhere.
+//     Apple's engine, outside a test mode, and on the one page (site/index.html, the combined view); never on a single
+//     picture's page (site/view.html), never elsewhere.
 // Also: the workflow guard refuses a link whose first parameter is not the safe one, or that names a
 // second levels= or clip= (the page reads the first; the bypass a review found on 2026-10-11).
 import { test } from "node:test";
@@ -77,10 +78,10 @@ const OTHER = ["", "?clip=card", "?v=3", "?levels=x&levels=fairplay", "?clip=pho
 const PICTURE = { manifest: "https://example.test/site/photos/ID/fp-0a1b2c3d/master.m3u8", token: "THE.PICTURES.OWN.TOKEN" };
 const CTX = { content: "your picture: P", prKidGuid: "0", fairplay: PICTURE };
 
-test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured and, on the route-1 page only, runs Apple's test there; nothing else changes", async () => {
+test("the pages' own lines, for 20 kinds of device and every kind of link: tests play only the card; Apple holds the picture back until measured and, on the route-1 page and the one page, runs Apple's test there; nothing else changes", async () => {
   const route1 = await read("web/research/drm/index.html");
   const publicToken = route1.match(/const AXINOM_PUBLIC_TOKEN = "([^"]+)"/)[1];
-  const pages = { "route-1 page": route1, "site/view.html": await read("site/view.html"), "site/all.html": await read("site/all.html") };
+  const pages = { "route-1 page": route1, "site/view.html": await read("site/view.html"), "site/index.html": await read("site/index.html") };
   // the Apple switch as built: iPhones and iPads switched on, on the owner's word after the measurement on his iPhone
   // (2026-10-12); a Mac still waits. Every page holds the same switch.
   const BUILT = JSON.parse(route1.match(/const FAIRPLAY_MEASURED = (\{[^}]*\});/)[1]);
@@ -94,9 +95,9 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
       const fn = decide(html, measured), on = measured || BUILT;
       for (const [dev, [ua, touch, apple, platform]] of Object.entries(DEVICES)) {
         const what = (q) => `${pageName}, ${dev}, "${q}", Apple switch ${JSON.stringify(measured)}`;
-        // Apple's test: on the route-1 page only, on Apple's engine where the switch holds no date, outside a test mode
+        // Apple's test: on the route-1 page and the one page, on Apple's engine where the switch holds no date, outside a test mode
         const at = (q) => { runs++; const r = fn({ userAgent: ua, maxTouchPoints: touch }, { search: q }, () => {}, CTX);
-          assert.equal(r.APPLE_TEST, pageName === "route-1 page" && apple && !on[platform] && !r.TEST, what(q) + ": Apple's test where the picture is held back on Apple's engine, on the route-1 page only");
+          assert.equal(r.APPLE_TEST, (pageName === "route-1 page" || pageName === "site/index.html") && apple && !on[platform] && !r.TEST, what(q) + ": Apple's test where the picture is held back on Apple's engine, on the route-1 page and the one page");
           return r; };
         const plain = (q) => { // a link that is not a test
           const r = at(q);
@@ -135,15 +136,15 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
 // twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
 // unchanged), with only the page version's date and time left out.
-const PAGE_FILE = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "03cd8b68596312ac", "site/view.html": "4db596f518ec2ab2", "site/all.html": "c8580fab97d18dd0" };
+const PAGE_FILE = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "554de3ef36547b83", "site/view.html": "b7bed8aabc1f4127", "site/index.html": "950a20f32e14eb8c" };
 const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "933377f1ce9c2e27", "site/view.html": "8da57062940cf419", "site/all.html": "e1b40750c895cf19" };
+const PAGE_SCRIPT = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "d504df4f4729fd63", "site/view.html": "f50c3df7e2928c83", "site/index.html": "79b8cf64e736b689" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_WORDS = { "web/research/drm/index.html": "dd0e54d62d77bcaa", "site/view.html": "b87e0a3b68f08a6b", "site/all.html": "9f4eb335e374273e" };
+const PAGE_WORDS = { "web/research/drm/index.html": "dd0e54d62d77bcaa", "site/view.html": "b87e0a3b68f08a6b", "site/index.html": "2275c670ed252573" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
-  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const html = await read(f);
     const words = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     for (const re of [/known to come out black/i, /measured black there/i, /where screenshots were measured black/i, /screenshots are known/i]) assert.ok(!re.test(words), `${f}: no claim beyond the measurements (${re})`);
@@ -188,7 +189,7 @@ test("the lede says where software protection is accepted, as the page's own dec
   };
   // the names under which the lede says software protection is accepted on Windows and Android
   const SOFTWARE_NAMES = ["Chrome", "Edge", "an app's built-in browser", "DuckDuckGo", "Huawei Browser", "Mi Browser", "Yandex Browser", "Vivaldi", "UC Browser", "Naver Whale"];
-  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const html = await read(f), fn = decide(html), name = nameOf(html);
     const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
     assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome \(apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others\)\./, f);

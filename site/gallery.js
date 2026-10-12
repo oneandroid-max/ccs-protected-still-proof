@@ -9,7 +9,7 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const kb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB";
 const ago = (t) => { const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + " s" : Math.floor(s / 60) + " min " + (s % 60) + " s"; };
 const ACTIONS = "https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml";
-let st = session.get(), timer = null, busy = false, uploading = false, staleSince = 0, readyKey = "", lastMeta = null, metaKnown = false, askError = "", askedAgainAt = 0, myAsk = "";
+let st = session.get(), timer = null, busy = false, staleSince = 0, readyKey = "", lastMeta = null, metaKnown = false, askError = "", askedAgainAt = 0, myAsk = "";
 // The job's answer to "Try again" / "Ask again" has arrived when the view's record carries this request's own id
 // (remade, kept as it is with a note saying why, or found current): no other change to the record (another tab's
 // answer, the weekly renewal of its Apple form) is taken for it, and no clock is compared.
@@ -76,14 +76,6 @@ async function load() {
       try { await askMosaic(st); askError = ""; } catch (err) { askError = err.message; } // a refusal stays shown until a later ask succeeds
     }
     renderAll(readyIds, meta, current, staleFor > MOSAIC_GIVE_UP, askError);
-    // The player above plays the combined view as it was when this page opened (view-prelude.js names it in
-    // window.__ccsPlaying: its build time, or null when there was none). Once a newer one is current and nothing of this
-    // tab's is on its way, the page opens afresh to play it: once per view, so a view the site cannot serve yet never
-    // reloads the page in a loop.
-    if (current && meta && meta.builtAt && window.__ccsPlaying !== undefined && meta.builtAt !== window.__ccsPlaying && pend.length === 0 && !uploading
-      && sessionStorage.getItem("ccs-home-reload") !== meta.builtAt) {
-      sessionStorage.setItem("ccs-home-reload", meta.builtAt); location.reload(); return;
-    }
     const waiting = pend.length > 0 || g.photos.some((p) => p.status === "ready" && !pub[p.id] && !deleting.has(p.id))
       || (readyIds.length > 0 && !current && staleFor <= MOSAIC_GIVE_UP)
       || awaiting(meta, current);
@@ -99,19 +91,19 @@ function renderAll(readyIds, meta, current, gaveUp, askError) {
   box.hidden = readyIds.length === 0;
   if (box.hidden) return;
   const n = readyIds.length, k = meta && meta.tiles ? meta.tiles.length : 0;
+  // a newer view is current, but the player above still holds the one from when this page opened (or none): one tap replays
+  const newer = current && meta.builtAt && window.__ccsPlaying !== undefined && meta.builtAt !== window.__ccsPlaying;
   let html = "<strong>All your pictures at once</strong>";
-  if (current) html += '<div class="muted">All ' + k + " in one protected view above, at the same protection as each picture on its own. Tap a picture there to open it alone.</div>"
+  if (current && !newer) html += '<div class="muted">All ' + k + " in one protected view above, at the same protection as each picture on its own. Tap a picture there to open it alone.</div>"
     + (meta.skipped && meta.skipped.length ? '<div class="warn">Left out (could not be read back): ' + esc(meta.skipped.map((x) => x.name).join(", ")) + ' <button id="ask-all">Try again</button></div>'
       + (meta.kept ? '<div class="muted" id="kept">Last tried at ' + when(meta.kept.at) + ": kept as it is — " + esc(meta.kept.why) + ' (<a href="' + ACTIONS + '">see the job</a>)</div>' : "") : "");
-  else if (meta) html += '<div class="muted">The view above was made for an earlier set (' + k + " picture" + (k === 1 ? "" : "s") + "); it is being remade with your " + n + " (about two minutes), and this page then plays it…</div>";
-  else html += '<div class="muted">Combining your ' + n + " picture" + (n === 1 ? "" : "s") + " into one protected view (about two minutes); this page then plays it above…</div>";
+  else if (newer) html += '<div class="muted">A newer combined view of all ' + k + " is ready; the one above is from when this page opened. Play the new view below.</div>";
+  else if (meta) html += '<div class="muted">The view above was made for an earlier set (' + k + " picture" + (k === 1 ? "" : "s") + "); it is being remade with your " + n + " (about two minutes)…</div>";
+  else html += '<div class="muted">Combining your ' + n + " picture" + (n === 1 ? "" : "s") + " into one protected view (about two minutes)…</div>";
   if (gaveUp && !(current && meta.skipped && meta.skipped.length)) html += '<div class="warn">The combined view has not caught up after twenty minutes — <a href="' + ACTIONS + '">see the job</a> <button id="ask-all">Ask again</button></div>';
   if (awaiting(meta, current)) html += '<div class="muted">Asked again at ' + new Date(askedAgainAt).toTimeString().slice(0, 5) + "; the combined view is being remade (about two minutes)…</div>";
   if (askError) html += '<div class="bad">GitHub did not take the request: ' + esc(askError) + "</div>";
-  // a newer view is current, the page already opened afresh once for it, and the player above still has the older one
-  // (or none): the site had not served it yet. One tap opens the page afresh again.
-  if (current && meta.builtAt && window.__ccsPlaying !== undefined && meta.builtAt !== window.__ccsPlaying && sessionStorage.getItem("ccs-home-reload") === meta.builtAt)
-    html += '<div class="row" style="margin-top:8px"><button class="primary" id="replay">Play the new view</button></div>';
+  if (newer) html += '<div class="row" style="margin-top:8px"><button class="primary" id="replay">Play the new view</button></div>';
   box.innerHTML = html;
   const replay = $("replay");
   if (replay) replay.addEventListener("click", () => location.reload());
@@ -159,8 +151,7 @@ function render(photos, pend, pub) {
 
 $("files").addEventListener("change", async () => {
   const files = [...$("files").files]; $("files").value = "";
-  uploading = true;
-  try { await addAll(files); } finally { uploading = false; }
+  await addAll(files);
   load();
 });
 async function addAll(files) {
