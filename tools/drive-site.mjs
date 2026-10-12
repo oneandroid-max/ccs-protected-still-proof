@@ -986,8 +986,10 @@ try {
   // as GitHub's virtual Mac did): told so, and sent to Safari, not told FairPlay was accepted (the twenty-seventh review)
   ({ c: ac, pg: ap } = await oneLink(IPHONE_APP, "?clip=card", SAFARI_PARTS(false) + "; window.__noFrames = true;"));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
-  check((await ap.textContent("#msg")) === NO_FPS + " Open this link in Safari." && (await ap.textContent("#r-ks")) === "held back — this browser offers no Apple FairPlay",
-    "as built, on an iPhone, an app's built-in browser with no FairPlay whose load succeeds and never plays: told so, and sent to Safari: " + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")));
+  // (and the Granted row's "waiting" replaced: the thirtieth review)
+  check((await ap.textContent("#msg")) === NO_FPS + " Open this link in Safari." && (await ap.textContent("#r-ks")) === "held back — this browser offers no Apple FairPlay"
+    && (await ap.textContent("#r-granted")) === "nothing: Apple FairPlay is the only protection used here, and this browser has none",
+    "as built, on an iPhone, an app's built-in browser with no FairPlay whose load succeeds and never plays: told so, and sent to Safari: " + (await ap.textContent("#msg")) + " | " + (await ap.textContent("#r-ks")) + " | " + (await ap.textContent("#r-granted")));
   // ... and its Attempts say only what happened, the playlist loaded, never that the browser accepted FairPlay (the
   // twenty-eighth review)
   check(/fairplay-apple: the FairPlay playlist loaded; waiting for the licence and the first frame/.test(await ap.textContent("#log")) && !/accepted FairPlay/.test(await ap.textContent("#log")),
