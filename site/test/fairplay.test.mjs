@@ -1195,11 +1195,13 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   // (1) the request id: refused unless 16 hex; written with every kind of answer, newest first; the job's own runs add none
   for (const bad of ["XYZ", "0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", 1234567890123456]) await assert.rejects(mosaic(accept, bad), /bad request id/, String(bad));
   // the job's packager check, asked by the view just before it first packages: the path it RETURNS is the one run, for a
-  // rebuild and for a renewal of its form (the fourteenth review: discarding it passed every test). The path given here
-  // cannot run; the check answers with the real packager's.
+  // rebuild (its clip and its Apple form) and for a renewal of its form (the fourteenth review: discarding it passed every
+  // test; the fifteenth: a form run by the path given failed, was only logged, and the view still answered "ready"). The
+  // path given here cannot run; the check answers with the real packager's.
   const GIVEN = { ...tools, packager: "/nonexistent/the-path-given" }, asked = [];
   const CHECKED = async (p) => { asked.push(p); return tools.packager; };
-  assert.equal((await mosaic(accept, ask(1), GIVEN, CHECKED)).status, "ready");
+  const given1 = await mosaic(accept, ask(1), GIVEN, CHECKED);
+  assert.deepEqual([given1.status, given1.fairplay], ["ready", true], "the rebuild's clip and its Apple form, both by the path returned");
   assert.deepEqual((await mosaicMeta()).answered, [ask(1)], "a rebuild carries the id");
   assert.equal((await mosaic(accept, ask(2))).status, "current");
   assert.deepEqual((await mosaicMeta()).answered, [ask(2), ask(1)], "unchanged: the answer is still written");
@@ -1483,8 +1485,8 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   }
 });
 
-// THE RUNS OUTSIDE OUR PROGRAMS (the thirteenth review): a workflow runs the packager only through tools/run-packager.mjs
-// (tools/check-workflow-links.mjs refuses any other way), and the tests run only the file they checked as they start.
+// THE RUNS OUTSIDE OUR PROGRAMS (the thirteenth review): a workflow runs the packager through tools/run-packager.mjs
+// (tools/check-workflow-links.mjs refuses the ordinary other ways), and the tests run only the file they checked as they start.
 // Both check the file by its SHA-256 at that moment and never run another.
 test("the workflows' runner and the tests check the packager before they run it, and run only the file checked (needs shaka-packager)", async (t) => {
   if (!(await havePackager(t))) return;
@@ -1512,13 +1514,21 @@ test("the workflows' runner and the tests check the packager before they run it,
     assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
   }
   await assert.rejects(fs.access(marker), "the other file was never run");
-  // ... and every test file that reads PACKAGER_BIN is one of those three, or the service's helper (its value goes to the
-  // service, which checks it itself: service/test/api.test.mjs). A new test file that read it, and ran it unchecked,
-  // fails here (the fourteenth review: the CI steps' own check lines, which held any such file, are gone)
-  const readers = [];
+  // ... and every test file that names PACKAGER_BIN at all, in any spelling, is listed with what it does with it: a new
+  // file that read it, and ran it unchecked, fails here until it is listed (the fourteenth review: the CI steps' own check
+  // lines, which held any such file, are gone; the fifteenth: only one spelling of reading it was looked for)
+  const NAMES = {
+    "site/test/site.test.mjs": "checks it as it loads (above)",
+    "site/test/fairplay.test.mjs": "checks it as it loads (above); sets it for the programs it runs, which check it",
+    "service/test/pipeline.test.mjs": "checks it as it loads (above)",
+    "service/test/helpers.mjs": "hands it to the service, which checks it itself (service/test/api.test.mjs)",
+    "site/test/jobs.test.mjs": "sets it for the real worker, which checks it",
+    "site/test/pages.test.mjs": "workflow text for the guard; runs nothing",
+  };
+  const named = [];
   for (const dir of ["site/test", "service/test"])
-    for (const f of await fs.readdir(join(REPO, dir))) if (/\.m?js$/.test(f) && (await fs.readFile(join(REPO, dir, f), "utf8")).includes("process.env.PACKAGER_BIN")) readers.push(`${dir}/${f}`);
-  assert.deepEqual(readers.sort(), ["service/test/helpers.mjs", "service/test/pipeline.test.mjs", "site/test/fairplay.test.mjs", "site/test/site.test.mjs"], "every test file that reads PACKAGER_BIN checks it, or hands it to the service");
+    for (const f of await fs.readdir(join(REPO, dir))) if (/\.m?js$/.test(f) && (await fs.readFile(join(REPO, dir, f), "utf8")).includes("PACKAGER_BIN")) named.push(`${dir}/${f}`);
+  assert.deepEqual(named.sort(), Object.keys(NAMES).sort(), "every test file that names PACKAGER_BIN is listed, with what it does with it");
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

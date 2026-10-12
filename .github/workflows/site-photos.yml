@@ -87,7 +87,8 @@ jobs:
           sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version
       - name: Make the combined view on the current tip of main and commit; refresh and redo if the push races
         # also after a failed set-up (a view of other pictures, one deleted, must go all the same, and needs no tool), but
-        # never when the key could not be masked
+        # never when the key could not be masked: then a view that still draws a deleted picture stays until the next
+        # combined-view job (a rare failure; the key's safety first)
         if: ${{ !cancelled() && steps.mask.outcome == 'success' }}
         env:
           PACKAGER_BIN: /usr/local/bin/packager

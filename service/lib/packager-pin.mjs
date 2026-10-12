@@ -1,11 +1,12 @@
 // The one shaka-packager build the jobs may run: v3.9.3 for Linux x64, by its SHA-256 (the release's own file, the same
-// pin as every download line that tools/check-workflow-links.mjs checks). Every run of it asks checkPackager first and
-// then runs EXACTLY the path it returns, so whatever put the file there (a download, an image, a cache, a copy) and
-// whatever the PATH or the working folder, the file checked is the file run, and a file that is not this build is refused
-// before it is ever run: site/worker.mjs and site/backfill.mjs (as their jobs start; the combined view's job just before
-// it first packages, after a view of other pictures is removed), tools/fairplay-card.mjs, the service (at start, and
-// again before every photo), a workflow step (through tools/run-packager.mjs: tools/check-workflow-links.mjs refuses the
-// ordinary other ways; a deliberate one is for review), and the tests (before any test runs it).
+// pin as every download line that tools/check-workflow-links.mjs checks). Every run of it by our programs, the tests and
+// the workflows' runner asks checkPackager first and then runs EXACTLY the path it returns, so whatever put the file
+// there (a download, an image, a cache, a copy) and whatever the PATH or the working folder, the file checked is the file
+// run, and a file that is not this build is refused before it is ever run: site/worker.mjs and site/backfill.mjs (as
+// their jobs start; the combined view's job just before it first packages, after a view of other pictures is removed),
+// tools/fairplay-card.mjs, the service (at start, and again before every photo), a workflow step (through
+// tools/run-packager.mjs: tools/check-workflow-links.mjs refuses the ordinary other ways; a deliberate one is for
+// review), and the tests (before any test runs it).
 import { promises as fs, constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { delimiter, resolve } from "node:path";
