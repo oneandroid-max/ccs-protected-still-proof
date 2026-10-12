@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "17:45 UTC"
+  EXPECT_VERSION: "18:20 UTC"
 
 jobs:
   look:
