@@ -736,18 +736,18 @@ try {
     "and the readout names the photo as what is held back, not the card that Apple's test is playing: " + (await ap.textContent("#r-rule")) + " | " + (await ap.textContent("#r-expect")));
   await ac.close();
   // (6d) the catch-all itself: a page asking another host (the drive's own server by another name, and its address on
-  // another port), by an address one of the drive's own page routes would match, and by a WebSocket, is answered here
+  // another port), also by an address one of the drive's own page routes would match, and by a WebSocket, is answered here
   // and written down; only these entries are taken off the record, so anything else asked meanwhile still fails the
   // drive's last check. And a page's WebRTC request (STUN, over UDP) sends nothing.
   ({ c: ac, pg: ap } = await oneLink(WIN_CHROME));
   const stun = dgram.createSocket("udp4"); let stunPackets = 0; stun.on("message", () => stunPackets++);
   await new Promise((done) => stun.bind(0, "127.0.0.1", done));
-  await ap.evaluate(async ([port, udp]) => { for (const u of [`http://localhost:${port}/web/research/drm/?probe`, `http://localhost:${port}/site/view.html?probe`, `http://localhost:${port}/probe-plain`, `http://127.0.0.1:${port + 1}/probe-port`]) await fetch(u).catch(() => {});
+  await ap.evaluate(async ([port, udp]) => { for (const u of [`http://localhost:${port}/web/research/drm/?probe`, `http://localhost:${port}/site/view.html?probe`, `http://localhost:${port}/probe-plain`, `http://127.0.0.1:${port + 1}/probe-port`, `http://127.0.0.1:${port + 1}/web/research/drm/?probe`]) await fetch(u).catch(() => {});
     await new Promise((done) => { const w = new WebSocket(`ws://localhost:${port}/probe`); w.onclose = w.onerror = () => done(); setTimeout(done, 3000); });
     const pc = new RTCPeerConnection({ iceServers: [{ urls: `stun:127.0.0.1:${udp}` }] }); pc.createDataChannel("probe"); await pc.setLocalDescription(await pc.createOffer());
     await new Promise((done) => { pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && done(); setTimeout(done, 5000); }); pc.close(); }, [PORT, stun.address().port]);
   await new Promise((done) => setTimeout(done, 1000)); stun.close();
-  const missing = [`localhost:${PORT}/web/research/drm/`, `localhost:${PORT}/site/view.html`, `localhost:${PORT}/probe-plain`, `127.0.0.1:${PORT + 1}/probe-port`, `websocket ws://localhost:${PORT}/probe`]
+  const missing = [`localhost:${PORT}/web/research/drm/`, `localhost:${PORT}/site/view.html`, `localhost:${PORT}/probe-plain`, `127.0.0.1:${PORT + 1}/probe-port`, `127.0.0.1:${PORT + 1}/web/research/drm/`, `websocket ws://localhost:${PORT}/probe`]
     .filter((u) => { const i = outside.indexOf(u); if (i < 0) return true; outside.splice(i, 1); return false; });
   check(missing.length === 0, "the catch-all answers and records another host, the drive's own address on another port, a page route's pattern on another host, and a WebSocket" + (missing.length ? "; not recorded: " + missing.join(", ") : ""));
   check(stunPackets === 0, `a page's WebRTC request sends nothing over UDP: ${stunPackets} packets reached the listener`);
