@@ -118,12 +118,16 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // fingerprint (the nineteenth review: other over-claiming words passed the list of banned phrases), so any change to
 // them fails here until they are read again against the measurements and the fingerprint is brought up to date.
 // The script is pinned the same way (the twentieth review: a sentence the script writes was changed to an over-claim, and
-// every test passed), with the page version left out (it changes with every edit).
-const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "73349bb4ab9fa5be", "site/view.html": "d4e184356276fe24", "site/all.html": "feecb2ec12e275ab" };
+// every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
+// twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
+// unchanged), with only the page version's date and time left out.
+const PAGE_FILE = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "122a654145dc9aab", "site/view.html": "640ff6e36325a968", "site/all.html": "a28cf3c86afd8190" };
+const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
+const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "fdcf76dd4e70f807", "site/view.html": "7ac40067a2558dc1", "site/all.html": "d272dc661fc402cf" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_WORDS = { "web/research/drm/index.html": "2bd47228511521b2", "site/view.html": "2819be64f2c8647f", "site/all.html": "ced6b9c339c3a0b6" };
+const PAGE_WORDS = { "web/research/drm/index.html": "8e1f4e01d0e8fe91", "site/view.html": "78c0c25ce1b175d8", "site/all.html": "db55d56180213dec" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
     const html = await read(f);
@@ -134,7 +138,11 @@ test("the route-1 page's own words claim no measurement that was not made, and n
     assert.equal(print, PAGE_WORDS[f], `${f}: its words changed; read them against the measurements, then update the fingerprint (${print}):\n${words}`);
     const said = createHash("sha256").update(scriptOf(html)).digest("hex").slice(0, 16);
     assert.equal(said, PAGE_SCRIPT[f], `${f}: its script changed; read every sentence it writes against the measurements, then update the fingerprint (${said})`);
+    const whole = createHash("sha256").update(wholeOf(html)).digest("hex").slice(0, 16);
+    assert.equal(whole, PAGE_FILE[f], `${f}: the file changed (its style, an attribute, anything); read what a visitor sees against the measurements, then update the fingerprint (${whole})`);
   }
+  const preludeWhole = createHash("sha256").update(wholeOf(await read("site/view-prelude.js"))).digest("hex").slice(0, 16);
+  assert.equal(preludeWhole, PAGE_FILE["site/view-prelude.js"], `site/view-prelude.js changed; read every sentence it writes, then update the fingerprint (${preludeWhole})`);
   // the site pages' prelude, which writes the box on those pages before their script runs
   const prelude = createHash("sha256").update(await read("site/view-prelude.js")).digest("hex").slice(0, 16);
   assert.equal(prelude, PAGE_SCRIPT["site/view-prelude.js"], `site/view-prelude.js changed; read every sentence it writes, then update the fingerprint (${prelude})`);
@@ -147,37 +155,44 @@ test("the lede says where software protection is accepted, as the page's own dec
   const W = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ", A = "Mozilla/5.0 (Linux; Android 14; Pixel 8) ";
   const GROUPS = {
     "accepted, measured: Chrome and Edge on Windows, Chrome on Android": [`${W}${CR} Safari/537.36`, `${W}${CR} Safari/537.36 Edg/126.0.0.0`, `${A}${CR} Mobile Safari/537.36`],
-    "accepted, not yet measured: Edge on Android, and other browsers on Windows and Android reporting Chrome": [`${A}${CR} Mobile Safari/537.36 EdgA/126.0.0.0`,
+    "accepted, not yet measured: Edge on Android, and the other browsers on Windows and Android the page reads as Chrome": [`${A}${CR} Mobile Safari/537.36 EdgA/126.0.0.0`,
       `Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/470.0.0.0;]`,
       `Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 LinkedInApp/9.30`,
       `${A}AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile DuckDuckGo/5 Safari/537.36`, `${A}${CR} HuaweiBrowser/15.0.4.312 Mobile Safari/537.36`,
       `${A}${CR} Mobile Safari/537.36 XiaoMi/MiuiBrowser/14.3.0-gn`, `${A}${CR} UCBrowser/13.6.0.1315 Mobile Safari/537.36`, `${W}${CR} YaBrowser/24.6.0.0 Safari/537.36`, `${W}${CR} Safari/537.36 Vivaldi/6.8`,
-      `${W}${CR} Whale/3.27.254.15 Safari/537.36`, `${A}${CR} Mobile Safari/537.36 SomeBrowserNoOneNamed/1.0`],
-    "not accepted: anywhere else (Firefox, Samsung Internet and Opera; Macs, Linux and Chromebooks)": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
+      `${W}${CR} Whale/3.27.254.15 Safari/537.36`, `${A}${CR} Mobile Safari/537.36 SomeBrowserNoOneNamed/1.0`,
+      // each named one on both platforms where it exists on both (the twenty-second review: Whale held to hardware on
+      // Android only passed)
+      `${A}${CR} Mobile Safari/537.36 Whale/3.27.254.15`, `${A}${CR} YaBrowser/24.6.0.0 Mobile Safari/537.36`, `${A}${CR} Mobile Safari/537.36 Vivaldi/6.8`,
+      `${W}${CR} Safari/537.36 DuckDuckGo/1.0`, `${W}${CR} Safari/537.36 SomeBrowserNoOneNamed/1.0`],
+    "not accepted: anywhere else, Samsung Internet, Opera and Firefox included (Macs, Linux and Chromebooks too)": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
       "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0", DEVICES["Android Samsung Internet"][0], `${W}${CR} Safari/537.36 OPR/112.0.0.0`, `${A}${CR} Mobile Safari/537.36 OPR/83.0.0.0`,
-      DEVICES["Mac Chrome"][0], DEVICES["Mac Edge"][0], DEVICES["Mac Firefox"][0], DEVICES["Linux Chrome"][0], DEVICES["Linux Firefox"][0], DEVICES.ChromeOS[0]],
+      DEVICES["Mac Chrome"][0], DEVICES["Mac Edge"][0], DEVICES["Mac Firefox"][0], DEVICES["Linux Chrome"][0], DEVICES["Linux Firefox"][0], DEVICES.ChromeOS[0],
+      `Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Safari/537.36`],
   };
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
     const html = await read(f), fn = decide(html);
     const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
-    assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in other browsers on Windows and Android that report themselves as Chrome, apps' built-in browsers among them\./, f);
-    assert.match(lede, /Software protection anywhere else is not accepted: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device\./, f);
+    assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome \(apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others\)\./, f);
+    assert.match(lede, /Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device\./, f);
     assert.match(lede, /On Apple devices \(FairPlay\) the photo is held back until a screenshot there is measured black\./, f);
     // the levels each tier asks for, as the lede's words mean them (the twenty-first review: a software level added to
-    // the hardware tier passed): hardware asks only for hardware levels, software only for software ones
-    assert.deepEqual(fn({ userAgent: DEVICES["Windows Chrome"][0], maxTouchPoints: 0 }, { search: "" }, () => {}, CTX).TIERS, {
+    // the hardware tier passed), on every browser below (the twenty-second review: changed on Linux only, it passed);
+    // what a request actually carries is checked by the drive
+    const TIERS_AS_BUILT = {
       "widevine-hardware": { system: "widevine", word: "hardware", levels: ["HW_SECURE_ALL", "HW_SECURE_DECODE"] },
       "widevine-software": { system: "widevine", word: "software", levels: ["SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] },
       "playready-hardware": { system: "playready", word: "hardware", levels: ["3000"], sl: 3000 },
       "playready-software": { system: "playready", word: "software", levels: ["2000"], sl: 2000 },
       "clearkey-card": { system: "clearkey", word: "no protection", levels: ["ClearKey, decrypted in the browser's own code"] },
       "fairplay-apple": { system: "fairplay", word: "Apple FairPlay", levels: ["FairPlay Streaming"] },
-    }, `${f}: the tiers and the levels each asks for`);
+    };
     for (const [group, uas] of Object.entries(GROUPS)) for (const ua of uas) {
       const r = fn({ userAgent: ua, maxTouchPoints: 0 }, { search: "" }, () => {}, CTX);
       // any tier that asks for software protection counts (Widevine or PlayReady), not one name
       assert.equal(r.ORDER.some((t) => r.TIERS[t].word === "software"), !group.startsWith("not accepted"), `${f}: ${group}: ${ua}: ${r.ORDER.join(", ")}`);
       assert.ok(r.ORDER.includes("widevine-hardware") && !r.APPLE, `${f}: ${ua}: hardware protection is accepted there too`);
+      assert.deepEqual(r.TIERS, TIERS_AS_BUILT, `${f}: ${ua}: the tiers and the levels each asks for`);
     }
   }
 });

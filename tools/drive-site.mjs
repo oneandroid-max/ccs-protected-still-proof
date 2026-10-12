@@ -572,8 +572,10 @@ try {
     check(new RegExp(`^Detected: Safari on ${device} \\(as the browser reports itself\\)\\. On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead\\.$`).test(det), `${device}: the top line names Safari on ${device} and what the page does: ` + det);
     check(await shown(rp, "apple") && !(await shown(rp, "stage")) && !(await shown(rp, "buttons")) && !(await shown(rp, "buttons-note")) && !(await shown(rp, "attempts")), `${device}: Apple's test is shown in the photo's place (the photo's box, its buttons, the sentence about them and its attempts hidden)`);
     check((await rp.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", `${device}: Apple's test comes first, right under the top line`);
-    check((await rp.evaluate((types) => (window.__players || []).every((p) => types.every((type) => ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4"].every((uri) => {
-      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) f(type, r); return JSON.stringify(r) === before; }))), NOT_LICENCE)), `${device}: no player changes any request but a licence request (no token in its headers or its address), of any type, whatever its address`);
+    check((await rp.evaluate(async (types) => { for (const p of window.__players || []) for (const type of types) for (const uri of ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4",
+      "card-fairplay/master.m3u8", "card-fairplay/video.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8", "card-fairplay-own/1a2b3c4d/video.m3u8", "card-fairplay-own/1a2b3c4d/video.mp4"]) {
+      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) await f(type, r); if (JSON.stringify(r) !== before) return false; } return true; }, NOT_LICENCE)),
+      `${device}: no player changes any request but a licence request (no token in its headers or its address, even a moment later), of any type, whatever its address`);
     check(await shown(rp, "apple-do") && (await rp.evaluate(() => document.getElementById("apple-do").nextElementSibling.id)) === "videos", `${device}: one line, right above the videos, says what to do`);
     check((await rp.textContent("#r-fps")) === "available in this browser", `${device}: FairPlay found: ` + (await rp.textContent("#r-fps")));
     const ps = await players(rp);
@@ -675,6 +677,10 @@ try {
     const det = await ap.textContent("#detected");
     check(det.startsWith(`Detected: ${name} (as the browser reports itself). The photo is shown here `) && says.test(det), `${name}: the top line: ` + det);
     check(!(await shown(ap, "apple")) && (await shown(ap, "stage")) && !(await ap.evaluate(() => window.__manifests)).some((m) => /axprod|card-fairplay/.test(m)), `${name}: Apple's test is not run; the photo's own box is there`);
+    // what the request actually asks for (the twenty-second review: a software level added to the hardware request,
+    // or on Linux only, passed every test): here the hardware tier is granted first, and it asks for hardware levels only
+    const asked = (await ap.evaluate(() => window.__cfgs || [])).map((c) => Object.entries((c.drm && c.drm.advanced) || {}).map(([ks, v]) => ks + ":" + (v.videoRobustness || []).join()).join(" "));
+    check(asked.length > 0 && asked.every((a) => a === "com.widevine.alpha:HW_SECURE_ALL,HW_SECURE_DECODE" || a === "com.microsoft.playready.recommendation:3000"), `${name}: each request asks for hardware levels only: ` + asked.join(" | "));
     const rule = await ap.textContent("#r-rule");
     check(/Chrome on (Windows|Android)/.test(name) ? rule.endsWith(": hardware protection, or software protection (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11)")
       : rule.endsWith(": hardware protection only (software protection is not accepted here)"), `${name}: the rule line claims no measurement it lacks: ` + rule);
@@ -721,6 +727,10 @@ try {
   await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#msg")) === "This browser cannot play protected video, so the test card isn't shown here. An up-to-date Chrome or Edge can play it.", "the player library unsupported, on the software test link in Chrome: an up-to-date one plays the card: " + (await ap.textContent("#msg")));
   await ac.close();
+  ({ c: ac, pg: ap } = await oneLink(ANDROID_CHROME, "?levels=clearkey", "window.__unsupported = true;"));
+  await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
+  check((await ap.textContent("#msg")) === "This browser cannot play protected video, so the test card isn't shown here. An up-to-date Chrome or Edge can play it.", "the player library unsupported, on the ClearKey test link in Chrome on Android: an up-to-date one plays the card: " + (await ap.textContent("#msg")));
+  await ac.close();
   ({ c: ac, pg: ap } = await oneLink(IPHONE, "?clip=card", SAFARI_PARTS(true) + "; window.__unsupported = true;"));
   await ap.waitForFunction(() => /cannot play protected video/.test(document.getElementById("r-ks").textContent), null, { timeout: 20000 }).catch(() => {});
   check((await ap.textContent("#r-expect")) === "the photo is not shown on this browser" && /so the photo is held back/.test(await ap.textContent("#r-rule")),
@@ -744,6 +754,8 @@ try {
     const rule = await ap.textContent("#r-rule"), expect = await ap.textContent("#r-expect");
     check((await ap.evaluate(() => window.__photoShown)) === "widevine-software" && rule.endsWith(": hardware protection, or software protection (screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11)")
       && expect === `software protection: screenshots under software protection were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11${suffix}. Take one.`, `${name}, software granted: the readout's claims: ${rule} | ${expect}`);
+    const levels = (await ap.evaluate(() => window.__cfgs || [])).map((c) => (((c.drm && c.drm.advanced) || {})["com.widevine.alpha"] || {}).videoRobustness || []).map((l) => l.join());
+    check(JSON.stringify(levels) === JSON.stringify(["HW_SECURE_ALL,HW_SECURE_DECODE", "SW_SECURE_DECODE,SW_SECURE_CRYPTO"]), `${name}, software granted: hardware asked first with hardware levels only, then software with software levels only: ` + levels.join(" | "));
     if (readAs) check(rule.startsWith(`${readAs} on Android (as the browser reports itself; the rule reads it as Chrome): `) && (await ap.textContent("#detected")).startsWith(`Detected: ${readAs} on Android (as the browser reports itself). `),
       `${name}: the top line names it, and the rule line says the rule reads it as Chrome: ` + rule);
     await ac.close();

@@ -1079,12 +1079,17 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   // nineteenth review: a filter that also checked the address, a stricter rule, failed here)
   const AXINOM_LICENCE = 2; // the first two addresses below
   const URIS = ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense",
-    "https://tools.axinom.com/FPScert/fairplay.cer", "https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8", "card-fairplay/video.mp4", "skd://4060a865-8878-4267-9cbf-91ae5bae1e72"];
+    "https://tools.axinom.com/FPScert/fairplay.cer", "https://media.axprod.net/TestVectors/Hls/protected_hls_1080p_h264_singlekey/manifest.m3u8", "card-fairplay/video.mp4", "skd://4060a865-8878-4267-9cbf-91ae5bae1e72",
+    // and the addresses our own forms are played from (the twenty-second review: a filter aimed at our playlists passed)
+    "card-fairplay/master.m3u8", "card-fairplay/video.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8", "card-fairplay-own/1a2b3c4d/video.m3u8", "card-fairplay-own/1a2b3c4d/video.mp4",
+    "https://oneandroid-max.github.io/ccs-protected-still-proof/site/photos/0a1b2c3d4e5f6a7b8c9d0e1f/fp-0a1b2c3d/master.m3u8", "https://oneandroid-max.github.io/ccs-protected-still-proof/site/photos/0a1b2c3d4e5f6a7b8c9d0e1f/fp-0a1b2c3d/video.mp4"];
   // the whole request is compared, not only its headers (the twenty-first review: a filter that put the token into the
   // address of every other request passed): a request the token may not go with comes back exactly as it went in, and a
   // licence request to Axinom gains the token as one header and nothing else
   const fresh = (type, uri) => ({ headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" });
-  const ask = (f, type, uri) => { const r = fresh(type, uri); f(type, r); return r; };
+  // a filter may answer later (a promise: the player sends the request once it settles), so it is waited for (the
+  // twenty-second review: a filter changing the address a moment later passed)
+  const ask = async (f, type, uri) => { const r = fresh(type, uri); await f(type, r); return r; };
   const same = (r, type, uri) => JSON.stringify(r) === JSON.stringify(fresh(type, uri));
   const withToken = (r, type, uri, token) => JSON.stringify(r) === JSON.stringify({ ...fresh(type, uri), headers: { "X-AxDRM-Message": token } });
   const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
@@ -1103,8 +1108,8 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   await protectedPlay("vp", "p", "u", "y");
   assert.equal(filters.length, 2, "one request filter per player");
   for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) for (const uri of URIS) {
-    for (const type of OTHERS) { const r = ask(f, type, uri); assert.ok(same(r, type, uri), `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
-    const h = ask(f, LICENSE, uri);
+    for (const type of OTHERS) { const r = await ask(f, type, uri); assert.ok(same(r, type, uri), `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
+    const h = await ask(f, LICENSE, uri);
     if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, token), `Apple's test, a licence request to ${uri}: the token as one header, nothing else changed: ${JSON.stringify(h)}`);
     else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, token), `Apple's test, a licence-type request to ${uri}: this player's token as one header, or nothing: ${JSON.stringify(h)}`);
   }
@@ -1116,8 +1121,8 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     new Function("fp", "player", "shaka", "log", "tierName", "AXINOM_LICENSE_ADDRESS", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t", addressOf(pg));
     assert.equal(got.length, 1, f);
     for (const uri of URIS) {
-      for (const type of OTHERS) { const r = ask(got[0], type, uri); assert.ok(same(r, type, uri), `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
-      const h = ask(got[0], LICENSE, uri);
+      for (const type of OTHERS) { const r = await ask(got[0], type, uri); assert.ok(same(r, type, uri), `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
+      const h = await ask(got[0], LICENSE, uri);
       if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence request to ${uri}: the clip's token as one header, nothing else changed: ${JSON.stringify(h)}`);
       else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence-type request to ${uri}: the clip's token as one header, or nothing: ${JSON.stringify(h)}`);
     }
