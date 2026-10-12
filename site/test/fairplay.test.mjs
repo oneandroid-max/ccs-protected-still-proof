@@ -1088,8 +1088,12 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   // licence request to Axinom gains the token as one header and nothing else
   const fresh = (type, uri) => ({ headers: {}, uris: [uri], method: type === LICENSE ? "POST" : "GET" });
   // a filter may answer later (a promise: the player sends the request once it settles), so it is waited for (the
-  // twenty-second review: a filter changing the address a moment later passed)
-  const ask = async (f, type, uri) => { const r = fresh(type, uri); await f(type, r); return r; };
+  // twenty-second review: a filter changing the address a moment later passed); and it is called as the player calls it,
+  // with the request's context too (shaka 5.2.10 passes one, such as {isPreload}; the twenty-fourth review: a filter that
+  // added the token only when given a context passed), and without one
+  const CONTEXTS = [undefined, { isPreload: false }, { isPreload: true }];
+  const on = (ctx) => (ctx ? ` (context ${JSON.stringify(ctx)})` : " (no context)");
+  const ask = async (f, type, uri, ctx) => { const r = fresh(type, uri); await f(type, r, ctx); return r; };
   // and each request is held to its rule now and again a quarter of a second after the last filter answered (the
   // twenty-third review: a filter changing the request on a timer, after it had returned, passed); a change made later
   // still is outside this test
@@ -1112,11 +1116,11 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   await protectedPlay("vo", "o", "u", "x", "OWN.TOKEN");
   await protectedPlay("vp", "p", "u", "y");
   assert.equal(filters.length, 2, "one request filter per player");
-  for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) for (const uri of URIS) {
-    for (const type of OTHERS) hold(await ask(f, type, uri), (r) => same(r, type, uri), (r) => `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`);
-    const h = await ask(f, LICENSE, uri);
-    if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence request to ${uri}: the token as one header, nothing else changed: ${JSON.stringify(r)}`);
-    else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence-type request to ${uri}: this player's token as one header, or nothing: ${JSON.stringify(r)}`);
+  for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) for (const uri of URIS) for (const ctx of CONTEXTS) {
+    for (const type of OTHERS) hold(await ask(f, type, uri, ctx), (r) => same(r, type, uri), (r) => `Apple's test, request type ${type} to ${uri}${on(ctx)}: left exactly as it was: ${JSON.stringify(r)}`);
+    const h = await ask(f, LICENSE, uri, ctx);
+    if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence request to ${uri}${on(ctx)}: the token as one header, nothing else changed: ${JSON.stringify(r)}`);
+    else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence-type request to ${uri}${on(ctx)}: this player's token as one header, or nothing: ${JSON.stringify(r)}`);
   }
   // the page's own player (tryOne), on the route-1 page and on the two pages built from it
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
@@ -1125,11 +1129,11 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     const got = [];
     new Function("fp", "player", "shaka", "log", "tierName", "AXINOM_LICENSE_ADDRESS", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t", addressOf(pg));
     assert.equal(got.length, 1, f);
-    for (const uri of URIS) {
-      for (const type of OTHERS) hold(await ask(got[0], type, uri), (r) => same(r, type, uri), (r) => `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`);
-      const h = await ask(got[0], LICENSE, uri);
-      if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence request to ${uri}: the clip's token as one header, nothing else changed: ${JSON.stringify(r)}`);
-      else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence-type request to ${uri}: the clip's token as one header, or nothing: ${JSON.stringify(r)}`);
+    for (const uri of URIS) for (const ctx of CONTEXTS) {
+      for (const type of OTHERS) hold(await ask(got[0], type, uri, ctx), (r) => same(r, type, uri), (r) => `${f}, request type ${type} to ${uri}${on(ctx)}: left exactly as it was: ${JSON.stringify(r)}`);
+      const h = await ask(got[0], LICENSE, uri, ctx);
+      if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence request to ${uri}${on(ctx)}: the clip's token as one header, nothing else changed: ${JSON.stringify(r)}`);
+      else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence-type request to ${uri}${on(ctx)}: the clip's token as one header, or nothing: ${JSON.stringify(r)}`);
     }
   }
   await new Promise((res) => setTimeout(res, 250));
