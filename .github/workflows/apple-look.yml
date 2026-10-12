@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "one link for every device: Apple's test on this page"
+  EXPECT_VERSION: "17:45 UTC — iPhones and iPads switched on"
   APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card"
   ROUTE1_TEST: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?levels=fairplay"
 
