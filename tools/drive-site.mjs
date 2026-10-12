@@ -13,7 +13,7 @@
 // Apple's test (and only its public material) on an iPhone, iPad or Mac, and where to open it instead elsewhere.
 // The sandbox's Chromium has no DRM module, so real playback is not exercised here.
 //   node tools/drive-site.mjs   (Playwright from PLAYWRIGHT_PKG's package, Chromium at CHROME)
-import { promises as fs } from "node:fs";
+import { promises as fs, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
@@ -109,9 +109,22 @@ await fs.writeFile(join(www, "pic.png"), png);
 const PORT = await new Promise((resolve, reject) => { const s = createServer(); s.on("error", reject); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => resolve(p)); }); });
 const DRIVE_ID = randomBytes(16).toString("hex");
 await fs.writeFile(join(www, "drive-id.txt"), DRIVE_ID);
-const server = spawn("python3", ["-m", "http.server", String(PORT), "--bind", "127.0.0.1", "--directory", www], { stdio: "ignore" });
-process.on("exit", () => { try { server.kill(); } catch {} }); // also when the drive dies (an error in a route, a failed browser launch)
-for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n)); // and when it is stopped
+// The server leaves with the drive however the drive ends, and takes the site's copy with it (the twenty-third review:
+// SIGQUIT and SIGUSR2 left it running, and every run left its copy of site/ in the temporary folder): it watches the
+// drive, its parent, and once the drive is gone (any signal, SIGKILL included, or a crash) it deletes the copy and
+// exits. On its own way out the drive stops it and deletes the copy itself.
+const SERVE = [
+  "import functools, http.server, os, shutil, sys, threading, time",
+  "port, www, drive = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])",
+  "def watch():",
+  "    while os.getppid() == drive: time.sleep(0.2)",
+  "    shutil.rmtree(www, ignore_errors=True); os._exit(0)",
+  "threading.Thread(target=watch, daemon=True).start()",
+  "http.server.ThreadingHTTPServer(('127.0.0.1', port), functools.partial(http.server.SimpleHTTPRequestHandler, directory=www)).serve_forever()",
+].join("\n");
+const server = spawn("python3", ["-I", "-c", SERVE, String(PORT), www, String(process.pid)], { stdio: "ignore" });
+process.on("exit", () => { try { server.kill(); } catch {} try { rmSync(www, { recursive: true, force: true }); } catch {} }); // also when the drive dies (an error in a route, a failed browser launch)
+for (const [sig, n] of [["SIGHUP", 1], ["SIGINT", 2], ["SIGTERM", 15]]) process.on(sig, () => process.exit(128 + n)); // and when it is stopped so; any other way, the server's own watch
 let ours = false;
 for (let i = 0; i < 60 && !ours; i++) {
   try { const r = await fetch(`http://127.0.0.1:${PORT}/drive-id.txt`); ours = r.ok && (await r.text()) === DRIVE_ID; } catch {}
@@ -540,6 +553,7 @@ try {
   ({ c: ac, pg: ap } = await applePage(IPHONE, "view.html?id=" + ID + "&levels=fairplay", () => { window.__noFrames = true; }));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent) || window.__photoShown, null, { timeout: 30000 });
   check(!(await ap.evaluate(() => window.__photoShown)) && /no licence or no decoded frame \(size 0x0\)/.test(await ap.textContent("#log")), "\"playing\" with no frame is not counted as shown: " + (await ap.textContent("#r-ks")));
+  check((await ap.textContent("#r-granted")) === "Apple FairPlay was accepted; playback did not start", "and the readout names FairPlay, which has no levels (the twenty-third review: it said \"a level was accepted\"): " + (await ap.textContent("#r-granted")));
   await ac.close();
 
   // 4f. THE ONE LINK (the route-1 page), every device its own way, told at the top what the page detected. Apple's
@@ -572,10 +586,13 @@ try {
     check(new RegExp(`^Detected: Safari on ${device} \\(as the browser reports itself\\)\\. On Apple devices the photo is held back until a screenshot there is measured black, so Apple's test plays below instead\\.$`).test(det), `${device}: the top line names Safari on ${device} and what the page does: ` + det);
     check(await shown(rp, "apple") && !(await shown(rp, "stage")) && !(await shown(rp, "buttons")) && !(await shown(rp, "buttons-note")) && !(await shown(rp, "attempts")), `${device}: Apple's test is shown in the photo's place (the photo's box, its buttons, the sentence about them and its attempts hidden)`);
     check((await rp.evaluate(() => document.getElementById("detected").nextElementSibling.id)) === "apple", `${device}: Apple's test comes first, right under the top line`);
-    check((await rp.evaluate(async (types) => { for (const p of window.__players || []) for (const type of types) for (const uri of ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4",
+    check((await rp.evaluate(async (types) => { const asked = []; for (const p of window.__players || []) for (const type of types) for (const uri of ["https://drm-fairplay-licensing.axprod.net/AcquireLicense", "https://tools.axinom.com/FPScert/fairplay.cer", "card-fairplay/video.mp4",
       "card-fairplay/master.m3u8", "card-fairplay/video.m3u8", "card-fairplay-own/1a2b3c4d/master.m3u8", "card-fairplay-own/1a2b3c4d/video.m3u8", "card-fairplay-own/1a2b3c4d/video.mp4"]) {
-      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) await f(type, r); if (JSON.stringify(r) !== before) return false; } return true; }, NOT_LICENCE)),
-      `${device}: no player changes any request but a licence request (no token in its headers or its address, even a moment later), of any type, whatever its address`);
+      const r = { headers: {}, uris: [uri], method: "GET" }, before = JSON.stringify(r); for (const f of p.reqFilters || []) await f(type, r); if (JSON.stringify(r) !== before) return false; asked.push([r, before]); }
+      // and again a quarter of a second after the last filter answered (the twenty-third review: a filter changing the
+      // request on a timer, after it had returned, passed); a change made later still is outside this check
+      await new Promise((res) => setTimeout(res, 250)); return asked.length > 0 && asked.every(([r, before]) => JSON.stringify(r) === before); }, NOT_LICENCE)),
+      `${device}: no player changes any request but a licence request (no token in its headers or its address, then or a quarter of a second after the last filter answered), of any type, whatever its address`);
     check(await shown(rp, "apple-do") && (await rp.evaluate(() => document.getElementById("apple-do").nextElementSibling.id)) === "videos", `${device}: one line, right above the videos, says what to do`);
     check((await rp.textContent("#r-fps")) === "available in this browser", `${device}: FairPlay found: ` + (await rp.textContent("#r-fps")));
     const ps = await players(rp);
@@ -647,6 +664,8 @@ try {
   const HUAWEI = "Mozilla/5.0 (Linux; Android 12; NOH-NX9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.5735.196 HuaweiBrowser/15.0.4.312 Mobile Safari/537.36";
   const YANDEX_WINDOWS = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 YaBrowser/24.6.0.0 Safari/537.36";
   const MI = "Mozilla/5.0 (Linux; U; Android 13; 23021RAAEG) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/112.0.5615.136 Mobile Safari/537.36 XiaoMi/MiuiBrowser/14.3.0-gn";
+  // a web view carrying Opera's mark (the twenty-third review: named an app's built-in browser while the rule read Opera)
+  const OPERA_APP = "Mozilla/5.0 (Linux; U; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/141.0.0.0 Mobile Safari/537.36 OPR/80.0.2254.70224";
   // (4b) a test link on Windows: the top line points to the box above it (brown for the control), and says nothing of
   // Apple's test, which a test link never runs
   for (const [q, banner] of [["?levels=clearkey", "CONTROL MODE"], ["?levels=software", "TEST MODE"], ["?levels=fairplay", "APPLE TEST MODE"]]) {
@@ -671,7 +690,8 @@ try {
   for (const [ua, name, says] of [[WIN_CHROME, "Chrome on Windows", /through the browser's protected path when it offers one this page accepts \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
     [ANDROID_CHROME, "Chrome on Android", /through the browser's protected path when it offers one this page accepts \(the readout below says which kind was granted\)\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
     [MAC_CHROME, "Chrome on a Mac", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. In Safari on this Mac, this same link runs Apple's own test\.$/],
-    [LINUX_FIREFOX, "Firefox on Linux", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/]]) {
+    [LINUX_FIREFOX, "Firefox on Linux", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/],
+    [OPERA_APP, "Opera on Android", /only with hardware protection; if this browser has none, it is held back and the box below says where to open it instead\. On an iPhone, iPad or Mac, this same link runs Apple's own test in Safari\.$/]]) {
     ({ c: ac, pg: ap } = await oneLink(ua));
     await ap.waitForFunction(() => window.__photoShown || /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
     const det = await ap.textContent("#detected");
@@ -686,7 +706,15 @@ try {
       : rule.endsWith(": hardware protection only (software protection is not accepted here)"), `${name}: the rule line claims no measurement it lacks: ` + rule);
     await ac.close();
   }
-  // (6) where nothing this page accepts is offered, the box says where to open the link instead, by what was detected
+  // (6) where nothing this page accepts is offered, the box says where to open the link instead, by what was detected;
+  // and what each request asks for, PlayReady's too (the twenty-third review: PlayReady's hardware request asking also
+  // for software level 2000, and its licence for sl:2000, passed every test): with nothing offered, every tier this
+  // browser may use is asked, in order, each for its own levels only, PlayReady's licence address naming the same level
+  const WV_HW = "com.widevine.alpha:HW_SECURE_ALL,HW_SECURE_DECODE", WV_SW = "com.widevine.alpha:SW_SECURE_DECODE,SW_SECURE_CRYPTO";
+  const PR_HW = "com.microsoft.playready.recommendation:3000:sl=3000", PR_SW = "com.microsoft.playready.recommendation:2000:sl=2000";
+  const askedOf = (pg) => pg.evaluate(() => (window.__cfgs || []).map((c) => { const d = c.drm || {}, a = d.advanced || {}, s = d.servers || {};
+    return Object.keys(a).map((ks) => [ks, (a[ks].videoRobustness || []).join()].concat(/playready/.test(ks) ? ["sl=" + [...String(s[ks] || "").matchAll(/sl:([^,)]*)/g)].map((m) => m[1]).join("+")] : []).join(":")).join(" "); }));
+  const SOFT_UAS = [ANDROID_APP, ANDROID_WEBVIEW, DUCKDUCKGO, HUAWEI, MI, YANDEX_WINDOWS, ANDROID_CHROME, WIN_CHROME];
   for (const [ua, where] of [[MAC_CHROME, /On this Mac, open this link in Safari: Apple's test runs there\. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge\.$/],
     [LINUX_FIREFOX, /This browser reports itself as Linux\. On Linux, Chrome showed protected video in a screenshot on a test machine, and no Linux browser is known to keep it out\. If this is a phone or tablet asking for desktop sites, turn that off or open this link in Chrome\. The photo shows on an Android phone, or on a Windows PC in Chrome or Edge\.$/],
     ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0", /On this PC, open this link in Chrome or Edge \(screenshots measured black there\)\.$/],
@@ -695,6 +723,7 @@ try {
     [ANDROID_APP, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [ANDROID_WEBVIEW, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [DUCKDUCKGO, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
+    [OPERA_APP, /^This browser hasn't been confirmed to keep the photo out of screenshots, so it isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [HUAWEI, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [MI, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this phone or tablet, open this link in Chrome \(screenshots measured black there\)\.$/],
     [YANDEX_WINDOWS, /^This browser offered none of the protection this page accepts, so the photo isn't shown here\. On this PC, open this link in Chrome or Edge \(screenshots measured black there\)\.$/],
@@ -703,8 +732,16 @@ try {
     ({ c: ac, pg: ap } = await oneLink(ua, "", "window.__refuseAll = true;"));
     await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});
     check(where.test(await ap.textContent("#msg")), "nothing accepted, the box says where instead: " + (await ap.textContent("#msg")));
+    const asked = await askedOf(ap);
+    check(JSON.stringify(asked) === JSON.stringify(SOFT_UAS.includes(ua) ? [WV_HW, WV_SW, PR_HW] : [WV_HW, PR_HW]), "nothing accepted: every tier asked, in order, each for its own levels only: " + asked.join(" | "));
     await ac.close();
   }
+  // the software test link asks Widevine and then PlayReady, each for software levels only
+  ({ c: ac, pg: ap } = await oneLink(WIN_CHROME, "?levels=software", "window.__refuseAll = true;"));
+  await ap.waitForFunction(() => /doesn't offer what this test asks for/.test(document.getElementById("msg").textContent), null, { timeout: 30000 }).catch(() => {});
+  const askedSoftware = await askedOf(ap);
+  check(JSON.stringify(askedSoftware) === JSON.stringify([WV_SW, PR_SW]), "the software test link, nothing offered: Widevine then PlayReady, each for software levels only: " + askedSoftware.join(" | "));
+  await ac.close();
   // the test card's link (where the old Apple address lands), Chrome on a Mac, nothing offered: every line names the test card
   ({ c: ac, pg: ap } = await oneLink(MAC_CHROME, "?clip=card", "window.__refuseAll = true;"));
   await ap.waitForFunction(() => /held back/.test(document.getElementById("r-ks").textContent), null, { timeout: 30000 }).catch(() => {});

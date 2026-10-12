@@ -37,6 +37,14 @@ function decide(html, measured) {
   return new Function("navigator", "location", "set", "CTX", body + "\nreturn { PLATFORM, APPLE, TEST, CARD, ORDER, CLIP, FAIRPLAY_OK, APPLE_TEST, TIERS };");
 }
 
+// the page's name for the browser, from its user agent (what the page says; the rule reads BROWSER)
+const NAME_START = "  const BROWSER_NAME = ", NAME_END = "  // Samsung Internet on a phone or tablet exists only on Android";
+function nameOf(html) {
+  const a = html.indexOf(NAME_START), b = html.indexOf(NAME_END);
+  assert.ok(a > 0 && b > a && html.indexOf(NAME_START, a + 1) < 0 && html.indexOf(NAME_END, b + 1) < 0, "the browser's name is found exactly once");
+  return new Function("ua", html.slice(a, b) + "\nreturn BROWSER_NAME;");
+}
+
 const IOS = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)";
 const CR = "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0";
@@ -121,9 +129,9 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
 // twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
 // unchanged), with only the page version's date and time left out.
-const PAGE_FILE = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "122a654145dc9aab", "site/view.html": "640ff6e36325a968", "site/all.html": "a28cf3c86afd8190" };
+const PAGE_FILE = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "de83a9bc1c0bda96", "site/view.html": "42b6272558a69a93", "site/all.html": "37225c301cc899ce" };
 const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "fdcf76dd4e70f807", "site/view.html": "7ac40067a2558dc1", "site/all.html": "d272dc661fc402cf" };
+const PAGE_SCRIPT = { "site/view-prelude.js": "11efdf94299173bc", "web/research/drm/index.html": "4b5eb2852ffd126a", "site/view.html": "3597f56ac992bad8", "site/all.html": "b0b3085d6be9ec38" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
@@ -168,10 +176,14 @@ test("the lede says where software protection is accepted, as the page's own dec
     "not accepted: anywhere else, Samsung Internet, Opera and Firefox included (Macs, Linux and Chromebooks too)": ["Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
       "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0", DEVICES["Android Samsung Internet"][0], `${W}${CR} Safari/537.36 OPR/112.0.0.0`, `${A}${CR} Mobile Safari/537.36 OPR/83.0.0.0`,
       DEVICES["Mac Chrome"][0], DEVICES["Mac Edge"][0], DEVICES["Mac Firefox"][0], DEVICES["Linux Chrome"][0], DEVICES["Linux Firefox"][0], DEVICES.ChromeOS[0],
-      `Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Safari/537.36`],
+      `Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/25.0 Chrome/121.0.0.0 Safari/537.36`,
+      // a web view carrying Opera's mark (the twenty-third review: the page named it an app's built-in browser)
+      `Mozilla/5.0 (Linux; U; Android 14; Pixel 8 Build/AP2A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36 OPR/80.0.2254.70224`],
   };
+  // the names under which the lede says software protection is accepted on Windows and Android
+  const SOFTWARE_NAMES = ["Chrome", "Edge", "an app's built-in browser", "DuckDuckGo", "Huawei Browser", "Mi Browser", "Yandex Browser", "Vivaldi", "UC Browser", "Naver Whale"];
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
-    const html = await read(f), fn = decide(html);
+    const html = await read(f), fn = decide(html), name = nameOf(html);
     const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
     assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome \(apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others\)\./, f);
     assert.match(lede, /Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device\./, f);
@@ -190,7 +202,11 @@ test("the lede says where software protection is accepted, as the page's own dec
     for (const [group, uas] of Object.entries(GROUPS)) for (const ua of uas) {
       const r = fn({ userAgent: ua, maxTouchPoints: 0 }, { search: "" }, () => {}, CTX);
       // any tier that asks for software protection counts (Widevine or PlayReady), not one name
-      assert.equal(r.ORDER.some((t) => r.TIERS[t].word === "software"), !group.startsWith("not accepted"), `${f}: ${group}: ${ua}: ${r.ORDER.join(", ")}`);
+      const soft = r.ORDER.some((t) => r.TIERS[t].word === "software");
+      assert.equal(soft, !group.startsWith("not accepted"), `${f}: ${group}: ${ua}: ${r.ORDER.join(", ")}`);
+      // and the name the page gives it never contradicts the rule (the twenty-third review: a web view carrying Opera's
+      // mark was named an app's built-in browser, which the lede says gets software protection, while the rule refused it)
+      if (r.PLATFORM === "Windows" || r.PLATFORM === "Android") assert.equal(SOFTWARE_NAMES.includes(name(ua)), soft, `${f}: ${ua}: named "${name(ua)}", and the rule ${soft ? "accepts" : "refuses"} software protection`);
       assert.ok(r.ORDER.includes("widevine-hardware") && !r.APPLE, `${f}: ${ua}: hardware protection is accepted there too`);
       assert.deepEqual(r.TIERS, TIERS_AS_BUILT, `${f}: ${ua}: the tiers and the levels each asks for`);
     }

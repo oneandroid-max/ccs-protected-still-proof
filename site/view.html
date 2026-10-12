@@ -128,7 +128,7 @@
   document.getElementById("title").textContent = CTX.title;
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 12:00 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-12 13:11 UTC — one link for every device: Apple's test on this page for an iPhone, iPad or Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -141,8 +141,8 @@
   //   - hardware protection, anywhere: Widevine HW_SECURE_ALL / HW_SECURE_DECODE, PlayReady SL3000
   //     (HW_SECURE_CRYPTO is excluded: it decodes into ordinary memory);
   //   - software protection (Widevine SW_SECURE_DECODE / SW_SECURE_CRYPTO) in any browser on Windows or Android
-  //     that BROWSER below reads as Chrome or Edge (its user agent names Chrome, CriOS or Edge, and not Samsung Internet,
-  //     Opera or Firefox, which name Chrome too). Screenshots under it were measured black in Chrome and Edge on the
+  //     that BROWSER below reads as Chrome or Edge (its user agent names Chrome, CriOS or Edge, and not Samsung Internet
+  //     or Opera, which name Chrome too, or Firefox). Screenshots under it were measured black in Chrome and Edge on the
   //     owner's Windows PC and in Chrome on his Android phone; Edge on Android, apps' built-in browsers and the other
   //     browsers it reads as Chrome (DuckDuckGo, Yandex, Vivaldi and more) follow the same rule unmeasured (a side
   //     finding in PLAN.md, the owner's to decide).
@@ -222,10 +222,13 @@
   const APPLE_TEST = APPLE_TEST_HERE && APPLE && !FAIRPLAY_OK && !TEST;
   // The platform and browser come from what the browser says about itself, which can be wrong (a tablet
   // asking for desktop sites reports Linux) or changed by the person using it; the line says so.
-  // The browser's own name, for what the page says only (the rule above reads BROWSER): an app's built-in browser first,
-  // since it reports the engine it is built on
-  const BROWSER_NAME = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /FBAN|FBAV|FB_IAB|Instagram|; wv\)/.test(ua) ? "an app's built-in browser" : /SamsungBrowser\//.test(ua) ? "Samsung Internet"
-    : /OPR\/|OPT\//.test(ua) ? "Opera" : /Firefox\/|FxiOS/.test(ua) ? "Firefox"
+  // The browser's own name, for what the page says only (the rule above reads BROWSER). It tests in the rule's own
+  // order, so a name never contradicts the rule: Edge; then Samsung Internet, Opera and Firefox, whatever else their user
+  // agent says (the twenty-third review: Opera's mark beside an app's was named an app's built-in browser, which the
+  // lede says gets software protection, while the rule refused it); only then an app's built-in browser, which reports
+  // the engine it is built on
+  const BROWSER_NAME = /Edg(A|iOS)?\//.test(ua) ? "Edge" : /SamsungBrowser\//.test(ua) ? "Samsung Internet"
+    : /OPR\/|OPT\//.test(ua) ? "Opera" : /Firefox\/|FxiOS/.test(ua) ? "Firefox" : /FBAN|FBAV|FB_IAB|Instagram|; wv\)/.test(ua) ? "an app's built-in browser"
     // browsers built on Chrome that name themselves (one that reports itself exactly as Chrome cannot be told apart)
     : /DuckDuckGo\//.test(ua) ? "DuckDuckGo" : /HuaweiBrowser\//.test(ua) ? "Huawei Browser" : /MiuiBrowser\/|XiaoMi\//.test(ua) ? "Mi Browser"
     : /YaBrowser\//.test(ua) ? "Yandex Browser" : /Vivaldi\//.test(ua) ? "Vivaldi" : /UCBrowser\//.test(ua) ? "UC Browser" : /Whale\//.test(ua) ? "Naver Whale"
@@ -499,17 +502,18 @@
   async function play(order) {
     $("log").textContent = ""; noAppleForm = false; set("r-lic", "—"); set("r-play", "—"); set("r-granted", "—"); set("r-ks", "asking…"); set("r-expect", "loading…", "");
     showMsg("Loading…");
-    let grantedButNoLicence = false;
+    let grantedButNoLicence = false, grantedSystem = null;
     for (let i = 0; i < order.length; i++) {
       const r = await tryOne(order[i]);
       if (r === "ok") return;
-      if (r === "failed-after-grant") grantedButNoLicence = true;
+      if (r === "failed-after-grant") { grantedButNoLicence = true; grantedSystem = TIERS[order[i]].system; }
       if (i < order.length - 1) log(`trying ${order[i + 1]} instead…`);
     }
     hidePhoto();
     if (grantedButNoLicence) {
       set("r-ks", "held back — protection was available, but no licence or frame arrived (see Attempts)", "bad");
-      set("r-granted", "a level was accepted; playback did not start", "bad");
+      // Apple's FairPlay and ClearKey have no levels (the twenty-third review: this said "a level" after FairPlay too)
+      set("r-granted", `${grantedSystem === "fairplay" ? "Apple FairPlay was" : grantedSystem === "clearkey" ? "ClearKey was" : "a level was"} accepted; playback did not start`, "bad");
       set("r-expect", `${shown} is not shown, so there is nothing to capture`, "bad");
       showMsg(`${SHOWN} could not load through its protection right now, so it isn't shown.`);
       return;

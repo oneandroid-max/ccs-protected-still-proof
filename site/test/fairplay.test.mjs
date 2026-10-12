@@ -1090,6 +1090,11 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   // a filter may answer later (a promise: the player sends the request once it settles), so it is waited for (the
   // twenty-second review: a filter changing the address a moment later passed)
   const ask = async (f, type, uri) => { const r = fresh(type, uri); await f(type, r); return r; };
+  // and each request is held to its rule now and again a quarter of a second after the last filter answered (the
+  // twenty-third review: a filter changing the request on a timer, after it had returned, passed); a change made later
+  // still is outside this test
+  const held = [];
+  const hold = (r, ok, what) => { assert.ok(ok(r), what(r)); held.push([r, ok, what]); };
   const same = (r, type, uri) => JSON.stringify(r) === JSON.stringify(fresh(type, uri));
   const withToken = (r, type, uri, token) => JSON.stringify(r) === JSON.stringify({ ...fresh(type, uri), headers: { "X-AxDRM-Message": token } });
   const page = await fs.readFile(join(REPO, "web/research/drm/index.html"), "utf8");
@@ -1108,10 +1113,10 @@ test("a licence token is added to licence requests only, by Apple's test and by 
   await protectedPlay("vp", "p", "u", "y");
   assert.equal(filters.length, 2, "one request filter per player");
   for (const [f, token] of [[filters[0], "OWN.TOKEN"], [filters[1], "PUBLIC.TOKEN"]]) for (const uri of URIS) {
-    for (const type of OTHERS) { const r = await ask(f, type, uri); assert.ok(same(r, type, uri), `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
+    for (const type of OTHERS) hold(await ask(f, type, uri), (r) => same(r, type, uri), (r) => `Apple's test, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`);
     const h = await ask(f, LICENSE, uri);
-    if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, token), `Apple's test, a licence request to ${uri}: the token as one header, nothing else changed: ${JSON.stringify(h)}`);
-    else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, token), `Apple's test, a licence-type request to ${uri}: this player's token as one header, or nothing: ${JSON.stringify(h)}`);
+    if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence request to ${uri}: the token as one header, nothing else changed: ${JSON.stringify(r)}`);
+    else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence-type request to ${uri}: this player's token as one header, or nothing: ${JSON.stringify(r)}`);
   }
   // the page's own player (tryOne), on the route-1 page and on the two pages built from it
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
@@ -1121,12 +1126,15 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     new Function("fp", "player", "shaka", "log", "tierName", "AXINOM_LICENSE_ADDRESS", pg.slice(at, end) + "\n    });")({ token: "THE.CLIPS.TOKEN" }, { getNetworkingEngine: () => ({ registerRequestFilter: (fn) => got.push(fn) }) }, shaka, () => {}, "t", addressOf(pg));
     assert.equal(got.length, 1, f);
     for (const uri of URIS) {
-      for (const type of OTHERS) { const r = await ask(got[0], type, uri); assert.ok(same(r, type, uri), `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`); }
+      for (const type of OTHERS) hold(await ask(got[0], type, uri), (r) => same(r, type, uri), (r) => `${f}, request type ${type} to ${uri}: left exactly as it was: ${JSON.stringify(r)}`);
       const h = await ask(got[0], LICENSE, uri);
-      if (URIS.indexOf(uri) < AXINOM_LICENCE) assert.ok(withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence request to ${uri}: the clip's token as one header, nothing else changed: ${JSON.stringify(h)}`);
-      else assert.ok(same(h, LICENSE, uri) || withToken(h, LICENSE, uri, "THE.CLIPS.TOKEN"), `${f}, a licence-type request to ${uri}: the clip's token as one header, or nothing: ${JSON.stringify(h)}`);
+      if (URIS.indexOf(uri) < AXINOM_LICENCE) hold(h, (r) => withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence request to ${uri}: the clip's token as one header, nothing else changed: ${JSON.stringify(r)}`);
+      else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, "THE.CLIPS.TOKEN"), (r) => `${f}, a licence-type request to ${uri}: the clip's token as one header, or nothing: ${JSON.stringify(r)}`);
     }
   }
+  await new Promise((res) => setTimeout(res, 250));
+  assert.ok(held.length > 0, "requests were asked");
+  for (const [r, ok, what] of held) assert.ok(ok(r), what(r) + " (checked again a quarter of a second after the last filter answered)");
 });
 
 test("the test card's Apple form (tools/fairplay-card.mjs): Axinom's public key, our IV, decrypted back two ways to exactly the card (needs shaka-packager)", async (t) => {
