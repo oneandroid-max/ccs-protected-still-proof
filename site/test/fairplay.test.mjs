@@ -20,7 +20,11 @@ import { mosaicCurrent } from "../app.js";
 import { run as exec, redactKeys } from "../../service/lib/util.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
-const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+// The packager the tests run: the pinned build only, checked by its SHA-256 before any test runs it, and run by the path
+// checked (the CI test step sets PACKAGER_BIN). Any other file is refused here, never run: with REQUIRE_PACKAGER=1 that
+// ends the run; without it the tests that need the packager are skipped.
+const pinnedPackager = await checkPackager(process.env.PACKAGER_BIN || "packager").catch((e) => { if (process.env.REQUIRE_PACKAGER === "1") throw e; return null; });
+const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: pinnedPackager || "/nonexistent/no-pinned-packager-here" };
 const COM = { id: "0e2c58d1-7c4b-4f3e-9a51-3d1f0b7e6a42", key: nodeRandom(32) }; // a throwaway communication key
 const OWN_LICENSE = "https://0a1b2c3d.drm-fairplay-licensing.axprod.net/AcquireLicense"; // an account's own licence address (a made-up prefix)
 const b64url = (s) => JSON.parse(Buffer.from(s, "base64url").toString("utf8"));
@@ -1306,6 +1310,17 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   const r7 = await mosaic(refuse, ask(32));
   assert.deepEqual([r7.status, r7.fairplay], ["ready", false], JSON.stringify(r7));
   assert.equal((await mosaicMeta()).fairplay, null, "the dead form went with the old view");
+  // a left-out picture deleted (a stale entry), and the rebuild then failing (the thirteenth review): the record's clean-up
+  // stays (the job commits it) but answers no request; only a run that finishes answers (the page waits ten minutes at most)
+  const H = "8".repeat(24);
+  assert.equal((await add(H, "0x2c3e50")).status, "ready"); await damage(H);
+  assert.equal((await mosaic(accept)).status, "ready");
+  assert.deepEqual((await mosaicMeta()).skipped.map((x) => x.id).sort(), [E, H].sort());
+  await worker({ payload: { action: "delete", id: H, key: KEY_HEX }, siteDir, tools });
+  const beforeStale = await mosaicMeta();
+  await assert.rejects(mosaic(accept, ask(33), { ...tools, ffmpeg: "/nonexistent/ffmpeg" }), /no picture could be read back/);
+  const stale = await mosaicMeta();
+  assert.deepEqual([stale.skipped.map((x) => x.id), stale.answered, stale.builtAt], [[E], beforeStale.answered, beforeStale.builtAt], "the stale entry dropped, no request answered, the view itself unchanged");
 
   // a picture the view DRAWS deleted, and the rebuild then failing (no picture can be read back: ffmpeg cannot be
   // started): the old view is gone all the same (its content must not stay on the site), and nothing half-built is left
@@ -1331,6 +1346,21 @@ test("the combined view answers each request by its id; a rebuild of the same pi
   assert.match(cliOut, /^result: ready \(3 picture\(s\)\); Apple form: false$/m);
   assert.match(cliOut, /^::warning title=Apple form::the combined view was made without its Apple form \(see the log above\); Apple devices are held back until it has one$/m);
   assert.equal((await mosaicMeta()).answered[0], ask(40), "the command passes the request's id on");
+  // (8) the thirteenth review: the combined view's job checks the packager just before it first runs it, the renewal of
+  // the view's form included. E deleted (a stale entry: the view then holds exactly the ready pictures, with no form yet);
+  // another packager file is refused before it is ever run, the job ends red, the view stays (its record cleaned)
+  await worker({ payload: { action: "delete", id: E, key: KEY_HEX }, siteDir, tools });
+  const acceptStub = join(tmp, "stub-ask-accept.mjs"), ranMark = join(tmp, "renewal-wrong-ran"), wrongPk = join(tmp, "renewal-wrong-packager");
+  await fs.writeFile(acceptStub, `globalThis.fetch = async () => new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0." } });\n`);
+  await fs.writeFile(wrongPk, `#!/bin/sh\ntouch ${JSON.stringify(ranMark)}\necho 'packager version v3.9.3'\n`); await fs.chmod(wrongPk, 0o755);
+  const before8 = await mosaicMeta();
+  await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "mosaic", key: KEY_HEX, ask: ask(41) } }));
+  const c8 = spawnSync(process.execPath, ["--import", pathToFileURL(acceptStub).href, join(REPO, "site", "worker.mjs")], { encoding: "utf8", env: { ...process.env, GITHUB_EVENT_PATH: evt, SITE_DIR: siteDir, PACKAGER_BIN: wrongPk, WORKER_ACTION: "mosaic", AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64") } });
+  const c8Out = (c8.stdout || "") + (c8.stderr || "");
+  assert.equal(c8.status, 1, c8Out); assert.match(c8Out, /^::error title=Packager::the packager at \S+ is not the pinned shaka-packager v3\.9\.3/m);
+  await assert.rejects(fs.access(ranMark), "the other file was never run");
+  const after8 = await mosaicMeta();
+  assert.deepEqual([after8.builtAt, after8.ids, after8.fairplay, after8.skipped, after8.answered], [before8.builtAt, before8.ids, null, [], before8.answered], "the view stays, its record cleaned, no request answered");
   notice("FairPlay eleventh review", "request ids on every answer (last ten); a failed same-pictures rebuild kept the view whole; render / check / missing-program failures kept the view; a missing output rebuilt; an expired form renewed while Axinom was out of reach and rebuilt while it refused; a failed copy left nothing");
 });
 
@@ -1354,7 +1384,7 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
   const wf = join(REPO, ".github", "workflows"); let lines = 0;
   for (const f of [...(await fs.readdir(wf)).map((x) => join(wf, x)), join(REPO, "service", "Dockerfile")])
     for (const m of (await fs.readFile(f, "utf8")).matchAll(/echo "([0-9a-f]{64})  [^"]*packager" \| sha256sum -c -/g)) { assert.equal(m[1], PACKAGER_SHA256, f); lines++; }
-  assert.equal(lines, 12, "every check line names the same build (9 after a download; 3 where a step that runs it checks it again: drm-package.yml's PlayReady step and the two test steps)");
+  assert.equal(lines, 9, "every check line names the same build, one after each of the 9 downloads (the runner and the tests check the file again where they run it: the next test)");
   const wrong = join(tmp, "not-the-packager"); await fs.writeFile(wrong, "#!/bin/sh\necho 'packager version v3.9.3'\n"); await fs.chmod(wrong, 0o755);
   const REFUSED = /is not the pinned shaka-packager v3\.9\.3 \(sha256 [0-9a-f]{16}…, pinned 7a3cf35ad146fd78…\): refused/;
   await assert.rejects(checkPackager(wrong), REFUSED);
@@ -1427,9 +1457,55 @@ test("only the pinned shaka-packager runs: checked by its SHA-256 each time; ano
     const re = spawnSync(process.execPath, [join(REPO, "site", "worker.mjs")], { encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", GITHUB_EVENT_PATH: evt, SITE_DIR: relSite, PACKAGER_BIN: real } });
     assert.equal(re.status, 1, re.stdout + re.stderr); assert.match(re.stdout, /^::error title=Site job::bad request id$/m);
   }
-  // the backfill runs the path it checked: its runs in these tests never package (no picture of theirs needs a form with
-  // Axinom's acceptance), so this reads the line itself
-  assert.match(await fs.readFile(join(REPO, "site", "backfill.mjs"), "utf8"), /tools\.packager = await checkPackager\(tools\.packager\)/);
+  // the backfill, given the same RELATIVE path, makes that picture's Apple form (Axinom stood in for, accepting the key): it
+  // runs the very file it checked though it packages in another folder (the twelfth round read only its source line)
+  if (real) {
+    const base = await fs.mkdtemp(join(tmp, "rel-bf-")), relSite = await fs.mkdtemp(join(tmp, "rel-bf-site-")), blob = join(tmp, "rel-bf-blob"), Q = "6".repeat(24);
+    await fs.mkdir(join(base, "bin")); await fs.copyFile(await checkPackager(real), join(base, "bin", "packager")); await fs.chmod(join(base, "bin", "packager"), 0o755);
+    await fs.writeFile(join(relSite, "config.json"), JSON.stringify({ salt: SALT, iterations: 1000 }));
+    await fs.writeFile(blob, await seal(photoKey, await fs.readFile(await solid("rel-bf.png", 320, 240, "0x27ae60"))));
+    await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "add", id: Q, name: "q.png", type: "image/png", bytes: 1, blobSha: "a".repeat(40), key: keyHex } }));
+    const added = spawnSync(process.execPath, [join(REPO, "site", "worker.mjs")], { cwd: base, encoding: "utf8", env: { ...process.env, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "", WORKER_ACTION: "", GITHUB_EVENT_PATH: evt, SITE_DIR: relSite, PACKAGER_BIN: "bin/packager", WORKER_BLOB_FILE: blob } });
+    assert.equal(added.status, 0, (added.stdout || "") + (added.stderr || ""));
+    const acceptStub = join(tmp, "stub-pin-accept.mjs");
+    await fs.writeFile(acceptStub, `globalThis.fetch = async () => new Response(null, { status: 400, headers: { "X-AxDRM-ErrorMessage": "Invalid license request. Supported versions are 1, 2 or 3, but used version is 0." } });\n`);
+    const bf = spawnSync(process.execPath, ["--import", pathToFileURL(acceptStub).href, join(REPO, "site", "backfill.mjs")], { cwd: base, encoding: "utf8", env: { ...process.env, SITE_DIR: relSite, SITE_PASSWORD: PW, AXINOM_COM_KEY_ID: COM.id, AXINOM_COM_KEY: COM.key.toString("base64"), PACKAGER_BIN: "bin/packager", GITHUB_EVENT_NAME: "workflow_dispatch", BACKFILL_RESULT: join(base, "result.json") } });
+    const bo = (bf.stdout || "") + (bf.stderr || "");
+    assert.equal(bf.status, 0, bo.slice(-800));
+    assert.equal(JSON.parse(await fs.readFile(join(base, "result.json"), "utf8")).added, 1, bo.slice(-800));
+    assert.ok((await fs.readdir(join(relSite, "photos", Q))).some((f) => /^fp-/.test(f)), "the picture has its Apple form, packaged by the file checked");
+  }
+});
+
+// THE RUNS OUTSIDE OUR PROGRAMS (the thirteenth review): a workflow runs the packager only through tools/run-packager.mjs
+// (tools/check-workflow-links.mjs refuses any other way), and the tests run only the file they checked as they start.
+// Both check the file by its SHA-256 at that moment and never run another.
+test("the workflows' runner and the tests check the packager before they run it, and run only the file checked (needs shaka-packager)", async (t) => {
+  if (!(await havePackager(t))) return;
+  const RUNNER = join(REPO, "tools", "run-packager.mjs"), marker = join(tmp, "wrong-ran"), wrong = join(tmp, "wrong-packager");
+  await fs.writeFile(wrong, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\necho 'packager version v3.9.3'\n`); await fs.chmod(wrong, 0o755);
+  const go = (args, opts = {}) => { const r = spawnSync(process.execPath, [RUNNER, ...args], { encoding: "utf8", ...opts }); return { code: r.status, out: (r.stdout || "") + (r.stderr || "") }; };
+  // another file: refused and named, never run; none there, or none given: refused
+  let r = go([wrong, "--version"]);
+  assert.equal(r.code, 1, r.out); assert.match(r.out, /^::error title=Packager::the packager at \S+ is not the pinned shaka-packager v3\.9\.3/m);
+  r = go(["/nonexistent/packager", "--version"]); assert.equal(r.code, 1, r.out); assert.match(r.out, /^::error title=Packager::the packager "\/nonexistent\/packager" was not found$/m);
+  r = go([]); assert.equal(r.code, 2, r.out); assert.match(r.out, /^::error title=Packager::usage/m);
+  // the pinned file, given by a RELATIVE path from another folder: run with the arguments as given, its exit code passed on
+  const base = await fs.mkdtemp(join(tmp, "runner-")); await fs.mkdir(join(base, "bin")); await fs.copyFile(tools.packager, join(base, "bin", "packager")); await fs.chmod(join(base, "bin", "packager"), 0o755);
+  r = go(["bin/packager", "--version"], { cwd: base });
+  assert.equal(r.code, 0, r.out); assert.match(r.out, /packager version v3\.9\.3/);
+  const own = spawnSync(tools.packager, ["--no-such-flag"], { encoding: "utf8" });
+  r = go(["bin/packager", "--no-such-flag"], { cwd: base });
+  assert.ok(own.status > 0 && r.code === own.status, `the packager's own exit code (${own.status}) passed on: ${r.code}`);
+  // each test file that runs the packager checks it as it starts: given another file it ends the run before any test
+  // (REQUIRE_PACKAGER=1, as CI runs them), and that file is never run
+  const env = { ...process.env, PACKAGER_BIN: wrong, REQUIRE_PACKAGER: "1" }; delete env.NODE_TEST_CONTEXT;
+  for (const [cwd, file] of [[REPO, "site/test/site.test.mjs"], [REPO, "site/test/fairplay.test.mjs"], [join(REPO, "service"), "test/pipeline.test.mjs"]]) {
+    const x = spawnSync(process.execPath, ["--test", "--test-name-pattern", "^no test has this name$", file], { cwd, encoding: "utf8", env });
+    const out = (x.stdout || "") + (x.stderr || "");
+    assert.notEqual(x.status, 0, `${file} refuses another packager: ${out.slice(-400)}`); assert.match(out, /is not the pinned shaka-packager v3\.9\.3/, file);
+  }
+  await assert.rejects(fs.access(marker), "the other file was never run");
 });
 
 after(async () => { await fs.rm(tmp, { recursive: true, force: true }); });

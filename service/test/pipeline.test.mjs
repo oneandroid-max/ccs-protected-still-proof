@@ -9,7 +9,11 @@ import { run } from "../lib/util.mjs";
 import { checkPackager } from "../lib/packager-pin.mjs";
 import { startApp, login, upload, REPO } from "./helpers.mjs";
 
-const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+// The packager the tests run: the pinned build only, checked by its SHA-256 before any test runs it, and run by the path
+// checked (the CI test step sets PACKAGER_BIN). Any other file is refused here, never run: with REQUIRE_PACKAGER=1 that
+// ends the run; without it the tests that need the packager are skipped.
+const pinnedPackager = await checkPackager(process.env.PACKAGER_BIN || "packager").catch((e) => { if (process.env.REQUIRE_PACKAGER === "1") throw e; return null; });
+const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: pinnedPackager || "/nonexistent/no-pinned-packager-here" };
 const tmp = await fs.mkdtemp(join(tmpdir(), "proof-pipe-"));
 const jpeg = async (name, w, h, color = "0x1f4e8c") => { const f = join(tmp, name); await run("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", `color=c=${color}:s=${w}x${h}:d=1`, "-frames:v", "1", "-update", "1", f]); return f; };
 

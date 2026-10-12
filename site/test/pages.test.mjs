@@ -130,13 +130,14 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
   const LATEST = "https://github.com/shaka-project/shaka-packager/releases/latest/download/packager-linux-x64";
   const MIRROR = "https://mirror.example.com/packager-linux-x64";
   const base = await guardWith(null);
-  assert.equal(base.code, 0, base.out); assert.match(base.out, /all 9 shaka-packager downloads are the pinned release, checked by its SHA-256/);
+  assert.equal(base.code, 0, base.out); assert.match(base.out, /all 9 shaka-packager downloads are the pinned release, checked by its SHA-256, and all 12 runs of it go through tools\/run-packager\.mjs/);
   const ST = ".github/workflows/site-test.yml", DF = "service/Dockerfile", AT = "      - name: The generated view page is current";
   const step = (run) => (t) => t.replace(AT, `      - run: ${run}\n${AT}`);
   const uses = (action, more = "") => (t) => t.replace(AT, `      - uses: ${action}\n${more ? more + "\n" : ""}${AT}`);
   const afterRun = (text) => (t) => t.replace(/(\/usr\/local\/bin\/packager --version)\n/, `$1\n${text}\n`);
   const NAMED = /brings in a packager other than by the pinned download/, UNCHECKED = /the downloaded packager must be checked against its SHA-256 on the very next line, exactly/;
   const AFTER = /service\/Dockerfile:\d+: after the packager's check, this instruction may go on only with '&& …' lines/, LETS = /downloads shaka-packager and lets a failure pass/;
+  const UNCHECKED_RUN = (w) => new RegExp(`site-test\\.yml:\\d+: names the packager file \\(${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\) where it could run unchecked`);
   const refused = [
     // another source or version, an image, an action, a container, a package
     [[".github/workflows/card-fairplay.yml", (t) => t.replace(PIN, LATEST)], NAMED],
@@ -180,17 +181,35 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, (t) => t.replace(AT, `      - run: |\n          docker build -t tools - <<'EOF'\n          FROM google/shaka-packager:latest\n          EOF\n${AT}`)], NAMED],
     [[ST, step("curl -sSL -o /usr/local/bin/PACKAGER https://mirror.example.com/bin/x64")], NAMED], // the name only in capitals, nowhere else on the line
     [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      TOOL_IMAGE: SOMEORG/SHAKA-PACKAGER:LATEST")], NAMED], // shaka-packager named in capitals
-    // (E), the twelfth review: a step that runs the packager checks that very file first, and never runs it by a bare name
-    [[".github/workflows/drm-package.yml", (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/tmp\/packager" \| sha256sum -c - \|\| exit 1 # checked again where it runs/, "")], /drm-package\.yml:\d+: runs \/tmp\/packager before this step checks it/],
-    [[ST, (t) => t.replace(/\n\s+echo "7a3cf35a[0-9a-f]+  \/usr\/local\/bin\/packager" \| sha256sum -c - \|\| exit 1 # the tests run it: checked again where it runs/, "")], /site-test\.yml:\d+: runs the tests with PACKAGER_BIN=\/usr\/local\/bin\/packager before this step checks it/],
-    [[ST, (t) => t.replace("sudo chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/packager && packager --version")], /site-test\.yml:\d+: runs a packager by its bare name/],
-    [[ST, step("/usr/local/bin/packager --version")], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
-    [[ST, (t) => t.replace(AT, '      - env: { PACKAGER_BIN: /usr/local/bin/packager }\n        run: "$PACKAGER_BIN" --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
-    [[ST, step('echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true; /usr/local/bin/packager --version')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
-    [[ST, step('echo "built with $(/usr/local/bin/packager --version)"')], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
-    // a check line on its own line but made harmless, or with a run after it on the same line, is no check
-    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true\n          /usr/local/bin/packager --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
-    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1; /usr/local/bin/packager --version\n' + AT)], /site-test\.yml:\d+: runs \/usr\/local\/bin\/packager before this step checks it/],
+    // (E), the thirteenth review: a workflow runs the packager only through tools/run-packager.mjs (it checks the file at
+    // that moment, then runs exactly that file); any other word naming the file is refused, whatever the shell around it
+    [[".github/workflows/drm-package.yml", (t) => t.replace("node tools/run-packager.mjs /tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4", "/tmp/packager in=/tmp/src/source.mp4,stream=video,output=web/research/drm/video-playready.mp4")], /drm-package\.yml:\d+: names the packager file \(\/tmp\/packager\) where it could run unchecked/],
+    [[ST, (t) => t.replace("sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version", "sudo chmod +x /usr/local/bin/packager && packager --version")], UNCHECKED_RUN("packager")],
+    [[ST, step("/usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace(AT, '      - env: { PACKAGER_BIN: /usr/local/bin/packager }\n        run: "$PACKAGER_BIN" --version\n' + AT)], UNCHECKED_RUN("$PACKAGER_BIN")],
+    [[ST, step('echo "built with $(/usr/local/bin/packager --version)"')], UNCHECKED_RUN("/usr/local/bin/packager")],
+    // a check line, made harmless or exact, on the same line or the one before, makes no run acceptable: only the runner
+    // checks the file at the moment it runs it
+    [[ST, step('echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true; /usr/local/bin/packager --version')], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || true\n          /usr/local/bin/packager --version\n' + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace(AT, '      - run: |\n          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1\n          /usr/local/bin/packager --version\n' + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    // the shapes the thirteenth review ran past the step rule: in quotes, after `if` or `timeout`, a bare name in an `if`,
+    // PACKAGER_BIN at the job's level; and a variable, `sh -c`, a one-line step, an expression, a comment after `steps:`,
+    // a second run beside the runner's
+    [[ST, step('"/usr/local/bin/packager" --version')], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("if /usr/local/bin/packager --version; then echo ok; fi")], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("timeout 60 /usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("if packager --version; then echo ok; fi")], UNCHECKED_RUN("packager")],
+    [[ST, (t) => t.replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      PACKAGER_BIN: /usr/local/bin/packager").replace(AT, '      - run: "$PACKAGER_BIN" --version\n' + AT)], UNCHECKED_RUN("$PACKAGER_BIN")],
+    [[ST, step('P=/usr/local/bin/packager; "$P" --version')], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("sh -c '/usr/local/bin/packager --version'")], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace(AT, "      - { name: v, run: /usr/local/bin/packager --version }\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, step("${{ env.PACKAGER_BIN }} --version")], UNCHECKED_RUN("env.PACKAGER_BIN")],
+    [[ST, (t) => t.replace("    steps:\n", "    steps: # the job's steps\n").replace(AT, "      - run: /usr/local/bin/packager --version\n" + AT)], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace("node tools/run-packager.mjs /usr/local/bin/packager --version", "node tools/run-packager.mjs /usr/local/bin/packager --version; /usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")],
+    [[ST, (t) => t.replace("node tools/run-packager.mjs /usr/local/bin/packager --version", "node ./tools/run-packager.mjs /usr/local/bin/packager --version")], UNCHECKED_RUN("/usr/local/bin/packager")], // the runner, exactly as named
+    // every run through the runner counted: one gone (or a guard that stops reading a workflow) fails
+    [[".github/workflows/site-photos.yml", (t) => t.replace(" && node tools/run-packager.mjs /usr/local/bin/packager --version", "")], /site-photos\.yml: expected 2 runs of the packager through tools\/run-packager\.mjs, read 1/],
     // a link after a quoted '#' on a code line (comments inside quotes are not comments)
     [[ST, step(`echo "a # b" && curl -sSL -o /tmp/p ${LATEST}`)], NAMED],
     // a curl that is not only the pinned download: another address beside it, another option, an output built by a command
@@ -253,7 +272,7 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
   assert.equal(lock.code, 0, lock.out);
   // legitimate text: accepted (the tenth review: the version before refused the last five)
   const accepted = [
-    [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: echo the build is named in the log above\n${AT}`)]], // a name line (running the packager here would need its check: rule E)
+    [[ST, (t) => t.replace(AT, `      - name: Show which shaka-packager build (packager-linux-x64) is used\n        run: echo the build is named in the log above\n${AT}`)]], // a name line (a run of the packager on it would be refused: rule E)
     [[ST, (t) => t.replace(AT, `      # https://github.com/shaka-project/shaka-packager/releases/tag/v3.9.3\n${AT}`)]],
     [[ST, (t) => t.replace(AT, `      - name: x\n        continue-on-error: false\n        run: echo x\n${AT}`)]],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager")]],
@@ -266,7 +285,16 @@ test("the guard refuses the obvious ways of bringing in a packager other than th
     [[ST, (t) => t.replace(`curl -sSL -o /usr/local/bin/packager ${PIN}`, `curl -sSL -o /usr/local/bin/packager "${PIN}"`)]],
     [[DF, (t) => t.replace(/^FROM ([^\n]+)$/m, "FROM $1 AS packager") + "FROM node:22-bookworm-slim\nCOPY --from=packager /usr/local/bin/packager /usr/local/bin/packager\n"]],
   ];
+  accepted.push(
+    // (E): the runner given the path in quotes; PACKAGER_BIN set for the whole job (the tests check that file themselves:
+    // site/test/fairplay.test.mjs runs them with another file and sees it refused, never run)
+    [[ST, (t) => t.replace("node tools/run-packager.mjs /usr/local/bin/packager --version", 'node tools/run-packager.mjs "/usr/local/bin/packager" --version')]],
+    [[ST, (t) => t.replace('env: { REQUIRE_PACKAGER: "1", PACKAGER_BIN: /usr/local/bin/packager }', 'env: { REQUIRE_PACKAGER: "1" }').replace("    runs-on: ubuntu-latest", "    runs-on: ubuntu-latest\n    env:\n      PACKAGER_BIN: /usr/local/bin/packager")]],
+  );
   for (const [edit] of accepted) { const g = await guardWith(null, edit); assert.equal(g.code, 0, `${edit[0]} accepted: ${g.out}`); assert.match(g.out, /all 9 shaka-packager downloads/); }
+  // a new workflow that runs it through the runner: refused until CHECKED_RUNS lists it
+  const runner = await guardWith(null, null, { ".github/workflows/zz-run.yml": "name: x\non: workflow_dispatch\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node tools/run-packager.mjs /usr/local/bin/packager --version\n" });
+  assert.equal(runner.code, 1, runner.out); assert.match(runner.out, /zz-run\.yml: runs the packager through tools\/run-packager\.mjs, and CHECKED_RUNS in tools\/check-workflow-links\.mjs does not list it/);
   // a workflow that does NOT download it may let a step fail on (a measurement that goes on past one browser)
   assert.equal((await guardWith(null, [".github/workflows/live-check.yml", (t) => t.replace("    timeout-minutes: 5", "    timeout-minutes: 5\n    continue-on-error: true")])).code, 0);
   // a dangling Dockerfile link is no reason to fail

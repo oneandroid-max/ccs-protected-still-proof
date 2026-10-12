@@ -7,7 +7,7 @@ name: site test
 on:
   push:
     branches: [main]
-    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "tools/fairplay-card.mjs", "tools/check-workflow-links.mjs", "web/research/drm/index.html", "web/research/drm/card-playready.mp4", "web/research/apple/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml", ".github/workflows/site-fairplay.yml"]
+    paths: ["site/**", "service/lib/**", "tools/playready-test-key.mjs", "tools/build-site-view.mjs", "tools/fairplay-card.mjs", "tools/check-workflow-links.mjs", "tools/run-packager.mjs", "web/research/drm/index.html", "web/research/drm/card-playready.mp4", "web/research/apple/index.html", ".github/workflows/site-test.yml", ".github/workflows/site-photos.yml", ".github/workflows/site-fairplay.yml"]
   workflow_dispatch:
 
 jobs:
@@ -21,13 +21,12 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null && ffmpeg -version | head -1
           curl -sSL -o /usr/local/bin/packager https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64
           echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the v3.9.3 release's binary, pinned (checked by tools/check-workflow-links.mjs)
-          sudo chmod +x /usr/local/bin/packager && /usr/local/bin/packager --version
+          sudo chmod +x /usr/local/bin/packager && node tools/run-packager.mjs /usr/local/bin/packager --version
       - name: The generated view page is current
         run: node tools/build-site-view.mjs --check
       - name: node --test (the worker's packager test must run)
         env: { REQUIRE_PACKAGER: "1", PACKAGER_BIN: /usr/local/bin/packager }
         run: |
-          echo "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6  /usr/local/bin/packager" | sha256sum -c - || exit 1 # the tests run it: checked again where it runs
           node --version
           set +e; node --test --test-reporter spec "site/test/*.test.mjs" 2>&1 | tee "$RUNNER_TEMP/tests.log"; rc=${PIPESTATUS[0]}; set -e
           echo "::notice title=site tests::$(grep -E '^ℹ (tests|pass|fail|skipped) ' "$RUNNER_TEMP/tests.log" | tr '\n' ' ')"

@@ -11,7 +11,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const WF = await fs.readFile(join(REPO, ".github", "workflows", "site-photos.yml"), "utf8");
@@ -156,6 +156,45 @@ test("a combined-view job whose rebuild fails commits what it left (a view of ot
   const r = runJob(d, MOSAIC, { STANDIN: "fail-removed" });
   assert.equal(r.code, 1, r.out); assert.match(r.out, /pushed/);
   assert.ok(!remoteFiles(d).some((x) => x.startsWith("site/mosaic/")), "the old view is gone from the remote");
+});
+
+// The thirteenth review, with the REAL site/worker.mjs (offline: no Axinom key, nothing packaged). (1) A view that still
+// draws a deleted picture goes even when the packager is refused or missing (what a failed set-up leaves): the job commits
+// the removal and ends red, and the step runs after a failed set-up. (2) A record rid of a deleted left-out picture, the
+// run then failing: the clean-up is committed, but it answers no request (the page then waits its ten minutes at most).
+test("the combined-view job with the REAL worker: a view of other pictures goes even when the packager is refused or missing, after a failed set-up too; a clean-up followed by a failure answers no request", async () => {
+  const lines = WF.split("\n"), at = lines.findIndex((l) => l.trim() === "- name: Make the combined view on the current tip of main and commit; refresh and redo if the push races");
+  const runAt = lines.findIndex((l, i) => i > at && /^\s+run: \|\s*$/.test(l));
+  assert.ok(lines.slice(at, runAt).some((l) => l.trim() === "if: ${{ !cancelled() }}"), "the step runs after a failed set-up");
+  const { importKeyHex, sealText, openText } = await import(pathToFileURL(join(REPO, "site", "crypto.js")).href);
+  const KEY_HEX = "5a".repeat(32), KEY = await importKeyHex(KEY_HEX), ASK = "00000000000000aa", GUID = "11111111-2222-3333-4444-555555555555";
+  const A = "a".repeat(24), X = "c".repeat(24), Y = "e".repeat(24), OLDER = { at: "2026-10-01T10:00:00.000Z", why: "an older answer, to an earlier request" };
+  const view = (ids, skipped) => ({ kind: "mosaic", version: 1, width: 640, height: 480, cols: ids.length, rows: 1, prKidGuid: GUID, builtAt: "2026-10-11T09:00:00.000Z", ids,
+    tiles: ids.map((id, i) => ({ id, name: id[0] + ".png", x: i * 320, y: 0, w: 320, h: 480 })), skipped: skipped.map((id) => ({ id, name: id[0] + ".png", reason: "could not be read back" })), fairplay: null, answered: [], kept: OLDER });
+  const go = async (ready, meta, payload) => {
+    const d = await scratch(), other = join(d, "other");
+    git(other, "pull", "-q", "origin", "main");
+    for (const f of ["site/crypto.js", "site/worker.mjs", "site/axinom.mjs", "site/config.json", "service/lib/pipeline.mjs", "service/lib/util.mjs", "service/lib/exif.mjs", "service/lib/packager-pin.mjs", "tools/playready-test-key.mjs"]) {
+      await fs.mkdir(join(other, dirname(f)), { recursive: true }); await fs.copyFile(join(REPO, f), join(other, f));
+    }
+    await fs.writeFile(join(other, "site", "gallery.json.enc"), await sealText(KEY, JSON.stringify({ updatedAt: "2026-10-12T00:00:00.000Z", photos: ready.map((id) => ({ id, name: id[0] + ".png", status: "ready", prKidGuid: GUID })) })));
+    await fs.mkdir(join(other, "site", "mosaic"), { recursive: true });
+    await fs.writeFile(join(other, "site", "mosaic", "meta.json.enc"), await sealText(KEY, JSON.stringify(meta)));
+    await fs.writeFile(join(other, "site", "mosaic", "widevine.mpd.enc"), "the view's sealed files");
+    git(other, "add", "-A"); git(other, "commit", "-qm", "the real worker and a view"); git(other, "push", "-q", "origin", "HEAD:main");
+    const evt = join(d, "event.json"); await fs.writeFile(evt, JSON.stringify({ client_payload: { action: "mosaic", key: KEY_HEX, ...payload } }));
+    const r = runJob(d, MOSAIC, { WORKER_ACTION: "mosaic", PACKAGER_BIN: "/nonexistent/packager", GITHUB_EVENT_PATH: evt, AXINOM_COM_KEY_ID: "", AXINOM_COM_KEY: "" });
+    return { d, r };
+  };
+  // (1) the view draws A and Y; Y was deleted; the packager is missing
+  const one = await go([A], view([A, Y], []), {});
+  assert.equal(one.r.code, 1, one.r.out); assert.match(one.r.out, /^::error title=Packager::the packager "\/nonexistent\/packager" was not found$/m); assert.match(one.r.out, /pushed/);
+  assert.ok(!remoteFiles(one.d).some((f) => f.startsWith("site/mosaic/")), "the view that drew the deleted picture is gone from the remote");
+  // (2) the view draws A and leaves out X and Y; Y was deleted; the page asks; the run then fails
+  const two = await go([A, X], view([A], [X, Y]), { ask: ASK });
+  assert.equal(two.r.code, 1, two.r.out); assert.match(two.r.out, /::error title=Packager::/); assert.match(two.r.out, /pushed/);
+  const pushed = JSON.parse(await openText(KEY, new Uint8Array(execFileSync("git", ["--git-dir", join(two.d, "remote.git"), "show", "main:site/mosaic/meta.json.enc"]))));
+  assert.deepEqual([pushed.skipped.map((x) => x.id), pushed.answered, pushed.kept, pushed.ids], [[X], [], OLDER, [A]], "the clean-up committed, no request answered by it, the view itself unchanged");
 });
 
 test("the Apple backfill commits what it wrote (the pictures' folders, the list, the combined view) and nothing else; a race is redone", async () => {

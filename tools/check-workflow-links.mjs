@@ -142,13 +142,13 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 
 // THIRD RULE (2026-10-11; the sixth review found three of nine downloads unpinned while the plan said all were; the
 // seventh to eleventh each found the version before stepped around). shaka-packager is the one program the jobs fetch
-// and run on pictures. THE GUARANTEE IS NOT THIS TEXT RULE: every program of ours that runs the packager on a picture
-// or the card (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the service) first checks the file it is
-// about to run against the pinned build's SHA-256 (service/lib/packager-pin.mjs, the same value as PACKAGER_SHA256
-// below, a test keeps them equal) and refuses any other, however it got there, before it is ever run; and it runs exactly
-// the path it checked. A workflow step that runs the packager itself (a shell step, or the tests) checks that same file
-// on an earlier line of the step: rule (E) below. The rest of this rule only catches the obvious slips: a workflow, image
-// or script that brings in a packager some other way. It reads every file in the repository
+// and run on pictures. THE GUARANTEE IS NOT THIS TEXT RULE: every run of the packager first checks the file it is about
+// to run against the pinned build's SHA-256, at that moment (service/lib/packager-pin.mjs, the same value as
+// PACKAGER_SHA256 below, a test keeps them equal), refuses any other, however it got there, before it is ever run, and
+// runs exactly the path it checked: our programs (site/worker.mjs, site/backfill.mjs, tools/fairplay-card.mjs, the
+// service), a workflow step (only through tools/run-packager.mjs: rule (E) below), and the tests (before any test runs
+// it). The rest of this rule only catches the obvious slips: a workflow, image or script that brings in a packager some
+// other way. It reads every file in the repository
 // but what git ignores (where git cannot say, nothing is left out) of these kinds: YAML anywhere (workflows, actions,
 // compose files), Dockerfiles and Containerfiles, Makefiles, package.json, and shell, PowerShell and batch scripts.
 // NOT read: JavaScript, Python, lock files, files of other kinds, installed packages. Whole-line comments are left out,
@@ -170,18 +170,22 @@ if (rmAt < 0 || sealAt < 0 || rmAt > sealAt) bad.push("tools/walk-site.mjs: each
 //   (C) A workflow that downloads it lets no failure pass: no `continue-on-error` but false, its key quoted or not.
 //   (D) Every known download is counted (DOWNLOADERS): when one of the listed files has more or fewer than listed (a
 //       workflow that stops downloading, or a guard that stops reading that file), it fails; a new download is listed.
-//   (E) In a workflow, a step that runs the packager (a command that starts with a packager's path, `$PACKAGER_BIN`, or
-//       `node --test` with PACKAGER_BIN set for the step) has that same path's exact check line,
-//       `echo "<sha256>  <path>" | sha256sum -c - || exit 1`, on an earlier line of the same step, and no step runs a
-//       packager by a bare name (the PATH would decide which file). A step that runs one of our programs needs nothing:
-//       they check the file themselves.
+//   (E) In a workflow, the packager file may be named only where nothing runs it unchecked: its pinned download and check
+//       lines, `chmod +x <path>`, the value of PACKAGER_BIN (our programs and the tests check that file themselves),
+//       and right after `node tools/run-packager.mjs`, the one way a workflow runs it (it checks the file at that
+//       moment, then runs exactly that file). Any other word naming it is refused, whatever the shell around it (in
+//       quotes, after `if` or `timeout`, inside `$( )`, in a variable, a step in YAML's one-line form): its path
+//       (…/packager, …/shaka-packager, …/packager-<platform>), its bare name (packager, packager-<platform>: the PATH
+//       would decide which file), or PACKAGER_BIN read in the shell. Every run through the runner is counted
+//       (CHECKED_RUNS): a guard that stops reading a workflow fails.
 // NOT seen, by design: a packager named only on a line that brings nothing in (a `COPY --from=<image> \` whose next
-// line names the packager; `cat file | tee …/packager`), a script with no extension or of a kind not read, a packager
-// run from inside a script a step calls, a step written in YAML's one-line `{ … }` form, a name built from parts.
-// Wherever one of our programs runs the packager, the run-time check refuses what any of these brings; the rest is for
-// review. Also refused, though harmless: an `install` or `cp` of the downloaded file (download it
-// to where it runs), an action input naming a packager file (an artifact `packager-version.txt`: name it otherwise),
-// an echo of the release address, and curl options beyond -f, -s, -S, -L.
+// line names the packager; `cat file | tee …/packager`, though in a workflow (E) refuses that line), a script with no
+// extension or of a kind not read, a packager run from inside a script a step calls or from a composite action, a name
+// built from parts. Wherever one of our programs runs the packager, the run-time check refuses what any of these
+// brings; the rest is for review. Also refused, though harmless: an `install` or `cp` of the downloaded file (download
+// it to where it runs), an action input naming a packager file (an artifact `packager-version.txt`: name it otherwise),
+// an echo of the release address, curl options beyond -f, -s, -S, -L, and in a workflow the word "packager" alone in a
+// printed message (write "shaka-packager").
 const PACKAGER_URL = "https://github.com/shaka-project/shaka-packager/releases/download/v3.9.3/packager-linux-x64";
 const PACKAGER_SHA256 = "7a3cf35ad146fd7810b4ededab363c8a3e6121d1b2c8391f53863126186f9ee6";
 const DOWNLOADERS = {
@@ -266,46 +270,40 @@ for (const f of repoFiles.filter((x) => !ignored.has(x) && kind(x)).sort()) {
   });
   if (fetches) lines.forEach((line, i) => { if (!/^\s*#/.test(line) && /continue-on-error["']?\s*:(?!\s*false\b)/.test(uncomment(line))) bad.push(`${f}:${i + 1}: downloads shaka-packager and lets a failure pass (continue-on-error)`); });
 }
-// (E) the steps of a workflow: each list item under a `steps:` key, with its lines (comments left out)
-function workflowSteps(lines) {
-  const steps = []; let stepsKey = -1, itemIndent = -1, cur = null;
-  lines.forEach((raw, i) => {
-    if (!raw.trim() || /^\s*#/.test(raw)) return;
-    const ind = raw.search(/\S/), item = /^\s*-(\s|$)/.test(raw);
-    if (/^\s*steps\s*:\s*$/.test(raw)) { stepsKey = ind; itemIndent = -1; cur = null; return; }
-    if (stepsKey >= 0 && ind <= stepsKey && !(item && ind === stepsKey)) { stepsKey = -1; cur = null; } // a key at or above `steps:` ends the list
-    if (stepsKey >= 0 && item && (itemIndent < 0 || ind === itemIndent)) { itemIndent = ind; cur = []; steps.push(cur); }
-    if (cur) cur.push([i, uncomment(raw)]);
-  });
-  return steps;
-}
-const RUNS = /^(?:\S*\/)?(?:shaka-)?packager(?:-[\w.-]+)?$/i, CHECK_LINE = new RegExp(`^\\s*echo "${PACKAGER_SHA256}  (\\S+)" \\| sha256sum -c - \\|\\| exit 1\\s*$`);
-let runSteps = 0;
+// (E) the runs: in a workflow, every word that names the packager file must stand where nothing runs it unchecked
+const RUNNER = "tools/run-packager.mjs";
+const CHECKED_RUNS = {
+  ".github/workflows/card-fairplay.yml": 1, ".github/workflows/drm-card.yml": 3, ".github/workflows/drm-package.yml": 3,
+  ".github/workflows/service-test.yml": 1, ".github/workflows/site-fairplay.yml": 1, ".github/workflows/site-photos.yml": 2,
+  ".github/workflows/site-test.yml": 1,
+};
+// its path (…/packager, …/shaka-packager, …/packager-<platform>) or its bare name (packager, packager-<platform>)
+const PLATFORM = "(?:linux|osx|mac|macos|darwin|win|windows)[\\w.-]*";
+const PATH_WORD = new RegExp(`/(?:shaka-)?packager(?:-${PLATFORM})?$`, "i"), BARE_WORD = new RegExp(`^packager(?:-${PLATFORM})?$`, "i");
+const CHECK_LINE = new RegExp(`^\\s*echo "${PACKAGER_SHA256}  \\S+" \\| sha256sum -c - \\|\\| exit 1\\s*$`);
+const runCounts = {};
+let runsSeen = 0;
 for (const f of repoFiles.filter((x) => !ignored.has(x) && kind(x) === "workflow").sort()) {
   let text; try { text = read(f); } catch { continue; }
-  for (const step of workflowSteps(text.split("\n"))) {
-    const bin = (step.map(([, c]) => c).join("\n").match(/\bPACKAGER_BIN\s*:\s*["']?([^\s,"'}]+)/) || [])[1];
-    const checked = new Set(); let runs = false;
-    for (const [i, code] of step) {
-      const ck = code.match(CHECK_LINE);
-      if (ck) { checked.add(ck[1]); continue; }
-      for (const seg of code.split(/&&|\|\||;|\||\$\(|`/)) {
-        const s = seg.trim().replace(/^(?:-\s+)?(?:run\s*:\s*)?/, "").replace(/^(?:sudo|exec|time|command|nohup)\s+/, ""), w = s.split(/\s+/)[0] || "";
-        const viaEnv = /^"?\$\{?PACKAGER_BIN\}?"?$/.test(w), path = viaEnv ? bin : w;
-        if (RUNS.test(w) || viaEnv) {
-          runs = true;
-          if (!viaEnv && !w.includes("/")) bad.push(`${f}:${i + 1}: runs a packager by its bare name, so the PATH decides which file: run it by the path its check line names`);
-          else if (!path || !checked.has(path)) bad.push(`${f}:${i + 1}: runs ${path || "$PACKAGER_BIN"} before this step checks it: echo "${PACKAGER_SHA256.slice(0, 12)}…  ${path || "<path>"}" | sha256sum -c - || exit 1 on an earlier line of the same step`);
-        }
-        if (/^node\s+(?:\S+\s+)*--test\b/.test(s) && bin) {
-          runs = true;
-          if (!checked.has(bin)) bad.push(`${f}:${i + 1}: runs the tests with PACKAGER_BIN=${bin} before this step checks it: echo "${PACKAGER_SHA256.slice(0, 12)}…  ${bin}" | sha256sum -c - || exit 1 on an earlier line of the same step`);
-        }
-      }
-    }
-    if (runs) runSteps++;
-  }
+  text.split("\n").forEach((line, i) => {
+    if (/^\s*#/.test(line)) return;
+    const code = uncomment(line);
+    if (/^\s*(?:-\s+)?name\s*:/.test(code) || pinnedDownload(code) || CHECK_LINE.test(code)) return; // a name; (A) and (B) judge the rest
+    // the words, split at spaces and at the shell's and YAML's punctuation (quotes, `$( )`, a variable's '=', a flow
+    // mapping's braces stand apart; ${NAME} is read as $NAME)
+    const words = code.replace(/\$\{(\w+)\}/g, "$$$1").split(/[\s;&|()<>`'"=,{}]+/).filter(Boolean);
+    words.forEach((w, k) => {
+      if (w === RUNNER && words[k - 1] === "node") { runsSeen++; runCounts[f] = (runCounts[f] || 0) + 1; return; }
+      if (!(PATH_WORD.test(w) || BARE_WORD.test(w) || /PACKAGER_BIN/.test(w))) return;
+      if (w === "PACKAGER_BIN:" || words[k - 1] === "PACKAGER_BIN:") return; // the key and its value: our programs and the tests check that file
+      if (words[k - 1] === RUNNER && words[k - 2] === "node") return; // the runner checks it, then runs exactly that file
+      if (words[k - 1] === "+x" && words[k - 2] === "chmod") return; // made runnable, not run
+      bad.push(`${f}:${i + 1}: names the packager file (${w}) where it could run unchecked: a workflow runs it only as \`node ${RUNNER} <path> …\` (it checks the file by its SHA-256, then runs exactly that file); elsewhere the file may stand only in its pinned download, its check line, \`chmod +x <path>\` and PACKAGER_BIN`);
+    });
+  });
 }
+for (const [f, n] of Object.entries(CHECKED_RUNS)) if ((runCounts[f] || 0) !== n) bad.push(`${f}: expected ${n} run${n === 1 ? "" : "s"} of the packager through ${RUNNER}, read ${runCounts[f] || 0} (a guard that reads less fails here; when a workflow changes, update CHECKED_RUNS in tools/check-workflow-links.mjs)`);
+for (const f of Object.keys(runCounts)) if (!(f in CHECKED_RUNS)) bad.push(`${f}: runs the packager through ${RUNNER}, and CHECKED_RUNS in tools/check-workflow-links.mjs does not list it: add it there with its count`);
 for (const [f, n] of Object.entries(DOWNLOADERS)) if ((counts[f] || 0) !== n) bad.push(`${f}: expected ${n} pinned download${n === 1 ? "" : "s"} of shaka-packager, read ${counts[f] || 0} (a guard that reads less fails here; when a workflow changes, update DOWNLOADERS in tools/check-workflow-links.mjs)`);
 for (const f of Object.keys(counts)) if (!(f in DOWNLOADERS)) bad.push(`${f}: a pinned download of shaka-packager that DOWNLOADERS in tools/check-workflow-links.mjs does not list: add it there with its count`);
 
@@ -315,4 +313,4 @@ if (bad.length) {
   if (bad.some((b) => /does not ask for the test card/.test(b))) console.error(`Add one of ${SAFE_VALUES.join(", ")} as the FIRST parameter of each link's query.`);
   process.exit(1);
 }
-console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards; all ${downloads} shaka-packager downloads are the pinned release, checked by its SHA-256, and each of the ${runSteps} steps that run it checks it first`);
+console.log(`ok: all ${checked} workflow links to the route-1 page ask for the test card; ${siteFiles} workflows touch the test site, each named, and the walk keeps its sealing safeguards; all ${downloads} shaka-packager downloads are the pinned release, checked by its SHA-256, and all ${runsSeen} runs of it go through ${RUNNER}, which checks it first`);

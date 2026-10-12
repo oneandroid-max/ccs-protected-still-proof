@@ -178,8 +178,11 @@ const withAnswer = (prev, ask) => (ask ? [ask] : []).concat(Array.isArray(prev) 
 const formAlive = (fp) => !!(fp && fp.master) && !(Date.parse(fp.expires) <= Date.now());
 
 // Builds site/mosaic/: the combined view of every ready picture, packaged and sealed exactly like a
-// single picture, plus its sealed layout (which picture is where, for tapping and for the list).
-export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com ? keyGate(com) : null, ask = null }) {
+// single picture, plus its sealed layout (which picture is where, for tapping and for the list). checkTool: the job's
+// check of the packager (site/worker.mjs's command passes checkPackager), asked just before the packager is first
+// needed, so a view of other pictures is removed even when the packager is refused or missing; the path it returns is
+// the one run.
+export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com ? keyGate(com) : null, ask = null, checkTool = async (p) => p }) {
   const gallery = await readGallery(siteDir, key);
   const out = join(siteDir, "mosaic"), next = join(siteDir, ".mosaic-next");
   const ready = gallery.fresh ? [] : gallery.photos.filter((x) => x.status === "ready").slice(0, MAX_PHOTOS);
@@ -194,10 +197,11 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   const drawn = cur && Array.isArray(cur.ids) ? cur.ids : [], leftOut = cur ? (cur.skipped || []).map((x) => x.id) : [];
   const samePictures = !!cur && !!ready.length && drawn.every((id) => readyIds.includes(id)) && readyIds.every((id) => drawn.includes(id) || leftOut.includes(id));
   const writeCur = async () => { cur.answered = withAnswer(cur.answered, ask); await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur))); };
-  let written = false;
   if (samePictures && leftOut.some((id) => !readyIds.includes(id))) {
     cur.skipped = (cur.skipped || []).filter((x) => readyIds.includes(x.id));
-    await writeCur(); written = true;
+    // the record alone, WITHOUT the request's id: what this run does next answers the request, and a run that then fails
+    // answers nothing (the job commits this clean-up all the same: site-photos.yml)
+    await fs.writeFile(join(out, "meta.json.enc"), await sealText(key, JSON.stringify(cur)));
     log("the combined view's record no longer names left-out pictures that were since deleted");
   }
   const hasForm = !!(cur && cur.fairplay && cur.fairplay.master), alive = !!cur && formAlive(cur.fairplay);
@@ -213,7 +217,7 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   // a repeated request (the page asking while the job's own run is on its way) changes nothing: when the
   // combined view already holds exactly these pictures, none left out, and a good form, keep it
   if (upToDate && (!com || await fairPlayCurrent(out, cur.fairplay, com))) {
-    if (ask && !written) await writeCur(); // the answer to the page that asked
+    if (ask) await writeCur(); // the answer to the page that asked
     log(`the combined view already holds these ${ready.length} picture(s): unchanged`);
     return { status: "current", count: drawn.length };
   }
@@ -222,6 +226,7 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
   // view's own output cannot be read back is it rebuilt, below (where a view with a working form is rebuilt only once
   // Axinom accepts the key).
   if (upToDate) {
+    tools = { ...tools, packager: await checkTool(tools.packager) }; // a refusal ends the job red, with nothing answered
     try { const r = await refreshMosaicFairPlay({ siteDir, key, tools, com, keyOk, ask }); log(`the combined view's Apple form: ${r}`); return { status: "current", count: drawn.length, fairplay: r }; }
     catch (e) {
       if (e.gate) return keep(`${e.replacing ? "its Apple form was not renewed" : "no Apple form was made for it"}: ${cause(e.answer)}`, "kept");
@@ -239,14 +244,16 @@ export async function buildMosaic({ siteDir, key, tools, com = null, keyOk = com
     if (!answer || !mayReplace(answer)) return keep(`rebuilding it would remove its Apple form, and ${cause(answer)}`, "kept");
   }
   // A rebuild is made beside the old view (.mosaic-next) and swapped in only once complete. A view of OTHER pictures
-  // goes first, whatever happens next (its content must not stay on the site: when the rebuild then fails, the job still
-  // commits that removal, and ends red; .github/workflows/site-photos.yml). For the SAME pictures the old view
-  // stays until the swap, and a new view that came out without an Apple form while the old one has a working form is
-  // not swapped in at all: the old view is kept whole and the failure said.
+  // goes first, whatever happens next, before the packager is even checked (its content must not stay on the site: when
+  // the run then fails, the job still commits that removal, and ends red, even after a failed set-up;
+  // .github/workflows/site-photos.yml). For the SAME pictures the old view stays until the swap, and a new view that
+  // came out without an Apple form while the old one has a working form is not swapped in at all: the old view is kept
+  // whole and the failure said.
   await fs.rm(next, { recursive: true, force: true });
   if (!samePictures) await fs.rm(out, { recursive: true, force: true });
   if (gallery.fresh) { log("the gallery belongs to another key: no combined view"); return { status: "none", count: 0 }; }
   if (!ready.length) { log("no ready pictures: no combined view"); return { status: "none", count: 0 }; }
+  tools = { ...tools, packager: await checkTool(tools.packager) }; // after the removal above; the path checked is the one run
   const work = await fs.mkdtemp(join(tmpdir(), "site-mosaic-"));
   try {
     const used = [], skipped = [];
@@ -387,7 +394,7 @@ export async function backfillFairPlay({ siteDir, key, tools, com, keyOk = com ?
   return { status: failed ? "partial" : "done", added, already, failed, mosaic, count: ready.length };
 }
 
-export async function run({ payload, siteDir, repo, token, tools, action, com = null, checkKey = checkKeyWithAxinom }) {
+export async function run({ payload, siteDir, repo, token, tools, action, com = null, checkKey = checkKeyWithAxinom, checkTool }) {
   const p = payload || {};
   const act = action || p.action;
   if (act !== "add" && act !== "delete" && act !== "mosaic" && act !== "fairplay") throw new Error(`unknown action ${JSON.stringify(act)}`);
@@ -397,7 +404,7 @@ export async function run({ payload, siteDir, repo, token, tools, action, com = 
   // the page's request id (16 hex), written into the combined view's record with the answer; absent from the job's own runs
   if (p.ask !== undefined && !(typeof p.ask === "string" && /^[0-9a-f]{16}$/.test(p.ask))) throw new Error("bad request id");
   const keyOk = com ? keyGate(com, checkKey) : null;
-  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk, ask: p.ask || null });
+  if (act === "mosaic") return buildMosaic({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk, ask: p.ask || null, ...(checkTool ? { checkTool } : {}) });
   if (act === "fairplay") return backfillFairPlay({ siteDir, key: await importKeyHex(p.key), tools, com, keyOk });
   if (!/^[0-9a-f]{24}$/.test(String(p.id))) throw new Error("bad picture id");
   const key = await importKeyHex(p.key);
@@ -484,8 +491,11 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   const siteDir = process.env.SITE_DIR || fileURLToPath(new URL("./", import.meta.url));
   const tools = { ffmpeg: process.env.FFMPEG_BIN || "ffmpeg", ffprobe: process.env.FFPROBE_BIN || "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
   const action = process.env.WORKER_ACTION || (event.client_payload || {}).action;
-  if (action !== "delete") { // only the pinned build ever runs on a picture (a deletion runs no packager, and is never held up)
-    try { tools.packager = await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); } // runs the path checked
+  // only the pinned build ever runs on a picture, by the path checked: checked here as the job starts, except for a deletion
+  // (it runs no packager, and is never held up) and the combined view (checked just before it first packages, so that a
+  // view of other pictures is removed first: buildMosaic)
+  if (action !== "delete" && action !== "mosaic") {
+    try { tools.packager = await checkPackager(tools.packager); } catch (e) { console.log(`::error title=Packager::${e.message}`); process.exit(1); }
   }
   // Apple's form needs the Axinom key; without a usable one every picture is still prepared for the rest
   let com = null;
@@ -494,7 +504,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     catch (e) { console.log(`::warning title=Apple form::the Axinom key is not usable (${e.message}): no Apple (FairPlay) form this time`); }
   } else console.log("the Axinom key is not set: no Apple (FairPlay) form (Apple devices stay held back)");
   let r; // a job that fails is named on the run's page (a page's request then gets no answer, and the page stops waiting after ten minutes)
-  try { r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com }); }
-  catch (e) { console.log(`::error title=Site job::${String(e.message || e).slice(0, 400)}`); process.exit(1); }
+  try { r = await run({ payload: event.client_payload, siteDir, repo: process.env.GITHUB_REPOSITORY || "oneandroid-max/ccs-protected-still-proof", token: process.env.GITHUB_TOKEN, tools, action: process.env.WORKER_ACTION || undefined, com, checkTool: checkPackager }); }
+  catch (e) { console.log(`::error title=${e && e.packager ? "Packager" : "Site job"}::${String(e.message || e).slice(0, 400)}`); process.exit(1); }
   for (const line of resultLines(r, { com, action })) console.log(line);
 }

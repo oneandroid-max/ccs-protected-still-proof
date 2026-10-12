@@ -12,9 +12,14 @@ import { checkBoxes } from "../../service/lib/pipeline.mjs";
 import { derivePlayReadyTestKey } from "../../tools/playready-test-key.mjs";
 import { withOrientation } from "../../service/lib/exif.mjs";
 import { run as exec } from "../../service/lib/util.mjs";
+import { checkPackager } from "../../service/lib/packager-pin.mjs";
 
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
-const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: process.env.PACKAGER_BIN || "packager" };
+// The packager the tests run: the pinned build only, checked by its SHA-256 before any test runs it, and run by the path
+// checked (the CI test step sets PACKAGER_BIN). Any other file is refused here, never run: with REQUIRE_PACKAGER=1 that
+// ends the run; without it the tests that need the packager are skipped.
+const pinnedPackager = await checkPackager(process.env.PACKAGER_BIN || "packager").catch((e) => { if (process.env.REQUIRE_PACKAGER === "1") throw e; return null; });
+const tools = { ffmpeg: "ffmpeg", ffprobe: "ffprobe", packager: pinnedPackager || "/nonexistent/no-pinned-packager-here" };
 const SALT = toBase64(new Uint8Array(16).fill(7));
 const KEY = await deriveKey("a test password, twelve+", SALT, 1000);
 const KEY_HEX = await exportKeyHex(KEY);
