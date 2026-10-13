@@ -34,10 +34,11 @@ const acceptKey = async () => ({ accepted: true, reached: true, status: 400, mes
 const notice = (title, msg) => { if (process.env.GITHUB_ACTIONS === "true") console.log(`::notice title=${title}::${msg}`); };
 const unwrapKey = (comKey, kidHex, encB64) => { const d = createDecipheriv("aes-256-cbc", comKey, Buffer.from(kidHex, "hex")); d.setAutoPadding(false); return Buffer.concat([d.update(Buffer.from(encB64, "base64")), d.final()]).toString("hex"); };
 
-// The scratch folder every test below uses. Made HERE, before the first test is registered: node:test starts running
+// The scratch folder the tests below write in. Made HERE, before the first test is registered: node:test starts running
 // registered tests while the module is still evaluating, so a top-level await placed after the tests (where this line
-// lived until 2026-10-13) let an early test reach `tmp` before it existed ("Cannot access 'tmp' before initialization",
-// 1 run in 3 of the site suite on a loaded machine). Removed at the end by after().
+// lived until 2026-10-13) let an early test reach `tmp` before it existed ("Cannot access 'tmp' before initialization":
+// seen once in three runs of the site suite on the maintainer's machine, 2026-10-13 — one observation; which of two file
+// operations finishes first decides it, so a green run proves nothing). Removed at the end by after().
 const tmp = await fs.mkdtemp(join(tmpdir(), "fp-test-"));
 
 test("the communication key is read strictly: both values, a GUID, 32 bytes; the id kept as given; no value in a message", () => {
