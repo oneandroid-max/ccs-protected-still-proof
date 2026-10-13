@@ -136,13 +136,13 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
 // twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
 // unchanged), with only the page version's date and time left out.
-const PAGE_FILE = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "1da0fa86005413e7", "site/view.html": "4ff92d739c251c85", "site/index.html": "7e7db00b2ee3a21e" };
+const PAGE_FILE = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "519f263c59bf5c7a", "site/view.html": "ab260b17f819a60a", "site/index.html": "b0e76e088b7a38c1" };
 const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_SCRIPT = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "52dcd21ea586c3e8", "site/view.html": "9fe895c0c2585ba2", "site/index.html": "634991abe0d7501f" };
+const PAGE_SCRIPT = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "b09d27b926fdf67e", "site/view.html": "e9cc01c0e7012880", "site/index.html": "a35480c7545b3673" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_WORDS = { "web/research/drm/index.html": "dd0e54d62d77bcaa", "site/view.html": "b87e0a3b68f08a6b", "site/index.html": "94d092153d99f95c" };
+const PAGE_WORDS = { "web/research/drm/index.html": "54532a6c4cfd6a1f", "site/view.html": "7b4f4cfff194ca9c", "site/index.html": "d7828ae1b94a1189" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const html = await read(f);
@@ -198,7 +198,7 @@ test("the lede says where software protection is accepted, as the page's own dec
     const lede = html.match(/<p class="lede">([\s\S]*?)<\/p>/)[1].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
     assert.match(lede, /hardware protection \(Widevine or PlayReady\) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome \(apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others\)\./, f);
     assert.match(lede, /Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device\./, f);
-    assert.match(lede, /On an iPhone or iPad it is shown only through Apple's FairPlay \(screenshots of FairPlay video were measured black on an iPhone, 2026-10-12, both of Apple's test videos and of one of the test site's pictures, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured\); on a Mac it is held back until a screenshot there is measured black\./, f);
+    assert.match(lede, /On an iPhone or iPad it is shown only through Apple's FairPlay \(screenshots of FairPlay video were measured black on an iPhone: 2026-10-12, both of Apple's test videos and of one of the test site's pictures, and 2026-10-13, the test site's combined view of all its pictures, nine that day, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured\); on a Mac it is held back until a screenshot there is measured black\./, f);
     // the levels each tier asks for, as the lede's words mean them (the twenty-first review: a software level added to
     // the hardware tier passed), on every browser below (the twenty-second review: changed on Linux only, it passed);
     // what a request actually carries is checked by the drive

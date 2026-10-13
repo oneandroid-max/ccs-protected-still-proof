@@ -42,7 +42,7 @@
 <body>
 <h1>Route 1: the browser's own protected video path</h1>
 <p class="detected" id="detected" hidden></p>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone, 2026-10-12, both of Apple's test videos and of one of the test site's pictures, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
+<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone: 2026-10-12, both of Apple's test videos and of one of the test site's pictures, and 2026-10-13, the test site's combined view of all its pictures, nine that day, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
 
 <div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
@@ -124,7 +124,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id), set = (id, t, cls) => { $(id).textContent = t; if (cls !== undefined) $(id).className = cls; };
   const log = (t) => { $("log").textContent += t + "\n"; };
-  const PAGE_VERSION = "2026-10-12 21:09 UTC — the one page (your pictures, all at once, at the test site's own address, which this link with no parameter opens); iPhones and iPads switched on: FairPlay measured black on the owner's iPhone, one of his own pictures too; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
+  const PAGE_VERSION = "2026-10-13 11:57 UTC — the combined view of all the test site's pictures measured black on the owner's iPhone; the one page (your pictures, all at once, at the test site's own address, which this link with no parameter opens); iPhones and iPads switched on: FairPlay measured black on the owner's iPhone, one of his own pictures too; one link for every device: Apple's test on this page for a Mac (Axinom's FairPlay film, our test card, our own account's card, clear control); test card; ClearKey control (?levels=clearkey); Apple FairPlay test (?levels=fairplay); each Apple form's own licence address; Axinom's reason when it refuses";
   set("r-ver", PAGE_VERSION);
   set("r-time", new Date().toISOString().replace("T", " ").slice(0, 19) + " UTC");
   set("r-platform", navigator.userAgent);
@@ -176,9 +176,11 @@
   // it: "yes they were moving, OK switch it on". NOT measured: a screen recording; an iPad (the switch covers iPads too,
   // Safari there being the same engine); other iOS versions; and our own Axinom account's licence on a real device (the
   // third video, our card under our own account as the pictures are licensed, was black but its line was below the
-  // screenshot's edge; seen since: one of the owner's own pictures, licensed by our own account, played in Safari on his
-  // iPhone and came out black in its screenshot, his answer at 19:07Z the same day). FAIRPLAY_MEASURED_ON names the
-  // device each measurement was made on, for the lines that cite it.
+  // screenshot's edge; seen since: one of the owner's own pictures, licensed by our own account, played on his iPhone
+  // (which browser he used was not reported) and came out black in its screenshot, his answer at 19:07Z the same day; and on 2026-10-13 the one page's
+  // combined view of all his pictures there, nine that day, played on his iPhone and came out black in its screenshot,
+  // his answer "iPhone screenshot: combined view black, all 9 played"). FAIRPLAY_MEASURED_ON names the device each
+  // measurement was made on, for the lines that cite it.
   const FAIRPLAY_MEASURED = { "iPhone/iPad": "2026-10-12", "Mac": "" };
   const FAIRPLAY_MEASURED_ON = { "iPhone/iPad": "an iPhone", "Mac": "a Mac" };
   // Apple's engine: every browser on an iPhone or iPad, and Safari on a Mac (Chrome, Edge and Firefox on a

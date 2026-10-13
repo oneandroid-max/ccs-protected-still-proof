@@ -1,5 +1,6 @@
-# Opens the one test page (web/research/drm/?clip=card; Apple's test runs there on Apple's engine since
-# 2026-10-12, when the separate Apple check page became a forward to it) in Safari on a GitHub Mac, driven
+# Opens the one test page (web/research/drm/?clip=card; Apple's test runs there on a Mac in Safari since 2026-10-12, when
+# the separate Apple check page became a forward to it; on an iPhone or iPad, switched on the same day, the test card plays
+# through FairPlay instead) in Safari on a GitHub Mac, driven
 # through Safari's own WebDriver, reads what the page detected and Apple's test's readout (FairPlay
 # available? licences obtained? the videos playing?), and captures the screen from the operating system
 # the way a person's screenshot would, plus Safari's own page screenshot. Then opens the same page in its
@@ -17,7 +18,7 @@ permissions:
   contents: write
 
 env:
-  EXPECT_VERSION: "21:09 UTC — the one page"
+  EXPECT_VERSION: "11:57 UTC — the combined view"
   APPLE_PAGE: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?clip=card"
   ROUTE1_TEST: "https://oneandroid-max.github.io/ccs-protected-still-proof/web/research/drm/?levels=fairplay"
 
