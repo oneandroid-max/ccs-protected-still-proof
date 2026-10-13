@@ -14,7 +14,7 @@
 </head>
 <body>
 <h1>Can a web page make a capture come out black without a vendor path?</h1>
-<p>Candidates 1 to 9 are tried one at a time on a stock browser with no vendor DRM, and the result is one screenshot; a pass is a black capture, and none of them is expected to pass: the point is to close the question with evidence, not opinion. Candidate 10, the browser's own vendor DRM path, is on the table for comparison; it is the one measured black. Results are logged in <a href="https://github.com/oneandroid-max/ccs-protected-still-proof/blob/main/PLAN.md">PLAN.md</a> with the device, system and browser, and the screenshot's hash where one reached the record.</p>
+<p>Candidates 1 to 9 are tried one at a time on a stock browser with no vendor DRM, and the result is what a capture holds, or that the device refused one (candidate 7); a pass is a black capture, and none of them is expected to pass: the point is to close the question with evidence, not opinion. Candidate 10, the browser's own vendor DRM path, is on the table for comparison; it is the one measured black. Results are logged in <a href="https://github.com/oneandroid-max/ccs-protected-still-proof/blob/main/PLAN.md">PLAN.md</a> with the device and the browser where each was reported (the colleague's copy in row 10 came with neither); the owner's own screenshots are recorded there in his words and in what was read from them, with no hash; a capture's hash is logged only for captures taken on GitHub's runners.</p>
 <table>
 <thead><tr><th>#</th><th>Candidate</th><th>How to run it</th><th>Expected</th><th>Measured</th></tr></thead>
 <tbody>
@@ -31,6 +31,6 @@
 </tbody>
 </table>
 <h2>Why none of candidates 1 to 9 is expected to pass</h2>
-<p>The browser hands every frame it draws to the device's compositor, and the device's screenshot reads that compositor. Only a surface the device marks as protected is left out, and on the web such surfaces exist only behind the vendor DRM paths: candidate 10, route 1, the one measured black. A page can change what it draws (candidate 6 does), where it draws (2, 3, 5) and how the bytes arrive (4); it cannot change what the device does with the frame once drawn.</p>
+<p>The browser hands every frame it draws to the device's compositor, and the device's screenshot reads that compositor. Only a surface the device marks as protected is left out, and on the web a page gets such a surface only through the vendor DRM paths: candidate 10, route 1, the one measured black (a private tab's secure flag, candidate 7, is the browser's and the viewer's, not the page's). A page can change what it draws (candidate 6 does), where it draws (2, 3, 5) and how the bytes arrive (4); it cannot change what the device does with the frame once drawn.</p>
 </body>
 </html>
