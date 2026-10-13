@@ -96,7 +96,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     try {
       const key = await importKeyHex(st.photoKeyHex);
       const base = HOME ? "mosaic/" : `photos/${id}/`;
-      const missing = "this picture is not on the site yet (publishing takes about a minute after the job; try again shortly)";
+      const missing = (HOME ? "the combined view is" : "this picture is") + " not on the site yet (publishing takes about a minute after the job; try again shortly)";
       const sealed = await fetchSealed(base + "meta.json.enc", missing, HOME);
       if (!sealed) {
         // the one page before its combined view is made: the page says so where the view will play, and plays nothing

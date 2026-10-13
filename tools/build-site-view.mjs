@@ -117,6 +117,12 @@ export function buildView(indexHtml, mode = "one", preludeVersion = "0", gallery
     // the test-mode banners (?levels= on the one page) name what the test card stands in for: your pictures, not a single photo
     t = once(t, "plays a TEST CARD, never the photo, to measure whether this browser", "plays a TEST CARD, never your pictures, to measure whether this browser", "software test banner");
     t = once(t, "through Apple's FairPlay, never the photo, to measure whether an iPhone", "through Apple's FairPlay, never your pictures, to measure whether an iPhone", "Apple test banner");
+    // the lede (shown to every signed-in viewer, every device) names the combined view of every picture, not a single photo;
+    // "The combined view" is one video, so each later "it" stays correct
+    t = once(t, "No install. The photo is a short video encrypted with Common Encryption", "No install. The combined view is a short video encrypted with Common Encryption", "lede opening");
+    t = once(t, "<strong>The photo is shown only with protection this page accepts:</strong>", "<strong>The combined view is shown only with protection this page accepts:</strong>", "lede rule");
+    // the ?clip=card diagnostic readout names what the card stands in for
+    t = once(t, 'name: "the test card (not the photo)"', 'name: "the test card (not your pictures)"', "card readout noun");
   }
   t = once(t, '<p><a href="../">Back to the list of candidates</a> · <a href="../../../widevine/">the first Widevine proof (2026-10-09)</a></p>',
     HOME ? "</div>" : '<p><a href="index.html">Back to your pictures</a></p>', "footer");

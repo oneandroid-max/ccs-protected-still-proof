@@ -110,7 +110,7 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
         for (const [q, order] of Object.entries(TESTS)) {
           const r = at(q);
           assert.equal(r.TEST, true, what(q)); assert.equal(r.CARD, true, what(q)); assert.deepEqual(r.ORDER, order, what(q));
-          assert.equal(r.CLIP.name, "the test card (not the photo)", what(q));
+          assert.equal(r.CLIP.name, pageName === "site/index.html" ? "the test card (not your pictures)" : "the test card (not the photo)", what(q));
           assert.deepEqual(r.CLIP.fairplay, { manifest: cardPath, token: publicToken }, what(q) + ": the card's Apple form with Axinom's public token");
         }
         for (const q of OTHER) {
@@ -136,19 +136,23 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
 // twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
 // unchanged), with only the page version's date and time left out.
-const PAGE_FILE = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "1da0fa86005413e7", "site/view.html": "79b916f13dd015fd", "site/index.html": "4d10f16d6cc7cd87" };
+const PAGE_FILE = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "1da0fa86005413e7", "site/view.html": "4ff92d739c251c85", "site/index.html": "7e7db00b2ee3a21e" };
 const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_SCRIPT = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "52dcd21ea586c3e8", "site/view.html": "08df02a5596bd887", "site/index.html": "8daa3db28dba9d27" };
+const PAGE_SCRIPT = { "site/view-prelude.js": "5f762a92aafaf1bf", "web/research/drm/index.html": "52dcd21ea586c3e8", "site/view.html": "9fe895c0c2585ba2", "site/index.html": "634991abe0d7501f" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_WORDS = { "web/research/drm/index.html": "dd0e54d62d77bcaa", "site/view.html": "b87e0a3b68f08a6b", "site/index.html": "2275c670ed252573" };
+const PAGE_WORDS = { "web/research/drm/index.html": "dd0e54d62d77bcaa", "site/view.html": "b87e0a3b68f08a6b", "site/index.html": "94d092153d99f95c" };
 test("the route-1 page's own words claim no measurement that was not made, and name where software protection was measured", async () => {
   for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const html = await read(f);
     const words = html.replace(/<script[\s\S]*?<\/script>/g, " ").replace(/<style[\s\S]*?<\/style>/g, " ").replace(/<!--[\s\S]*?-->/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
     for (const re of [/known to come out black/i, /measured black there/i, /where screenshots were measured black/i, /screenshots are known/i]) assert.ok(!re.test(words), `${f}: no claim beyond the measurements (${re})`);
     assert.match(words, /software protection in Chrome and Edge on Windows and in Chrome on Android \(screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11\)/, `${f}: the lede names where software protection was measured`);
+    // the one page shows the combined view of every picture, not a single photo (the thirty-second review's re-review: the
+    // lede still said "The photo" on the one page); route-1 and a single picture's view DO show one photo, so this is the
+    // one page only. The lines its script writes at runtime (the top line, the readout) are held by the drive's (7c) check.
+    if (f === "site/index.html") assert.ok(!/\bthe photo\b/i.test(words), `${f}: the one page must never call the combined view "the photo" in its visible text (name it "the combined view" or "your pictures"): "${(words.match(/(?:\S+ ){0,3}the photo(?: \S+){0,3}/i) || ["…"])[0]}"`);
     const print = createHash("sha256").update(words).digest("hex").slice(0, 16);
     assert.equal(print, PAGE_WORDS[f], `${f}: its words changed; read them against the measurements, then update the fingerprint (${print}):\n${words}`);
     const said = createHash("sha256").update(scriptOf(html)).digest("hex").slice(0, 16);

@@ -75,7 +75,7 @@
   <div id="list"><p class="muted">Loading…</p></div>
   <p class="muted small">The jobs that prepare pictures run here: <a href="https://github.com/oneandroid-max/ccs-protected-still-proof/actions/workflows/site-photos.yml">GitHub Actions</a>. This page refreshes itself while a picture is being prepared. Signing in lasts four hours in this tab.</p>
 </section>
-<p class="lede">No install. The photo is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The photo is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone, 2026-10-12, both of Apple's test videos and of one of the test site's pictures, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
+<p class="lede">No install. The combined view is a short video encrypted with Common Encryption; the browser's own DRM decrypts it inside the device's protected path (Widevine in Chrome and Edge, PlayReady as a fallback in Edge on Windows, FairPlay on Apple devices). <strong>The combined view is shown only with protection this page accepts:</strong> hardware protection (Widevine or PlayReady) on any device; and software protection in Chrome and Edge on Windows and in Chrome on Android (screenshots under it were measured black in Chrome and Edge on a Windows PC and in Chrome on an Android phone, 2026-10-11) and, not yet measured, in Edge on Android and in the other browsers on Windows and Android that this page reads as Chrome (apps' built-in browsers, DuckDuckGo, Yandex, Vivaldi and others). Software protection anywhere else is not accepted, Samsung Internet, Opera and Firefox included: a screenshot on a test machine showed the test card in Firefox on a Mac and in Chrome on Linux; other browsers and platforms are not yet measured on a real device. On an iPhone or iPad it is shown only through Apple's FairPlay (screenshots of FairPlay video were measured black on an iPhone, 2026-10-12, both of Apple's test videos and of one of the test site's pictures, licensed by our own Axinom account as they all are; a screen recording, an iPad and other iOS versions are not yet measured); on a Mac it is held back until a screenshot there is measured black. <span id="buttons-note">It starts on its own when the page opens; the buttons only run it again.</span></p>
 
 <div class="row" id="buttons">
   <button id="auto" class="primary">Play again</button>
@@ -154,7 +154,7 @@
 </div>
 <script>window.__ccsMode = "home"; window.__ccsSession = new Promise((r) => { window.__ccsSignIn = r; }); window.__ccsReady = new Promise((r) => { window.__ccsResolve = r; });</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/shaka-player/5.2.10/shaka-player.compiled.min.js" integrity="sha384-ZWp1oeFexKioXrhPcPdQ6INqt3fK8DsBJbWzlRdMokbapQn4fKqwPVPox7JNY7wJ" crossorigin="anonymous"></script>
-<script type="module" src="view-prelude.js?v=52ae11841896"></script>
+<script type="module" src="view-prelude.js?v=5f762a92aafa"></script>
 <script type="module" src="gallery.js?v=8328d23dd886"></script>
 <script>
 (async () => {
@@ -245,7 +245,7 @@
   // the card's Apple form, with Axinom's public token (also played by Apple's test below)
   const CARD_FAIRPLAY = { manifest: "../web/research/drm/card-fairplay/master.m3u8", token: AXINOM_PUBLIC_TOKEN };
   const CLIP = CARD
-    ? { name: "the test card (not the photo)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: CARD_FAIRPLAY }
+    ? { name: "the test card (not your pictures)", widevine: "../web/research/drm/card-widevine.mpd", playready: "../web/research/drm/card-playready.mpd", prKid: "5CFCB567-F2F1-9D08-A30B-20483D92E930", fairplay: CARD_FAIRPLAY }
     : { name: CTX.content, widevine: "mem://photo/widevine.mpd", playready: "mem://photo/playready.mpd", prKid: CTX.prKidGuid, fairplay: CTX.fairplay, none: CTX.none || null };
   set("r-content", CLIP.name);
   // the route-1 page's test photo never gets an Apple form (only the test card and the site's pictures do)
