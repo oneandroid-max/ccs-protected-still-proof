@@ -1,7 +1,8 @@
 // Walks the LIVE test site the way a person does, in a real browser already running on this machine
-// (Chrome or Edge on a GitHub Windows runner, reached through its debugging port): open the site, type
-// the password, read the gallery, wait for the combined view, open it, watch it play, read the list,
-// tap a picture, go back, go back to the gallery. Each step is timed and its screen is captured from
+// (Chrome or Edge on a GitHub Windows runner, reached through its debugging port): open THE ONE PAGE, type
+// the password, read the gallery, wait for the combined view to play INLINE above the gallery, watch it
+// play, go full screen, tap a picture (opening it on its own), go back to the one page where the combined
+// view plays again. Each step is timed and its screen is captured from
 // the operating system (what a person would see), and every capture is SEALED at once to a public key
 // whose private half never leaves the reader's machine, because these captures show the owner's
 // pictures (a runner has no protected video path, so its captures are not black). The clear capture
@@ -115,31 +116,30 @@ try {
   const cards = await page.$$eval("#list > .card", (els) => els.length);
   step(ready > 0, `signed in; the gallery shows ${cards} picture card(s), ${ready} ready (slots: ${(await text("#slots")).trim()})`);
   await capture("gallery");
-  // 3. the combined view: offered once it holds every ready picture (the page asks GitHub to make it if needed)
-  let last = "";
+  // 3. the combined view plays INLINE on the one page, above the gallery (the owner, 2026-10-12: "one page with all the
+  // images"): wait until it is current (the page asks GitHub to (re)make it if needed), playing one "Play the new view"
+  // tap if a newer one became ready while we waited
+  let last = "", n = 0;
   const until = Date.now() + 15 * 60 * 1000;
   while (Date.now() < until) {
     const all = (await text("#all")).replace(/\s+/g, " ").trim();
     if (all !== last) { say(`gallery, all-at-once card: ${all.replace(/\(could not be read back\):.*$/, "(names withheld)")}`); last = all; }
-    const btn = (await text("#open-all")).trim();
-    if (/^Open all \d+ at once$/.test(btn)) break;
+    const m = /All (\d+) in one protected view above/.exec(all);
+    if (m) { n = Number(m[1]); break; }
+    if (await page.$("#replay")) { say("a newer combined view is ready; playing it"); await page.click("#replay"); await page.waitForSelector("#app:not([hidden])", { timeout: 60000 }); await page.waitForTimeout(3000); continue; }
     await page.waitForTimeout(5000);
   }
-  const btn = (await text("#open-all")).trim();
-  const n = Number((/^Open all (\d+) at once$/.exec(btn) || [])[1] || 0);
-  step(n === ready, `the gallery offers the combined view of all ${n} (ready pictures: ${ready})`);
-  await capture("gallery-all-offered");
-  // 4. open it
-  await page.click("#open-all");
-  await page.waitForURL(/all\.html/, { timeout: 30000 });
+  step(n === ready, `the combined view holds all ${n} ready picture(s), playing inline above the gallery (ready pictures: ${ready})`);
+  // 4. it plays, right above the gallery
   const r1 = await waitPlaying("all");
   say(`combined view readout: ${JSON.stringify(r1)}`);
   step(/playing/.test(r1["r-play"]), `the combined view plays: ${r1["r-play"]}`);
   const a1 = await videoAdvancing();
   step(a1.ok, `its video element: ${JSON.stringify(a1)}`);
-  step((await text("#title")).trim() === `All your pictures, protected (${n})`, `its title: ${(await text("#title")).trim()}`);
-  const tiles = await page.$$eval("#tiles li", (els) => els.length);
-  step(tiles === n, `its list holds ${tiles} picture(s)`);
+  step((await text("#title")).trim() === `Your pictures, protected (${n})`, `its title: ${(await text("#title")).trim()}`);
+  step(await page.evaluate(() => { const g = document.getElementById("gallery"), st = document.getElementById("stage"); return !!g && !!st && !!(st.compareDocumentPosition(g) & Node.DOCUMENT_POSITION_FOLLOWING) && st.getBoundingClientRect().top < g.getBoundingClientRect().top; }), "the pictures play above the gallery");
+  const mosaicN = await page.evaluate(() => (window.__ccsMosaic && window.__ccsMosaic.tiles.length) || 0);
+  step(mosaicN === n, `the combined view holds ${mosaicN} tappable picture(s)`);
   await page.locator("#v").scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
   await capture("all-playing");
@@ -157,9 +157,9 @@ try {
   await page.evaluate(() => document.exitFullscreen && document.exitFullscreen()).catch(() => {});
   await page.waitForTimeout(1000);
   step(await page.evaluate(() => !document.fullscreenElement), "full screen left again");
-  await page.locator("#tiles").scrollIntoViewIfNeeded();
-  await capture("all-list");
-  // 5. tap a picture (the second, or the first if there is one); first note, in this tab, how the page
+  await page.locator("#all").scrollIntoViewIfNeeded();
+  await capture("all-card");
+  // 5. tap a picture (the second, or the first if there is one), on the inline view; first note, in this tab, how the page
   // comes back later (handed back from the browser's memory, or loaded afresh)
   await page.evaluate(() => { window.__walkMark = 1; addEventListener("pageshow", (e) => sessionStorage.setItem("walk-pageshow", e.persisted ? "from memory" : "loaded")); });
   await page.locator("#v").scrollIntoViewIfNeeded();
@@ -179,30 +179,26 @@ try {
   await page.locator("#v").scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
   await capture("one-picture");
-  // 6. back, the way a person goes back
+  // 6. back, the way a person goes back: to the one page, where the combined view plays again, above the gallery
   // a real browser may restore the page from memory on Back, which fires no "load" event: wait for the
   // address, then for the readout, and record which kind of return it was
   await page.goBack({ waitUntil: "commit", timeout: 15000 });
   // the address alone, polled (waitForURL also waits for a "load" event, which a page handed back from memory never fires)
-  for (let i = 0; i < 60 && !/all\.html/.test(page.url()); i++) await page.waitForTimeout(250);
+  for (let i = 0; i < 60 && !/\/site\/(index\.html)?(\?|#|$)/.test(page.url()); i++) await page.waitForTimeout(250);
   // then a FRESH document (the marked one, handed back from memory, reloads itself): never judge the old one
   let fresh = false;
   for (let i = 0; i < 80 && !fresh; i++) { fresh = await page.evaluate(() => !window.__walkMark).catch(() => false); if (!fresh) await page.waitForTimeout(250); }
-  step(fresh, "after Back the combined view is a freshly loaded page (not the one held in memory)");
+  step(fresh, "after Back the one page is a freshly loaded page (not the one held in memory)");
+  await page.waitForSelector("#app:not([hidden])", { timeout: 30000 });
   const r4 = await waitPlaying("all again");
   const how = await page.evaluate(() => `${sessionStorage.getItem("walk-pageshow")}, then ${(performance.getEntriesByType("navigation")[0] || {}).type}`).catch(() => "?");
-  step(/all\.html/.test(page.url()), `back returns to the combined view (${how})`);
-  step(/playing/.test(r4["r-play"]), `and it plays again: ${r4["r-play"]}`);
+  step(/\/site\/(index\.html)?(\?|#|$)/.test(page.url()), `back returns to the one page, still signed in (${how})`);
+  step(/playing/.test(r4["r-play"]), `and the combined view plays again, above the gallery: ${r4["r-play"]}`);
   const a4 = await videoAdvancing();
   step(a4.ok, `its video element after Back: ${JSON.stringify(a4)}`);
   await page.locator("#v").scrollIntoViewIfNeeded();
   await page.waitForTimeout(1500);
-  await capture("back-to-all");
-  await page.click('a[href="index.html"]');
-  await page.waitForURL(/index\.html/, { timeout: 15000 });
-  await page.waitForFunction(() => !document.getElementById("app").hidden, null, { timeout: 30000 });
-  step(true, "the footer link returns to the gallery, still signed in");
-  await capture("back-to-gallery");
+  await capture("back-to-one-page");
   step(errors.length === 0, `no page errors${errors.length ? ": " + errors.join("; ").slice(0, 400) : ""}`);
 } catch (e) {
   step(false, `the walk stopped: ${String(e.message || e).split("\n")[0].slice(0, 300)}`);

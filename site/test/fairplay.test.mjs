@@ -1011,7 +1011,7 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
   const httpError = { category: 1, code: 1001, data: ["https://x.drm-fairplay-licensing.axprod.net/AcquireLicense", 403, "", { "x-axdrm-errormessage": WHY }, 2] };
   const licenceError = { category: 6, code: 6007, data: [httpError] };
   const helpersOf = (page) => page.match(/^ *const axinomSays = .*$/m)[0] + "\n" + page.match(/^ *const axinomReason = .*$/m)[0];
-  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const page = await fs.readFile(join(REPO, f), "utf8");
     const axinomReason = new Function(`${helpersOf(page)}\nreturn axinomReason;`)();
     assert.equal(axinomReason(licenceError), WHY, `${f}: a licence error wrapping the HTTP error`);
@@ -1055,7 +1055,7 @@ test("the pages put Axinom's reason for a refused licence in the licence cell, r
   assert.ok(!sets.some(([id]) => id === "o-lic"), "Apple's test: no licence line for a manifest or a segment");
   responseFilters[0](2, { data: new ArrayBuffer(7) });
   assert.deepEqual(sets.filter(([id]) => id === "o-lic"), [["o-lic", "obtained, 7 bytes"]], "Apple's test: obtained, for the licence");
-  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     // the page's own player (tryOne, at four spaces); Apple's test has its own, read above
     const head = "\n    player.getNetworkingEngine().registerResponseFilter(", pg = await fs.readFile(join(REPO, f), "utf8"), at = pg.indexOf(head), end = pg.indexOf("\n    });", at + 1);
     assert.ok(at > 0 && end > at && pg.indexOf(head, at + 1) < 0, `${f}: its response filter is where this test reads it, once`);
@@ -1128,7 +1128,7 @@ test("a licence token is added to licence requests only, by Apple's test and by 
     else hold(h, (r) => same(r, LICENSE, uri) || withToken(r, LICENSE, uri, token), (r) => `Apple's test, a licence-type request to ${uri}${on(ctx)}: this player's token as one header, or nothing: ${JSON.stringify(r)}`);
   }
   // the page's own player (tryOne), on the route-1 page and on the two pages built from it
-  for (const f of ["web/research/drm/index.html", "site/view.html", "site/all.html"]) {
+  for (const f of ["web/research/drm/index.html", "site/view.html", "site/index.html"]) {
     const pg = await fs.readFile(join(REPO, f), "utf8"), head = "    if (fp) player.getNetworkingEngine().registerRequestFilter(", at = pg.indexOf(head), end = pg.indexOf("\n    });", at);
     assert.ok(at > 0 && end > at && pg.indexOf(head, at + 1) < 0, `${f}: its request filter is where this test reads it, once`);
     const got = [];

@@ -63,32 +63,39 @@ test("the in-memory scheme honours byte ranges the way the player asks for them"
   assert.equal(sliceRange(d, "bytes=2000-3000").length, 0);
 });
 
-test("site/view.html and site/all.html are generated from the route-1 page and are current", async () => {
+test("site/view.html and site/index.html are generated from the route-1 page and are current", async () => {
   const index = await fs.readFile(join(REPO, "web", "research", "drm", "index.html"), "utf8");
   // every module URL carries the hash of the file it names, so a cached older copy never pairs with a newer page
-  const names = ["site/crypto.js", "site/app.js", "site/view-prelude.js", "site/index.html", "site/setup.html"];
+  const names = ["site/crypto.js", "site/app.js", "site/view-prelude.js", "site/gallery.js", "site/setup.html"];
   const files = Object.fromEntries(await Promise.all(names.map(async (f) => [f, await fs.readFile(join(REPO, f), "utf8")])));
-  const { files: stamped, preludeVersion } = stampVersions(files);
+  const { files: stamped, preludeVersion, galleryVersion } = stampVersions(files);
   for (const f of names) assert.equal(files[f], stamped[f], `${f} carries current version stamps: run node tools/build-site-view.mjs`);
   // and NO served file names a site module without a version, in any quote form (the stamper knows one form)
   for (const f of (await fs.readdir(join(REPO, "site"))).filter((x) => /\.(html|js)$/.test(x))) {
     const t = await fs.readFile(join(REPO, "site", f), "utf8");
-    const loose = t.match(/["'`](\.\/)?(crypto|app|view-prelude)\.js["'`]/g);
+    const loose = t.match(/["'`](\.\/)?(crypto|app|view-prelude|gallery)\.js["'`]/g);
     assert.equal(loose, null, `site/${f} names a module without a version stamp: ${loose}`);
   }
-  for (const [f, re] of [["site/app.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/view-prelude.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/setup.html", /"\.\/crypto\.js\?v=[0-9a-f]{12}"[\s\S]*"\.\/app\.js\?v=[0-9a-f]{12}"/], ["site/index.html", /"\.\/app\.js\?v=[0-9a-f]{12}"/]]) assert.match(files[f], re, f + " imports by versioned URL");
-  const out = buildView(index, "one", preludeVersion), all = buildView(index, "all", preludeVersion);
+  for (const [f, re] of [["site/app.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/view-prelude.js", /"\.\/crypto\.js\?v=[0-9a-f]{12}"/], ["site/gallery.js", /"\.\/app\.js\?v=[0-9a-f]{12}"/], ["site/setup.html", /"\.\/crypto\.js\?v=[0-9a-f]{12}"[\s\S]*"\.\/app\.js\?v=[0-9a-f]{12}"/]]) assert.match(files[f], re, f + " imports by versioned URL");
+  const out = buildView(index, "one", preludeVersion, galleryVersion), home = buildView(index, "home", preludeVersion, galleryVersion);
   assert.equal(out, await fs.readFile(join(REPO, "site", "view.html"), "utf8"), "run node tools/build-site-view.mjs");
-  assert.equal(all, await fs.readFile(join(REPO, "site", "all.html"), "utf8"), "run node tools/build-site-view.mjs");
-  for (const page of [out, all]) {
-    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", 'href="index.html"', "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-',
-      "fairplay: CTX.fairplay", 'manifest: "../web/research/drm/card-fairplay/master.m3u8"', "const APPLE_TEST_HERE = false;", 'const CARD_FAIRPLAY_OWN = "../web/research/drm/card-fairplay-own/";']) assert.ok(page.includes(s), s);
+  assert.equal(home, await fs.readFile(join(REPO, "site", "index.html"), "utf8"), "run node tools/build-site-view.mjs");
+  for (const page of [out, home]) {
+    for (const s of ['widevine: "mem://photo/widevine.mpd"', "const CTX = await window.__ccsReady", 'src="view-prelude.js?v=', "../web/research/drm/card-widevine.mpd", "name: CTX.content", "textContent = CTX.title", 'integrity="sha384-',
+      "fairplay: CTX.fairplay", 'manifest: "../web/research/drm/card-fairplay/master.m3u8"', 'const CARD_FAIRPLAY_OWN = "../web/research/drm/card-fairplay-own/";']) assert.ok(page.includes(s), s);
     assert.ok(!page.includes('"widevine.mpd"'), "no plain manifest name remains");
-    assert.ok(!page.includes('manifest: "card-fairplay/master.m3u8"') && !page.includes("fairplay: null") && !page.includes("APPLE_TEST_HERE = true") && !page.includes('"card-fairplay-own/"'),
-      "no route-1 Apple setting remains (the card's path, the photo's empty form, Apple's test switched on, the own card's path)");
+    assert.ok(!page.includes('manifest: "card-fairplay/master.m3u8"') && !page.includes("fairplay: null,") && !page.includes('"card-fairplay-own/"'),
+      "no route-1 Apple path remains (the card's path, the photo's empty form, the own card's path)");
+    // the route-1 page's own forward (its address with no parameter opens the one page) is stripped from a generated page
+    assert.ok(!page.includes('location.replace("../../../site/"'), "the forward to the one page is stripped");
   }
-  assert.ok(all.includes('window.__ccsMode = "all";') && !out.includes("__ccsMode"), "only the combined view runs the prelude in its 'all' mode");
-  assert.ok(all.includes('const SHOWN = CARD ? "The test card" : "The combined view";') && out.includes('const SHOWN = CARD ? "The test card" : "The photo";'), "the top line calls the combined view by its name, and one picture the photo");
+  // Apple's test runs on the one page (it holds the pictures back on a Mac), but not on a single picture's own page
+  assert.ok(home.includes("const APPLE_TEST_HERE = true;") && out.includes("const APPLE_TEST_HERE = false;"), "Apple's test is on the one page, off on a single picture's page");
+  assert.ok(home.includes('window.__ccsMode = "home";') && !out.includes("__ccsMode"), "only the one page runs the prelude in its 'home' mode");
+  assert.ok(home.includes('src="gallery.js?v=') && !out.includes("gallery.js"), "only the one page loads the gallery script");
+  assert.ok(home.includes('<section id="gallery">') && home.includes('id="lock"') && !out.includes('id="gallery"') && !out.includes('id="lock"'), "the one page has the sign-in and the gallery; a single picture's page does not");
+  assert.ok(home.includes('<a href="index.html">') === false && out.includes('<a href="index.html">'), "a single picture's page links back to the one page; the one page itself does not");
+  assert.ok(home.includes('const SHOWN = CARD ? "The test card" : "The combined view";') && out.includes('const SHOWN = CARD ? "The test card" : "The photo";'), "the top line calls the combined view by its name on the one page, one picture the photo");
   assert.throws(() => buildView(index.replace("<h1>Route 1", "<h1>Changed")), /heading/);
   assert.throws(() => buildView(index, "some"), /unknown view mode/);
 });
