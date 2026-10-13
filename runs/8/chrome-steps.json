@@ -1,0 +1,78 @@
+{
+ "browser": "chrome",
+ "at": "2026-10-13T00:37:05.339Z",
+ "results": [
+  {
+   "ok": true,
+   "what": "signed in; the gallery shows 9 picture card(s), 9 ready (slots: 9 of 10 slots used)"
+  },
+  {
+   "ok": true,
+   "what": "the combined view holds all 9 ready picture(s), playing inline above the gallery (ready pictures: 9)"
+  },
+  {
+   "ok": true,
+   "what": "the combined view plays: 1080x1440, playing, time 0.34 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element: {\"paused\":false,\"width\":1080,\"height\":1440,\"from\":0.5,\"to\":0,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "its title: Your pictures, protected (9)"
+  },
+  {
+   "ok": true,
+   "what": "the pictures play above the gallery"
+  },
+  {
+   "ok": true,
+   "what": "the combined view holds 9 tappable picture(s)"
+  },
+  {
+   "ok": true,
+   "what": "still playing three seconds later: 1080x1440, playing, time 1.23 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen: stage, 1080x1440, playing, time 1.23 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "full screen left again"
+  },
+  {
+   "ok": true,
+   "what": "tapping picture 2 opened that picture on its own"
+  },
+  {
+   "ok": true,
+   "what": "the single view plays: 961x1150, playing, time 0.27 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element: {\"paused\":false,\"width\":961,\"height\":1150,\"from\":0.48,\"to\":1.98,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "after Back the one page is a freshly loaded page (not the one held in memory)"
+  },
+  {
+   "ok": true,
+   "what": "back returns to the one page, still signed in (from memory, then reload)"
+  },
+  {
+   "ok": true,
+   "what": "and the combined view plays again, above the gallery: 1080x1440, playing, time 0.23 s — take a screenshot now"
+  },
+  {
+   "ok": true,
+   "what": "its video element after Back: {\"paused\":false,\"width\":1080,\"height\":1440,\"from\":0.83,\"to\":0.15,\"visible\":\"visible\",\"ok\":true}"
+  },
+  {
+   "ok": true,
+   "what": "no page errors"
+  }
+ ]
+}
