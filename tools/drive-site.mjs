@@ -654,6 +654,15 @@ try {
       `as built, a Mac in Safari on the combined view with ${what}: ` + (await ap.textContent("#msg")));
     await ac.close();
   }
+  // (7c) the one page's TOP LINE, a Mac in Safari that OFFERS FairPlay (so Apple's test runs and does not overwrite the top
+  // line): it names the combined view, never "the photo" — the one page shows the combined view, not a single photo (the
+  // thirty-second review: the one page's APPLE_TEST top line read "the photo is held back" on a page with no single photo)
+  await publishMosaic(undefined, [ID], [], { keyUri: "skd://x", master: "fp-1a2b3c4d/master.m3u8", license: OWN_LICENSE });
+  ({ c: ac, pg: ap } = await applePage(MAC_SAFARI, "index.html", () => Object.defineProperty(Navigator.prototype, "requestMediaKeySystemAccess", { configurable: true, value: (ks) => ks === "com.apple.fps" ? Promise.resolve({ keySystem: ks }) : Promise.reject(new DOMException("not here", "NotSupportedError")) })));
+  await ap.waitForFunction(() => /Safari on a Mac/.test(document.getElementById("detected").textContent), null, { timeout: 20000 }).catch(() => {});
+  check(/On a Mac the combined view is held back until a screenshot there is measured black, so Apple's test plays below instead\./.test(await ap.textContent("#detected")) && !/the photo is held back/.test(await ap.textContent("#detected")),
+    "the one page's top line, a Mac that offers FairPlay (Apple's test runs): names the combined view, never the photo: " + (await ap.textContent("#detected")));
+  await ac.close();
   await publishMosaic(); api.appleMeasured = false;
 
   // (8) a player that says "playing" but shows no frame: never counted as shown (a black capture of nothing measures nothing);

@@ -136,9 +136,9 @@ test("the pages' own lines, for 20 kinds of device and every kind of link: tests
 // every test passed), with the page version left out (it changes with every edit). And each file is pinned whole (the
 // twenty-second review: an over-claim in the style block or in an attribute reached the lede with both fingerprints
 // unchanged), with only the page version's date and time left out.
-const PAGE_FILE = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "554de3ef36547b83", "site/view.html": "b7bed8aabc1f4127", "site/index.html": "950a20f32e14eb8c" };
+const PAGE_FILE = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "1da0fa86005413e7", "site/view.html": "79b916f13dd015fd", "site/index.html": "4d10f16d6cc7cd87" };
 const wholeOf = (text) => text.replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");
-const PAGE_SCRIPT = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "d504df4f4729fd63", "site/view.html": "f50c3df7e2928c83", "site/index.html": "79b8cf64e736b689" };
+const PAGE_SCRIPT = { "site/view-prelude.js": "52ae11841896065f", "web/research/drm/index.html": "52dcd21ea586c3e8", "site/view.html": "08df02a5596bd887", "site/index.html": "8daa3db28dba9d27" };
 // every script tag, with its attributes (a module script too), and only the page version's date and time left out (the
 // twenty-first review: a sentence in a module script or in the rest of the page version passed)
 const scriptOf = (html) => [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script>/g)].map((m) => m[0]).join("\n").replace(/(const PAGE_VERSION = ")\d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC/, "$1(date and time)");

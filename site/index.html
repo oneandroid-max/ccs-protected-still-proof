@@ -305,7 +305,7 @@
   const CHROME_ITSELF = SOFTWARE_MEASURED && BROWSER_NAME === BROWSER;
   set("detected", `Detected: ${BROWSER_NAME} on ${DEVICE_NAME} (${DESKTOP_PHONE ? "it reports itself as Linux" : REPORTS}). `
     + (TEST ? "This link runs a test, on the test card: the box above says which."
-      : APPLE_TEST ? `On ${APPLE_KIND} the photo is held back until a screenshot there is measured black, so Apple's test plays below instead.`
+      : APPLE_TEST ? `On ${APPLE_KIND} ${held} is held back until a screenshot there is measured black, so Apple's test plays below instead.`
       : FAIRPLAY_OK ? (CLIP.fairplay ? `${SHOWN} is shown here only through Apple's protected path (FairPlay); screenshots of FairPlay video were measured black on ${FAIRPLAY_MEASURED_ON[PLATFORM]} (${FAIRPLAY_MEASURED[PLATFORM]}${NOT_ON_IPAD}).`
         // a clip with no Apple form says so here too (the twenty-fifth review: the top line said it was shown, the box that it was not)
         : `On ${APPLE_KIND} ${shown} would be shown only through Apple's protected path (FairPlay), and it has no Apple form${NO_FORM_EVER ? "" : " yet"}, so it is held back here.`)
@@ -337,8 +337,8 @@
     : FAIRPLAY_OK ? `${SAYS}: Apple FairPlay (screenshots measured black on ${FAIRPLAY_MEASURED_ON[PLATFORM]}, ${FAIRPLAY_MEASURED[PLATFORM]}${NOT_ON_IPAD})`
     : APPLE ? `${SAYS}: Apple FairPlay is not yet measured here, so ${held} is held back until a screenshot on ${PLATFORM} is measured black (${APPLE_TEST ? "Apple's test on this page measures that" : "?levels=fairplay plays the test card for that"})`
     : `${SAYS}: hardware protection only (software protection is not accepted here)`);
-  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never the photo, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
-  if (TEST_FAIRPLAY) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "APPLE TEST MODE: this link plays a TEST CARD through Apple's FairPlay, never the photo, to measure whether an iPhone, iPad or Mac keeps FairPlay video out of screenshots. Take a screenshot once the card plays: the card should come out black."; document.querySelector("h1").after(b); }
+  if (TEST_SOFTWARE) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "TEST MODE: this link asks for SOFTWARE protection only and plays a TEST CARD, never your pictures, to measure whether this browser keeps software-decrypted video out of screenshots. Take a screenshot once the card plays."; document.querySelector("h1").after(b); }
+  if (TEST_FAIRPLAY) { const b = document.createElement("p"); b.style.cssText = "background:#a83a2b;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "APPLE TEST MODE: this link plays a TEST CARD through Apple's FairPlay, never your pictures, to measure whether an iPhone, iPad or Mac keeps FairPlay video out of screenshots. Take a screenshot once the card plays: the card should come out black."; document.querySelector("h1").after(b); }
   if (TEST_CLEAR) { const b = document.createElement("p"); b.style.cssText = "background:#6b4e16;color:#fff;padding:8px 12px;border-radius:8px;font-weight:600"; b.textContent = "CONTROL MODE: this link plays the TEST CARD with NO protection (ClearKey), so a screenshot SHOULD show it. If the capture is black here too, a black capture on this machine proves nothing."; document.querySelector("h1").after(b); }
   // Axinom's reason for refusing a licence (X-AxDRM-ErrorMessage, which its CORS lets a page read): from a
   // response's headers, or from a player error that carries an HTTP response (shaka: data[3] of a network
@@ -569,7 +569,7 @@
       : TEST_SOFTWARE ? "TEST: software protection only — take a screenshot; black means this browser keeps even software-decrypted video out of screenshots"
       : TEST_FAIRPLAY ? "TEST: Apple FairPlay — take a screenshot (and a screen recording if you can); BLACK means this Apple device keeps FairPlay video out of them"
       : t.system === "fairplay" ? `Apple FairPlay: screenshots measured black on ${FAIRPLAY_MEASURED_ON[PLATFORM]} (${FAIRPLAY_MEASURED[PLATFORM]}${NOT_ON_IPAD}). Take one.`
-      : t.word === "hardware" ? "hardware protection: a screenshot or recording of the photo area should be BLACK. Take one."
+      : t.word === "hardware" ? `hardware protection: a screenshot or recording of ${shown} area should be BLACK. Take one.`
       : `software protection: ${SOFTWARE_SEEN}${(BROWSER === "Edge" && PLATFORM === "Android") || BROWSER_NAME !== BROWSER ? "; not yet in this browser" : ""}. Take one.`, TEST ? "bad" : "ok");
     let lastT = null; // "playing" only while a frame shows AND the time moves between looks (the first look follows the start check)
     const tick = () => { const moved = lastT === null || Math.abs(video.currentTime - lastT) >= 0.2; lastT = video.currentTime;
