@@ -104,9 +104,9 @@
   // page asks it for a session bound to the PIN and this asset, sends the viewer token with every
   // licence request, and afterwards shows what the server recorded about this device.
   var server = (params.get("server") || "").replace(/\/+$/, "");
-  var pin = params.get("pin") || "48213";
+  var pin = (params.get("pin") || "").trim();
   var ASSET = "ccs-proof-pin48213";
-  var token = null;
+  var token = null, viewerName = "";
   var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/widevine/manifest.mpd";
   document.getElementById("manifest").textContent = manifestUrl;
   var LEVELS = ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"];
@@ -154,6 +154,8 @@
     playingEl.textContent = "no";
     verdict.textContent = "Nothing is playing, so there is nothing to screenshot yet.";
     if (levelEl.textContent === "negotiating") levelEl.textContent = negotiated && negotiated.robustness ? negotiated.robustness + " (licence not granted)" : "not reached";
+    var seenRow = document.getElementById("seen");
+    if (seenRow && seenRow.textContent === "waiting for the licence") seenRow.textContent = "no licence was issued";
     try { video.pause(); } catch (e) {}
   }
   window.addEventListener("unhandledrejection", function (e) {
@@ -206,6 +208,9 @@
     if (!shaka.Player.isBrowserSupported()) { end("This browser cannot run the player (no Media Source Extensions), so the protected proof cannot be loaded.", "unsupported"); return; }
     var licenceUrl = "https://cwip-shaka-proxy.appspot.com/no_auth";
     if (server && mode === "widevine") {
+      document.getElementById("pin").textContent = "our licence server at " + server + " (no session yet)";
+      document.getElementById("seen").textContent = "no licence requested";
+      if (!pin) { end("Add &pin= and your PIN to the address to use the licence server.", "no PIN given"); return; }
       // Only an https server, or this computer for local testing: a licence server is where the
       // PIN goes, so the page will not send it over plain http to anywhere else.
       if (!/^https:\/\//.test(server) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(server)) { end("The licence server address must start with https://.", "server address refused"); return; }
@@ -219,6 +224,7 @@
       var sbody = await sres.json().catch(function () { return {}; });
       if (!sres.ok) { end("The licence server refused a session (http " + sres.status + "): " + (sbody.error || "no reason given") + ".", "session refused"); return; }
       token = sbody.token;
+      viewerName = sbody.viewer || "this session";
       licenceUrl = server + "/licence";
       document.getElementById("pin").textContent = "our licence server, session " + sbody.sid + " for " + sbody.viewer + " (PIN " + pin + ")";
       document.getElementById("lic").textContent = licenceUrl + " (ours; each licence is bound to this session and lasts " + sbody.licenceDurationSeconds + " s)";
@@ -240,9 +246,19 @@
     });
     // With our server, every licence request (the certificate request included) carries the viewer
     // token; our server's pre-flight allows the header. The public proxy gets no extra header.
-    if (token) player.getNetworkingEngine().registerRequestFilter(function (type, request) {
-      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) request.headers["x-viewer-token"] = token;
-    });
+    // Our server also hands back, with the licence itself, what the licence environment reported
+    // about this device; the page keeps it to show once the photo plays.
+    var seenDevice = null, seenShown = false;
+    if (token) {
+      player.getNetworkingEngine().registerRequestFilter(function (type, request) {
+        if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) request.headers["x-viewer-token"] = token;
+      });
+      player.getNetworkingEngine().registerResponseFilter(function (type, response) {
+        if (type !== shaka.net.NetworkingEngine.RequestType.LICENSE || !response.headers) return;
+        var v = response.headers["x-licence-device"];
+        if (v) { try { seenDevice = JSON.parse(decodeURIComponent(v)); } catch (e) {} }
+      });
+    }
     player.addEventListener("error", function (e) {
       var err = e.detail || {};
       // severity 1 is RECOVERABLE: Shaka keeps playing, so the page only notes it.
@@ -261,13 +277,19 @@
       if (/HW_SECURE/.test(robust)) verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : "");
       else if (robust) verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted and the pipeline works; the capture block depends on the device.";
       else verdict.textContent = "The browser did not report a security level. The licence was granted and the pipeline works; the capture block depends on the device.";
-      // What our server recorded for this session: the device facts the licence environment
-      // reported when it issued the licence (make, model, Widevine level), a server-side measurement.
-      if (token) fetch(server + "/session/audit", { headers: { "x-viewer-token": token } }).then(function (r) { return r.json(); }).then(function (a) {
-        var rows = (a.rows || []).filter(function (r) { return r.event === "licence" && r.device; });
-        var d = rows.length ? rows[rows.length - 1].device : null;
-        document.getElementById("seen").textContent = d ? ((d.make || "?") + " " + (d.model || "?") + ", Widevine level L" + d.securityLevel + ", licence granted to " + (a.viewer || "this session")) : "licence granted; the environment reported no device facts";
-      }).catch(function () { document.getElementById("seen").textContent = "could not read the server's record"; });
+      // What our server saw: the device facts the licence environment reported when it issued this
+      // licence (make, model, Widevine level), a server-side measurement. Written once: 'playing'
+      // fires on every loop of the two-second clip, and a request per loop would only cost quota.
+      if (token && !seenShown) {
+        seenShown = true;
+        var seenEl = document.getElementById("seen");
+        var describe = function (d, viewer) { return (d.make || "?") + " " + (d.model || "?") + ", Widevine level L" + d.securityLevel + ", licence granted to " + viewer; };
+        if (seenDevice) seenEl.textContent = describe(seenDevice, viewerName);
+        else fetch(server + "/session/audit", { headers: { "x-viewer-token": token } }).then(function (r) { return r.json(); }).then(function (a) {
+          var rows = (a.rows || []).filter(function (r) { return r.event === "licence" && r.device; });
+          seenEl.textContent = rows.length ? describe(rows[rows.length - 1].device, a.viewer || viewerName) : "licence granted; the environment reported no device facts";
+        }).catch(function () { seenEl.textContent = "licence granted; the server's record could not be read"; });
+      }
     });
     await player.load(manifestUrl);
     var info = player.drmInfo();

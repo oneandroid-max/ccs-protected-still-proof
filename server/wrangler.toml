@@ -1,21 +1,23 @@
-# Cloudflare Worker deployment of the licence server (free plan is enough for the proof).
-#   npx wrangler login              # once, in the account that will own it
-#   npx wrangler kv namespace create AUDIT   # paste the id below
-#   npx wrangler secret put TOKEN_SECRET     # a long random string
-#   npx wrangler secret put ADMIN_KEY        # a long random string
-#   npx wrangler deploy
+# Cloudflare Worker deployment of the licence server (the free plan is enough for the proof).
+# Deploying needs CLOUDFLARE_API_TOKEN in the environment (a token from the account that will own
+# it); wrangler then runs without a browser login. Steps, from server/:
+#   npx wrangler@4.148.0 kv namespace create AUDIT      # paste the id it prints into [[kv_namespaces]] below
+#   npx wrangler@4.148.0 deploy
+#   npx wrangler@4.148.0 secret put TOKEN_SECRET        # a long random string
+#   npx wrangler@4.148.0 secret put ADMIN_KEY           # a long random string
+#   npx wrangler@4.148.0 secret put VIEWERS             # "PIN:Name:photo|photo,PIN:Name:photo"
+# VIEWERS holds the PINs, so it is a secret, never a line in this public file.
 name = "protected-still-licence"
 main = "worker.mjs"
 compatibility_date = "2026-09-01"
 
 [vars]
-VIEWERS = "48213:Family A,77310:Family B"
 ALLOWED_ORIGINS = "https://oneandroid-max.github.io"
 LICENCE_LIMIT_PER_SESSION = "20"
 SESSION_SECONDS = "3600"
 LICENCE_DURATION_SECONDS = "600"
 # WIDEVINE_LICENSE_URL / WIDEVINE_SIGNER / WIDEVINE_SIGNING_KEY_HEX / WIDEVINE_SIGNING_IV_HEX default to
-# Google's public test environment and test signer; production sets its own as secrets.
+# Google's public test environment and test signer; a production deployment sets its own as secrets.
 
 # [[kv_namespaces]]
 # binding = "AUDIT"
