@@ -40,6 +40,16 @@ iPhone: Safari uses FairPlay, not Widevine, so this page reports a licence error
 packaging with an Apple FairPlay certificate gives the same black screenshot on iPhone; not built
 here because it needs that certificate.
 
+## Our own licence server
+
+`server/` holds our own licence server (see `server/README.md`). Open the page with
+`?server=https://<host>&pin=<viewer PIN>` and the page asks that server for a session bound to the
+PIN, sends the session's token with every licence request, and afterwards shows what the server
+recorded about the device from the licence environment's answer (make, model, Widevine level). A
+wrong PIN is refused before any licence is requested; a revoked PIN stops at the next licence
+request. Without `?server=` the page uses Google's public test proxy, which binds the licence to
+nothing.
+
 ## What is in the repository
 
 | File | What it is |

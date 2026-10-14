@@ -58,6 +58,7 @@
       <dt>Protection</dt><dd id="drm">checking</dd>
       <dt>Security level</dt><dd id="level">checking</dd>
       <dt>Licence</dt><dd id="pin">Google's public test proxy, bound to no viewer (proof only)</dd>
+      <dt>Server saw</dt><dd id="seen">not used (public proxy)</dd>
       <dt>Playing</dt><dd id="playing">no</dd>
     </dl>
     <p class="note" id="verdict">On an Android phone with hardware protection, a screenshot of the photo area is black. On a laptop browser or a phone with software-only protection the screenshot may still capture it. The security level above is measured on this device, not assumed.</p>
@@ -99,6 +100,13 @@
   // it shows THIS PHONE blacks out protected video independently of our packaging.
   var mode = params.get("mode") === "google" ? "google" : "widevine";
   var what = mode === "google" ? "Google's test clip" : "the photo";
+  // Our own licence server: ?server=https://host (no trailing slash) and ?pin=<viewer PIN>. The
+  // page asks it for a session bound to the PIN and this asset, sends the viewer token with every
+  // licence request, and afterwards shows what the server recorded about this device.
+  var server = (params.get("server") || "").replace(/\/+$/, "");
+  var pin = params.get("pin") || "48213";
+  var ASSET = "ccs-proof-pin48213";
+  var token = null;
   var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/widevine/manifest.mpd";
   document.getElementById("manifest").textContent = manifestUrl;
   var LEVELS = ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"];
@@ -156,7 +164,7 @@
   // 1002 data = [uri, thrown error, request type], 1003 data = [uri, request type].
   function networkDetail(err) {
     if (!err || typeof err.code !== "number") return "";
-    if (err.code === 1001) return " http " + (err.data && err.data[1]);
+    if (err.code === 1001) return " http " + (err.data && err.data[1]) + (err.data && typeof err.data[2] === "string" && err.data[2] ? " " + err.data[2].slice(0, 140) : "");
     if (err.code === 1002) return " network (blocked before it left the browser, or offline)";
     if (err.code === 1003) return " timeout";
     return "";
@@ -194,6 +202,17 @@
   try {
     shaka.polyfill.installAll();
     if (!shaka.Player.isBrowserSupported()) { end("This browser cannot run the player (no Media Source Extensions), so the protected proof cannot be loaded.", "unsupported"); return; }
+    var licenceUrl = "https://cwip-shaka-proxy.appspot.com/no_auth";
+    if (server && mode === "widevine") {
+      var sres = await fetch(server + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: pin, asset: ASSET }) });
+      var sbody = await sres.json().catch(function () { return {}; });
+      if (!sres.ok) { end("The licence server refused a session (http " + sres.status + "): " + (sbody.error || "no reason given") + ".", "session refused"); return; }
+      token = sbody.token;
+      licenceUrl = server + "/licence";
+      document.getElementById("pin").textContent = "our licence server, session " + sbody.sid + " for " + sbody.viewer + " (PIN " + pin + ")";
+      document.getElementById("lic").textContent = licenceUrl + " (ours; each licence is bound to this session and lasts " + sbody.licenceDurationSeconds + " s)";
+      document.getElementById("seen").textContent = "waiting for the licence";
+    }
     recordNegotiation();
     var player = new shaka.Player();
     await player.attach(video);
@@ -206,7 +225,12 @@
     // missing ClearKey server (6012). Shaka skips a ContentProtection whose mapping is empty.
     player.configure({
       manifest: { dash: { keySystemsByURI: { "urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b": "" } } },
-      drm: { servers: { "com.widevine.alpha": "https://cwip-shaka-proxy.appspot.com/no_auth" }, advanced: { "com.widevine.alpha": { videoRobustness: LEVELS } } },
+      drm: { servers: { "com.widevine.alpha": licenceUrl }, advanced: { "com.widevine.alpha": { videoRobustness: LEVELS } } },
+    });
+    // With our server, every licence request (the certificate request included) carries the viewer
+    // token; our server's pre-flight allows the header. The public proxy gets no extra header.
+    if (token) player.getNetworkingEngine().registerRequestFilter(function (type, request) {
+      if (type === shaka.net.NetworkingEngine.RequestType.LICENSE) request.headers["x-viewer-token"] = token;
     });
     player.addEventListener("error", function (e) {
       var err = e.detail || {};
@@ -226,6 +250,13 @@
       if (/HW_SECURE/.test(robust)) verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : "");
       else if (robust) verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted and the pipeline works; the capture block depends on the device.";
       else verdict.textContent = "The browser did not report a security level. The licence was granted and the pipeline works; the capture block depends on the device.";
+      // What our server recorded for this session: the device facts the licence environment
+      // reported when it issued the licence (make, model, Widevine level), a server-side measurement.
+      if (token) fetch(server + "/session/audit", { headers: { "x-viewer-token": token } }).then(function (r) { return r.json(); }).then(function (a) {
+        var rows = (a.rows || []).filter(function (r) { return r.event === "licence" && r.device; });
+        var d = rows.length ? rows[rows.length - 1].device : null;
+        document.getElementById("seen").textContent = d ? ((d.make || "?") + " " + (d.model || "?") + ", Widevine level L" + d.securityLevel + ", licence granted to " + (a.viewer || "this session")) : "licence granted; the environment reported no device facts";
+      }).catch(function () { document.getElementById("seen").textContent = "could not read the server's record"; });
     });
     await player.load(manifestUrl);
     var info = player.drmInfo();
