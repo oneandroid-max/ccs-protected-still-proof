@@ -6,8 +6,13 @@ Keys from Google's public Widevine test key server; licences from Google's publi
 proxy; player from a public CDN. No server of ours, no licence account, nothing connected to
 the QuicLINKs application.
 
-`drm/widevine/video.mp4` is encrypted: it is not a readable image. No clear copy of the photo is
-in this repository.
+`drm/widevine/video.mp4` is encrypted: it is not a readable image, and no clear copy of the photo is
+in this repository. Say the rest plainly: the key for this file is issued by Google's public test
+key server from the content id that sits in the manifest, using the published test credentials from
+the packager's tutorial, and the licence proxy binds the licence to no viewer. So this particular
+file can be decrypted by anyone who reproduces the packager's key request. The proof is about the
+phone's capture path, not key secrecy. Production packages with a private key and issues each
+licence bound to the viewer's session, which is what makes the same page a real lock.
 
 ## Result (2026-10-10)
 

@@ -45,7 +45,7 @@
 <body>
 <div class="wrap">
   <h1>The self-defending proof</h1>
-  <p class="lede">The photo below is served as a protected video of a still frame, licensed to this viewer. You see a clean photo. On a phone, a screenshot or a screen recording of it comes out black. The share a family is given instead, free, credited to the studio and marked to the viewer, is described below.</p>
+  <p class="lede">The photo below is served as a protected video of a still frame under a licence from a licence server. You see a clean photo. On a phone, a screenshot or a screen recording of it comes out black. The share a family is given instead, free, credited to the studio and marked to the viewer, is described below.</p>
 
   <div class="proof">
     <video id="proof" muted autoplay loop playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" aria-label="Proof photo, protected"></video>
@@ -57,10 +57,10 @@
     <dl>
       <dt>Protection</dt><dd id="drm">checking</dd>
       <dt>Security level</dt><dd id="level">checking</dd>
-      <dt>Licensed to</dt><dd id="pin">PIN 48213 (this session)</dd>
+      <dt>Licence</dt><dd id="pin">Google's public test proxy, bound to no viewer (proof only)</dd>
       <dt>Playing</dt><dd id="playing">no</dd>
     </dl>
-    <p class="note" id="verdict">On an iPhone, or an Android phone with hardware protection, a screenshot of the photo area is black. On a laptop browser or a phone with software-only protection the screenshot still works; this readout says which you have.</p>
+    <p class="note" id="verdict">On an Android phone with hardware protection, a screenshot of the photo area is black. On a laptop browser or a phone with software-only protection the screenshot may still capture it. The security level above is measured on this device, not assumed.</p>
   </div>
 
   <div class="facts">
@@ -82,8 +82,8 @@
     <h2>What is where</h2>
     <dl>
       <dt>Manifest</dt><dd id="manifest">drm/widevine/manifest.mpd</dd>
-      <dt>Licence</dt><dd id="lic">Google's public test licence server (proof only)</dd>
-      <dt>Fallback</dt><dd>none in this public proof (the ClearKey test copies are only in the full package)</dd>
+      <dt>Licence server</dt><dd id="lic">https://cwip-shaka-proxy.appspot.com/no_auth (Google's public test proxy; production uses a licence service that binds each licence to the viewer)</dd>
+      <dt>Keys</dt><dd>issued by Google's public test key server from the content id in the manifest, so this file is not secret; the proof is the capture path, not the key</dd>
     </dl>
   </div>
 </div>
@@ -95,58 +95,154 @@
   var msg = document.getElementById("msg");
   var drmEl = document.getElementById("drm"), levelEl = document.getElementById("level"), playingEl = document.getElementById("playing"), verdict = document.getElementById("verdict");
   var params = new URLSearchParams(location.search);
-  var requested = params.get("mode");
-  // clearkey-vp9 is the same ClearKey pipeline in VP9, for browsers without an H.264 decoder (the sandbox this was built in).
-  var mode = requested === "clearkey" || requested === "clearkey-vp9" || requested === "google" ? requested : "widevine";
-  var isClearKey = mode.indexOf("clearkey") === 0;
-  // "google" mode plays Google's own protected test stream through the same licence proxy: it
-  // proves THIS PHONE blacks out protected video even before CCS's own content is licensed.
-  var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/" + mode + "/manifest.mpd";
+  // Two modes only. "google" plays Google's own protected test clip through the same licence proxy:
+  // it shows THIS PHONE blacks out protected video independently of our packaging.
+  var mode = params.get("mode") === "google" ? "google" : "widevine";
+  var what = mode === "google" ? "Google's test clip" : "the photo";
+  var manifestUrl = mode === "google" ? "https://storage.googleapis.com/shaka-demo-assets/angel-one-widevine/dash.mpd" : "drm/widevine/manifest.mpd";
   document.getElementById("manifest").textContent = manifestUrl;
-  shaka.polyfill.installAll();
-  if (!shaka.Player.isBrowserSupported()) { msg.textContent = "This browser cannot play protected video."; drmEl.textContent = "unsupported"; return; }
-  var player = new shaka.Player();
-  await player.attach(video);
-  var cfg = { drm: { servers: {} } };
-  if (isClearKey) {
-    cfg.drm.clearKeys = { "0123456789abcdef0123456789abcdef": "fedcba9876543210fedcba9876543210" };
-    document.getElementById("lic").textContent = "ClearKey (keys in the page; no protection, pipeline test)";
-  } else {
-    // Proof only: Google's public Widevine test proxy. In production this URL is CCS's licence
-    // service, and the request carries the viewer's session so the licence is bound to the PIN.
-    cfg.drm.servers["com.widevine.alpha"] = "https://cwip-shaka-proxy.appspot.com/no_auth";
-    cfg.drm.advanced = { "com.widevine.alpha": { videoRobustness: ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"] } };
+  var LEVELS = ["HW_SECURE_ALL", "HW_SECURE_DECODE", "SW_SECURE_DECODE", "SW_SECURE_CRYPTO"];
+  var CODEC = 'video/mp4; codecs="avc1.640028"';
+  var isApple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  // MEASURE the security level from the player's OWN negotiation: the access object Shaka creates
+  // its MediaKeys from carries the robustness the browser actually granted. Shaka 5.2.10's
+  // player.drmInfo().videoRobustness echoes the first CONFIGURED entry instead (independent
+  // review, 2026-10-10), and a separate probe would be a second negotiation with its own
+  // permission prompts (independent review, 2026-10-13), so the readout records this one.
+  var negotiated = null;
+  function recordNegotiation() {
+    if (!window.MediaKeySystemAccess || !MediaKeySystemAccess.prototype.createMediaKeys) return;
+    var realCreate = MediaKeySystemAccess.prototype.createMediaKeys;
+    MediaKeySystemAccess.prototype.createMediaKeys = function () {
+      try {
+        var c = this.getConfiguration();
+        var v = c && c.videoCapabilities && c.videoCapabilities[0];
+        negotiated = { keySystem: this.keySystem, robustness: (v && v.robustness) || "" };
+      } catch (e) { negotiated = { keySystem: this.keySystem, robustness: "" }; }
+      return realCreate.apply(this, arguments);
+    };
   }
-  player.configure(cfg);
-  // Production: the licence request carries the viewer's session (a token in the body or a header
-  // the licence service allows) so the licence is bound to the PIN. Nothing is added here: Google's
-  // public proxy allows only its own request headers, and any other header fails the browser's
-  // pre-check, so the licence request never leaves the phone (measured 2026-10-10, code 6007).
-  player.addEventListener("error", function (e) {
-    var err = e.detail || {};
-    var inner = err.data && err.data[1] && err.data[1].code ? err.data[1] : null;
-    var detail = inner ? ", detail " + inner.code + (inner.data && inner.data[1] ? " http " + inner.data[1] : "") : "";
+  // When Widevine is refused, isolate the cause before wording it. Runs only on failure, so a
+  // phone that can play sees one permission prompt sequence: the player's own.
+  async function whyNoWidevine() {
+    if (!navigator.requestMediaKeySystemAccess) return "this browser has no protected-media support";
+    if (window.MediaSource && MediaSource.isTypeSupported && !MediaSource.isTypeSupported(CODEC)) return "this browser cannot decode H.264 video";
+    try {
+      await navigator.requestMediaKeySystemAccess("org.w3.clearkey", [{ initDataTypes: ["cenc"], videoCapabilities: [{ contentType: CODEC }] }]);
+      return "Widevine is not available here, or protected content is blocked in this browser's site settings";
+    } catch (e) { return "this browser has no protected-media support for this video"; }
+  }
+
+  // Every way the page can end goes through end(): the overlay, the Protection row, Playing: no,
+  // and a verdict that promises nothing. A failed page stays failed: a later frame cannot
+  // overwrite it (the HTML 'playing' event fires on every readyState rise).
+  var failed = false;
+  function end(message, protection) {
+    failed = true;
     msg.hidden = false;
-    msg.textContent = "Could not play the protected proof (code " + err.code + detail + "). " + (mode === "widevine" ? "On an iPhone this proof needs FairPlay, which needs CCS's Apple certificate." : "");
-    drmEl.textContent = "failed, code " + err.code + detail;
+    msg.textContent = message;
+    if (protection) drmEl.textContent = protection;
+    playingEl.textContent = "no";
+    verdict.textContent = "Nothing is playing, so there is nothing to screenshot yet.";
+    if (levelEl.textContent === "negotiating") levelEl.textContent = negotiated && negotiated.robustness ? negotiated.robustness + " (licence not granted)" : "not reached";
+    try { video.pause(); } catch (e) {}
+  }
+  window.addEventListener("unhandledrejection", function (e) {
+    if (!failed) end("The page stopped unexpectedly (" + ((e.reason && (e.reason.code || e.reason.message)) || "unknown") + ").", "failed");
   });
+
+  // Network details as Shaka reports them (lib/util/error.js): 1001 data = [uri, status, ...],
+  // 1002 data = [uri, thrown error, request type], 1003 data = [uri, request type].
+  function networkDetail(err) {
+    if (!err || typeof err.code !== "number") return "";
+    if (err.code === 1001) return " http " + (err.data && err.data[1]);
+    if (err.code === 1002) return " network (blocked before it left the browser, or offline)";
+    if (err.code === 1003) return " timeout";
+    return "";
+  }
+  // Shaka's errors, named for the person testing on a phone. 6007's data[0] is the inner network
+  // error; 6008's data[0] is the browser's own message; 1001/1002/1003 at the top level mean the
+  // manifest itself could not be fetched, so protection was never reached.
+  async function fail(err) {
+    var code = err && err.code;
+    var d0 = err && err.data && err.data[0];
+    if (code === 1001 || code === 1002 || code === 1003) {
+      end("The manifest " + manifestUrl + " could not be fetched (code " + code + networkDetail(err) + "). The licence was never requested.", "not reached (manifest failed)");
+    } else if (code === 6007) {
+      var detail = d0 && typeof d0.code === "number" ? ", detail " + d0.code + networkDetail(d0) : "";
+      end("Could not play the protected proof (code 6007" + detail + "). The licence request failed.", "failed, code 6007" + detail);
+    } else if (code === 6008) {
+      end("Could not play the protected proof (code 6008). The licence arrived but this device's Widevine rejected it" + (typeof d0 === "string" && d0 ? ": " + d0 : "") + ".", "failed, code 6008");
+    } else if (code === 6001) {
+      var why = isApple ? "this browser has no Widevine: on an iPhone or iPad the proof needs FairPlay, which needs an Apple certificate" : await whyNoWidevine();
+      levelEl.textContent = "none granted";
+      levelEl.className = "bad";
+      end("Could not play the protected proof (code 6001): " + why + ".", "failed, code 6001");
+    } else if (code === 6000) {
+      end("Could not play the protected proof (code 6000). The manifest names no key system this player recognises.", "failed, code 6000");
+    } else {
+      end("Could not play the protected proof (code " + code + ").", "failed, code " + code);
+    }
+  }
+
+  if (typeof shaka === "undefined") { end("The player script did not load, so the protected proof cannot play.", "player not loaded"); return; }
+
+  if (!window.isSecureContext) { levelEl.textContent = "needs https"; end("This page must be opened over https for protected video.", "needs https"); return; }
+  levelEl.textContent = "negotiating";
+
   try {
+    shaka.polyfill.installAll();
+    if (!shaka.Player.isBrowserSupported()) { end("This browser cannot run the player (no Media Source Extensions), so the protected proof cannot be loaded.", "unsupported"); return; }
+    recordNegotiation();
+    var player = new shaka.Player();
+    await player.attach(video);
+    // Proof only: Google's public Widevine test proxy, which binds the licence to nothing. In
+    // production this is a licence service that checks the viewer's session before issuing. Nothing
+    // is added to the request: the proxy allows only its own request headers, and any other header
+    // fails the browser's pre-check so the request never leaves the phone (measured, code 6007).
+    // The manifest also names the common-encryption (ClearKey) system; with no ClearKey server it
+    // is kept out of the candidates, so a Widevine refusal is reported as one (6001), not as a
+    // missing ClearKey server (6012). Shaka skips a ContentProtection whose mapping is empty.
+    player.configure({
+      manifest: { dash: { keySystemsByURI: { "urn:uuid:1077efec-c0b2-4d02-ace3-3c1e52e2fb4b": "" } } },
+      drm: { servers: { "com.widevine.alpha": "https://cwip-shaka-proxy.appspot.com/no_auth" }, advanced: { "com.widevine.alpha": { videoRobustness: LEVELS } } },
+    });
+    player.addEventListener("error", function (e) {
+      var err = e.detail || {};
+      // severity 1 is RECOVERABLE: Shaka keeps playing, so the page only notes it.
+      if (err.severity === 1) { verdict.textContent += " (recoverable error " + err.code + ")"; return; }
+      fail(err);
+    });
+    // The verdict is written only once a frame is on screen: the licence is granted after load()
+    // resolves, so anything written earlier would promise a screenshot of a photo that is not playing.
+    video.addEventListener("playing", function () {
+      if (failed) return;
+      playingEl.textContent = "yes";
+      msg.hidden = true;
+      var robust = negotiated ? (negotiated.robustness || "") : "";
+      levelEl.textContent = negotiated ? (robust || "not reported") : "not reported";
+      levelEl.className = /HW_SECURE/.test(robust) ? "ok" : (robust ? "bad" : "");
+      if (/HW_SECURE/.test(robust)) verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : "");
+      else if (robust) verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted and the pipeline works; the capture block depends on the device.";
+      else verdict.textContent = "The browser did not report a security level. The licence was granted and the pipeline works; the capture block depends on the device.";
+    });
     await player.load(manifestUrl);
     var info = player.drmInfo();
-    drmEl.textContent = info ? info.keySystem : (isClearKey ? "org.w3.clearkey" : "none");
-    var robust = info && (info.videoRobustness || "");
-    levelEl.textContent = robust || "not reported";
-    var what = mode === "google" ? "Google's test clip" : "the photo";
-    if (!isClearKey) {
-      if (/HW_SECURE/.test(robust)) { levelEl.className = "ok"; verdict.textContent = "Hardware protection is in use on this device: a screenshot or recording of " + what + " should be black. Take one and look." + (mode === "google" ? " Then open the page without ?mode=google for the proof photo." : ""); }
-      else if (robust) { levelEl.className = "bad"; verdict.textContent = "Software-only protection on this device: a screenshot may still capture " + what + ". The licence was granted, so the pipeline works; the capture block depends on the device."; }
-    } else { verdict.textContent = "ClearKey mode: the pipeline plays, but nothing stops a screenshot. Open the page without ?mode=clearkey on a phone for the real test."; }
-    video.addEventListener("playing", function () { playingEl.textContent = "yes"; msg.hidden = true; });
-    await video.play().catch(function () {});
+    drmEl.textContent = info ? info.keySystem : "none";
+    try {
+      await video.play();
+    } catch (e) {
+      // Autoplay refused (not on Android Chrome, where muted autoplay is always allowed): offer a tap.
+      if (!failed) {
+        msg.hidden = false;
+        msg.textContent = "Tap to play the protected proof";
+        msg.style.cursor = "pointer";
+        msg.addEventListener("click", function () { video.play().catch(function () {}); }, { once: true });
+      }
+    }
   } catch (e) {
-    msg.hidden = false;
-    msg.textContent = "Could not play the protected proof (" + (e && e.code) + ").";
-    drmEl.textContent = "failed";
+    await fail(e);
   }
 })();
 </script>
