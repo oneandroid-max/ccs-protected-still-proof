@@ -24,6 +24,7 @@ export const DEFAULTS = {
   licenceDurationSeconds: 600,
   auditKeep: 500,
 };
+export const MAX_BODY_BYTES = 64 * 1024;
 
 // ---------- small codecs ----------
 
@@ -114,17 +115,31 @@ export function createApp(env, store, deps = {}) {
   const now = deps.now || (() => Math.floor(Date.now() / 1000));
   const newId = deps.newId || (() => b64url(crypto.getRandomValues(new Uint8Array(12))));
 
+  // Only the origins listed in ALLOWED_ORIGINS may call the server from a browser. None listed
+  // means none allowed: the admin calls are made with curl, which needs no CORS at all.
   function cors(origin) {
     const h = new Headers();
-    const allowed = origin && (cfg.allowedOrigins.length === 0 || cfg.allowedOrigins.includes(origin));
-    if (allowed) {
+    h.set("Vary", "Origin");
+    if (origin && cfg.allowedOrigins.includes(origin)) {
       h.set("Access-Control-Allow-Origin", origin);
-      h.set("Vary", "Origin");
       h.set("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-      h.set("Access-Control-Allow-Headers", "content-type, x-viewer-token, x-admin-key");
+      h.set("Access-Control-Allow-Headers", "content-type, x-viewer-token");
       h.set("Access-Control-Max-Age", "600");
     }
     return h;
+  }
+  // A Widevine challenge is a few kilobytes and a session request a few dozen bytes; anything
+  // larger is refused before it is read when the length is declared, and after it is read when not.
+  async function readBody(request) {
+    const declared = Number(request.headers.get("content-length") || 0);
+    if (declared > MAX_BODY_BYTES) return null;
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    return bytes.length > MAX_BODY_BYTES ? null : bytes;
+  }
+  async function readJsonCapped(request) {
+    const bytes = await readBody(request);
+    if (!bytes) return { tooLarge: true };
+    try { return { value: JSON.parse(dec.decode(bytes)) }; } catch (e) { return { value: null }; }
   }
   function json(status, body, headers) {
     const h = new Headers(headers);
@@ -146,7 +161,9 @@ export function createApp(env, store, deps = {}) {
 
     // 1. A viewer opens the gallery with a PIN: mint a session bound to the PIN and the asset.
     if (path === "/session" && request.method === "POST") {
-      const body = await readJson(request);
+      const read = await readJsonCapped(request);
+      if (read.tooLarge) return json(413, { error: "request too large" }, h);
+      const body = read.value;
       const pin = String((body && body.pin) || "").trim();
       const asset = String((body && body.asset) || "").trim();
       const viewer = cfg.viewers.get(pin);
@@ -168,7 +185,8 @@ export function createApp(env, store, deps = {}) {
         await store.putAudit({ at: t, event: "licence-refused", reason: "revoked", sid: claim.sid, pin: claim.pin, asset: claim.asset }, cfg.auditKeep);
         return json(403, { error: "access revoked" }, h);
       }
-      const challenge = new Uint8Array(await request.arrayBuffer());
+      const challenge = await readBody(request);
+      if (!challenge) return json(413, { error: "licence challenge too large" }, h);
       if (challenge.length === 0) return json(400, { error: "empty licence challenge" }, h);
       const isCertRequest = challenge.length === 2 && challenge[0] === 0x08 && challenge[1] === 0x04;
       if (!isCertRequest) {
@@ -189,9 +207,12 @@ export function createApp(env, store, deps = {}) {
         await store.putAudit({ at: t, event: "licence-error", sid: claim.sid, pin: claim.pin, asset: claim.asset, error: String(e && e.message || e) }, cfg.auditKeep);
         return json(502, { error: "licence environment unreachable" }, h);
       }
-      if (!isCertRequest) await store.addLicence(claim.sid);
-      await store.putAudit({ at: t, event: isCertRequest ? "certificate" : (result.status === "OK" ? "licence" : "licence-denied"), sid: claim.sid, pin: claim.pin, viewer: cfg.viewers.get(claim.pin), asset: claim.asset, status: result.status, device: result.device || null }, cfg.auditKeep);
-      if (result.status !== "OK" || !result.licence) return json(403, { error: "licence not granted", status: result.status }, h);
+      const granted = result.status === "OK" && !!result.licence;
+      // Only a licence actually issued counts against the session's limit: the player retries a
+      // failed request once, and a refusal must not use up the viewer's licences.
+      if (!isCertRequest && granted) await store.addLicence(claim.sid);
+      await store.putAudit({ at: t, event: isCertRequest ? "certificate" : (granted ? "licence" : "licence-denied"), sid: claim.sid, pin: claim.pin, viewer: cfg.viewers.get(claim.pin), asset: claim.asset, status: result.status, device: result.device || null }, cfg.auditKeep);
+      if (!granted) return json(403, { error: "licence not granted", status: result.status }, h);
       const rh = new Headers(h);
       rh.set("Content-Type", "application/octet-stream");
       rh.set("Cache-Control", "no-store");
@@ -202,12 +223,13 @@ export function createApp(env, store, deps = {}) {
     if (path === "/session/audit" && request.method === "GET") {
       const claim = await verifyToken(cfg.tokenSecret, request.headers.get("x-viewer-token"), now());
       if (!claim) return json(401, { error: "missing, invalid or expired viewer token" }, h);
-      const rows = await store.listAudit((r) => r.sid === claim.sid);
+      const rows = await store.listAudit((r) => r.sid === claim.sid, { sid: claim.sid });
       return json(200, { sid: claim.sid, pin: claim.pin, viewer: cfg.viewers.get(claim.pin), rows }, h);
     }
 
-    // Admin: the whole audit log, and revocation.
-    const admin = request.headers.get("x-admin-key") || url.searchParams.get("key");
+    // Admin: the whole audit log, and revocation. The key travels only in a header, never in the
+    // address, so it does not land in access logs or browser history.
+    const admin = request.headers.get("x-admin-key");
     if (path === "/audit" && request.method === "GET") {
       if (!admin || !timingSafeEqual(enc.encode(admin), enc.encode(cfg.adminKey))) return json(401, { error: "admin key required" }, h);
       const pin = url.searchParams.get("pin");
@@ -215,7 +237,9 @@ export function createApp(env, store, deps = {}) {
     }
     if (path === "/revoke" && request.method === "POST") {
       if (!admin || !timingSafeEqual(enc.encode(admin), enc.encode(cfg.adminKey))) return json(401, { error: "admin key required" }, h);
-      const body = await readJson(request);
+      const read = await readJsonCapped(request);
+      if (read.tooLarge) return json(413, { error: "request too large" }, h);
+      const body = read.value;
       const sid = body && body.sid, pin = body && body.pin;
       if (!sid && !pin) return json(400, { error: "sid or pin required" }, h);
       await store.revoke(sid ? String(sid) : "pin:" + String(pin));
@@ -244,7 +268,4 @@ function parseViewers(s) {
   }
   if (m.size === 0) throw new Error("licence server: VIEWERS has no pin:name entries");
   return m;
-}
-async function readJson(request) {
-  try { return await request.json(); } catch (e) { return null; }
 }

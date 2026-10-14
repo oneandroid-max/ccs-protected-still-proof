@@ -189,6 +189,8 @@
       end("Could not play the protected proof (code 6001): " + why + ".", "failed, code 6001");
     } else if (code === 6000) {
       end("Could not play the protected proof (code 6000). The manifest names no key system this player recognises.", "failed, code 6000");
+    } else if (code === 6014) {
+      end("The licence for this photo has expired, so this device stopped decrypting it. Reload the page for a new licence.", "licence expired");
     } else {
       end("Could not play the protected proof (code " + code + ").", "failed, code " + code);
     }
@@ -204,7 +206,16 @@
     if (!shaka.Player.isBrowserSupported()) { end("This browser cannot run the player (no Media Source Extensions), so the protected proof cannot be loaded.", "unsupported"); return; }
     var licenceUrl = "https://cwip-shaka-proxy.appspot.com/no_auth";
     if (server && mode === "widevine") {
-      var sres = await fetch(server + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: pin, asset: ASSET }) });
+      // Only an https server, or this computer for local testing: a licence server is where the
+      // PIN goes, so the page will not send it over plain http to anywhere else.
+      if (!/^https:\/\//.test(server) && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(server)) { end("The licence server address must start with https://.", "server address refused"); return; }
+      var sres;
+      try {
+        sres = await fetch(server + "/session", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: pin, asset: ASSET }) });
+      } catch (e) {
+        end("The licence server at " + server + " could not be reached (offline, wrong address, or it does not allow this page).", "server unreachable");
+        return;
+      }
       var sbody = await sres.json().catch(function () { return {}; });
       if (!sres.ok) { end("The licence server refused a session (http " + sres.status + "): " + (sbody.error || "no reason given") + ".", "session refused"); return; }
       token = sbody.token;

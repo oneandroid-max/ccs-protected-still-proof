@@ -25,7 +25,7 @@ function harness(overrides = {}) {
         : { status: overrides.status || "OK", licence: overrides.status ? null : new Uint8Array([1, 2, 3]), device: { securityLevel: 1, make: "samsung", model: "SM-TEST", certSerial: "abc" } };
     },
   };
-  const app = createApp(ENV, memoryStore(), deps);
+  const app = createApp({ ...ENV, ...(overrides.env || {}) }, memoryStore(), deps);
   const call = (method, path, { headers = {}, body, origin = ORIGIN } = {}) =>
     app.handle(new Request("https://licence.example" + path, { method, headers: { Origin: origin, ...headers }, body }));
   const session = async (pin = "48213") => (await call("POST", "/session", { headers: { "content-type": "application/json" }, body: JSON.stringify({ pin, asset: "ccs-proof-pin48213" }) })).json();
@@ -125,6 +125,43 @@ test("licence environment down → 502 and an audit row; denied → 403 with the
   const res = await denied.call("POST", "/licence", { headers: { "x-viewer-token": s2.token }, body: CHALLENGE });
   assert.equal(res.status, 403);
   assert.equal((await res.json()).status, "DEVICE_REVOKED");
+});
+
+test("CORS: with no ALLOWED_ORIGINS configured, no origin is allowed", async () => {
+  const h = harness({ env: { ALLOWED_ORIGINS: "" } });
+  const res = await h.call("OPTIONS", "/licence", { headers: { "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "x-viewer-token" } });
+  assert.equal(res.headers.get("access-control-allow-origin"), null);
+  const post = await h.call("POST", "/session", { headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "48213", asset: "a" }) });
+  assert.equal(post.headers.get("access-control-allow-origin"), null);
+});
+
+test("policy: refused licences do not use up the session's licences (the player retries each failure)", async () => {
+  const h = harness({ status: "INVALID_LICENSE_CHALLENGE" });
+  const s = await h.session();
+  for (let i = 0; i < 3; i++) {
+    const res = await h.call("POST", "/licence", { headers: { "x-viewer-token": s.token }, body: CHALLENGE });
+    assert.equal(res.status, 403, "attempt " + (i + 1) + " must be a refusal, not the limit");
+  }
+  assert.equal(h.calls.length, 3, "every attempt reached the licence environment");
+});
+
+test("admin: the key is accepted only in the header, never in the address", async () => {
+  const h = harness();
+  assert.equal((await h.call("GET", "/audit?key=admin-key")).status, 401);
+  assert.equal((await h.call("GET", "/audit", { headers: { "x-admin-key": "admin-key" } })).status, 200);
+});
+
+test("size: a body over the cap is refused, declared or not, and never forwarded", async () => {
+  const h = harness();
+  const s = await h.session();
+  const big = new Uint8Array(70_000);
+  const undeclared = await h.call("POST", "/licence", { headers: { "x-viewer-token": s.token }, body: big });
+  assert.equal(undeclared.status, 413);
+  const declared = await h.call("POST", "/licence", { headers: { "x-viewer-token": s.token, "content-length": "999999" }, body: CHALLENGE });
+  assert.equal(declared.status, 413);
+  const bigSession = await h.call("POST", "/session", { headers: { "content-type": "application/json" }, body: JSON.stringify({ pin: "48213", asset: "x".repeat(70_000) }) });
+  assert.equal(bigSession.status, 413);
+  assert.equal(h.calls.length, 0);
 });
 
 test("tokens: mint/verify round trip and tamper detection", async () => {
