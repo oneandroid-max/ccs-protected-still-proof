@@ -13,7 +13,7 @@
   "decryptCheck": {
     "ffmpeg": 0,
     "shakaPackager": 0,
-    "undecrypted": "no frame decoded"
+    "undecrypted": "decoding refused"
   },
   "packager": "packager version v3.9.3-0a8ba4f-release"
 }
